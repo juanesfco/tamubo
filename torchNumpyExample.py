@@ -211,4 +211,4 @@ Loses.append(loss.detach().numpy())
 
 resultsSave = pd.DataFrame({'Time (s)': Times, 'a': As, 'b': Bs, 'c': Cs, 'd': Ds, 'Loss': Loses})
 resultsSave.to_csv('results.csv')
-#resultsSave
+print("Done")
