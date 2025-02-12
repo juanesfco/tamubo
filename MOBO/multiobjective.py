@@ -168,7 +168,7 @@ def recursive_HV(ref,pareto):
             hv_temp=hv_temp*length
         hypervolume=hv_temp 
     else:
-        hypervolume=np.array([0])
+        hypervolume=np.array([0]) # unnecesary
         hv_temp=np.array([1])
         pareto_prime=np.zeros([1,N_obj])
         

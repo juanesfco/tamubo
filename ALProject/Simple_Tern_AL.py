@@ -8,6 +8,7 @@ from sklearn.gaussian_process.kernels import RBF, ConstantKernel as C, WhiteKern
 from scipy.stats import norm
 from warnings import simplefilter
 from sklearn_extra.cluster import KMedoids
+import matplotlib.animation as animation
 
 from sklearn.exceptions import ConvergenceWarning
 simplefilter("ignore", category=ConvergenceWarning)
@@ -114,14 +115,14 @@ for it in range(n_iterations):
     jaccard_similarity = np.sum(np.logical_and(label_pred,df_candidates['Label'].values))/np.sum(np.logical_or(label_pred,df_candidates['Label'].values))
     Jaccard_Similarities.append(jaccard_similarity)
     # Select the next candidate(s) from the remaining pool. Using method:
-    ## 0. Randomly selecting among the pool.
-    ## 1. Sample the point at maximum posterior variance. 
-    ## 2. Expected Information Gain (Maximizing entropy reduction)
+    ## 0. Randomly select 1 candidate among the pool.
+    ## 1. Select 1 point that has maximum posterior variance. 
+    ## 2. Select 1 point with maximum Expected Information Gain (Maximizing entropy reduction)
     ## 3. Select top 50% of points with maximum posterior variance, 
     ##    cluster them in N batches and select the N medoids as candidates.
     ## 4. Label pool in N clusters, randomly select one candidate from each cluster,
-    ##    repeat r times and calculate expected information gain for each batch of
-    ##    candidates. Select batch with highest information gain.
+    ##    repeat r times and calculate Expected Information Gain for each batch of
+    ##    candidates. Select batch with highest Expected Information Gain.
     ## 5. Select top 1% of points with maximum shannons entropy, 
     ##    cluster them in N batches and select the N medoids as candidates.
     method = 5
@@ -219,7 +220,7 @@ for it in range(n_iterations):
     cb1.set_label('P(density > 12)')
     ax1.scatter(df_train["A"], df_train["B"], df_train["C"],
                 facecolors='none', edgecolors='k', s=80, linewidths=1.5, label="Queried Points")
-    ax1.set_title(f"Iteration {it+1} - Probability")
+    ax1.set_title(f"Probability")
     ax1.legend(loc="upper right")
     
     # Right subplot: Continuous density prediction (raw GP mean prediction).
@@ -230,10 +231,10 @@ for it in range(n_iterations):
     cb2.set_label('Predicted Density')
     ax2.scatter(df_train["A"], df_train["B"], df_train["C"],
                 facecolors='none', edgecolors='k', s=80, linewidths=1.5, label="Queried Points")
-    ax2.set_title(f"Iteration {it+1} - Density Prediction")
+    ax2.set_title(f"Density Prediction")
     ax2.legend(loc="upper right")
     
-    plt.suptitle(f"Active Learning Iteration {it+1}", fontsize=16)
+    plt.suptitle(f"Method {method} Active Learning Iteration {it+1}", fontsize=16)
     plt.tight_layout(rect=[0, 0, 1, 0.95])
     
     # Save the figure as a single image for the iteration.
