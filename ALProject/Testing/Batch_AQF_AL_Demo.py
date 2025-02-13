@@ -41,7 +41,7 @@ y_grid = xor_label(X_grid)
 # Initialize dataset
 np.random.seed(42)
 total_points = X_grid.shape[0]
-n_initial, k_query, max_iter = 15, 5, 20
+n_initial, k_query, max_iter = 15, 5, 5
 all_indices = np.arange(total_points)
 initial_train_indices = np.random.choice(all_indices, size=n_initial, replace=False)
 X_train, y_train = X_grid[initial_train_indices], y_grid[initial_train_indices]

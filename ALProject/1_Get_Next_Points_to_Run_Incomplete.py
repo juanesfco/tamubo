@@ -58,11 +58,9 @@ combined_df["Truth_Scaled"] = truth_scaler.fit_transform(combined_df[["Truth"]])
 
 # Separate training and prediction sets
 train_df = combined_df[combined_df["Source"] == "Karma"]
-train_df = train_df.sample(n=10)
+#train_df = train_df.sample(n=10)
 
 grid_df = combined_df[combined_df["Source"] == "Grid"]
-
-
 
 # MinMax Scale X data (R, G, C)
 X_scaler = MinMaxScaler(feature_range=(0,1))
@@ -81,6 +79,10 @@ gp.fit(X_train, y_train, train_prior)
 X_grid = grid_df[["R", "G", "C"]].values
 predict_prior = grid_df["Prior_Scaled"].values
 grid_df["Predicted_Probability"], grid_df["Std_Dev"] = gp.predict(X_grid, predict_prior)
+
+# Save grid_df and train_df
+grid_df.to_csv('grid_df_after_initial_iteration.csv', index=False)
+train_df.to_csv('train_df_after_initial_iteration.csv', index=False)
 
 ### ANIMATION: G vs R while C varies ###
 fig, ax = plt.subplots(figsize=(8, 6))
