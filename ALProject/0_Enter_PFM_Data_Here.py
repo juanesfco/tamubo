@@ -126,7 +126,7 @@ def findPlanar(G, c_0, R):
 # Define grid ranges (feel free to adjust the number of points)
 C_range = np.linspace(0.15, 0.19, 50)     # e.g., 50 points for composition
 R_range = np.linspace(0.012, 0.6, 50)      # 50 points for R
-G_range = np.linspace(1e5, 1e7, 50)         # 50 points for G
+G_range = np.logspace(5, 7, 50)         # 50 points for G
 
 # Generate all possible combinations
 param_combinations = list(itertools.product(C_range, R_range, G_range))
