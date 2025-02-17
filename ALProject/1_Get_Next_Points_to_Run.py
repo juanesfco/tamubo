@@ -51,7 +51,8 @@ def aquisitionFunction(df_grid, X_labels, N, top):
         N:          batch size
         top:        Percentage to be considered when selecting maximum shannon entropy.
     Returns:
-        df_grid_candidates_medoids: Pandas DataFrame with the candidates selected (medoids)
+        df_grid_candidates_top: Pandas DataFrame with the candidates selected
+        df_grid_candidates_medoids: Pandas DataFrame with the cluster medoids
         df_grid_candidates:         Pandas DataFrame with the top candidates
         df_grid:                    Pandas DataFrame with all candidates considered
 
@@ -73,10 +74,13 @@ def aquisitionFunction(df_grid, X_labels, N, top):
 
     df_grid_candidates['cluster_color'] = cluster_colors
     df_grid_candidates_medoids = df_grid_candidates.iloc[id_medoids_candidates,:]
-    return df_grid_candidates_medoids, df_grid_candidates, df_grid
 
-# Load data
-combined_df = pd.read_csv("combined_solidus_karma_results.csv", dtype={'Explanation': str})
+    idmax_cluster = df_grid_candidates.groupby('cluster_color')['H'].idxmax().values
+    df_grid_candidates_top = df_grid_candidates.loc[idmax_cluster,:]
+    return df_grid_candidates_top, df_grid_candidates_medoids, df_grid_candidates, df_grid
+
+# Load data (Change iteration number)
+combined_df = pd.read_csv("combined_solidus_karma_results_iteration_1.csv", dtype={'Explanation': str})
 combined_df['log10(G)'] = np.log10(combined_df['G'])
 print("Data read and log10(G) column added.")
 
@@ -128,7 +132,7 @@ grid_df["Predicted_Probability"], grid_df["Std_Dev"] = gp.predict(X_grid, predic
 print("Posterior predictions done.")
 
 # Select next points to be queried based on posterior results
-grid_df_candidates_medoids, grid_df_candidates, grid_df  = aquisitionFunction(grid_df.copy(),X_labels,10,2.5)
+grid_df_candidates_top, grid_df_candidates_medoids, grid_df_candidates, grid_df  = aquisitionFunction(grid_df.copy(),X_labels,10,2.5)
 print("Next points selected.")
 
 # Inverse MinMax Scale X data (R, G, C)
@@ -136,12 +140,14 @@ grid_df[X_labels] = X_scaler.inverse_transform(grid_df[X_labels])
 train_df[X_labels] = X_scaler.inverse_transform(train_df[X_labels])
 grid_df_candidates[X_labels] = X_scaler.inverse_transform(grid_df_candidates[X_labels])
 grid_df_candidates_medoids.loc[:,X_labels] = X_scaler.inverse_transform(grid_df_candidates_medoids[X_labels])
+grid_df_candidates_top.loc[:,X_labels] = X_scaler.inverse_transform(grid_df_candidates_top[X_labels])
 print("Inverse scaling done.")
 
-# Save grid_df_candidates_medoids, grid_df and train_df
-grid_df_candidates_medoids.to_csv('grid_df_candidates_medoids_iteration_1.csv', index=False)
-grid_df.to_csv('grid_df_iteration_1.csv', index=False)
-train_df.to_csv('train_df_iteration_1.csv', index=False)
+# Save grid_df_candidates_top, grid_df_candidates_medoids, grid_df and train_df (change iteration number)
+grid_df_candidates_top.to_csv('grid_df_candidates_top_iteration_2.csv', index=False)
+grid_df_candidates_medoids.to_csv('grid_df_candidates_medoids_iteration_2.csv', index=False)
+grid_df.to_csv('grid_df_iteration_2.csv', index=False)
+train_df.to_csv('train_df_iteration_2.csv', index=False)
 print("Data saved as csv")
 
 ### ANIMATION: G vs R while C varies ###
@@ -173,6 +179,7 @@ def update(frame):
     grid_df_candidates_subset = grid_df_candidates[grid_df_candidates["C"] == C_value]
     train_df_subset = train_df[(train_df["C"] >= C_value_min) & (train_df["C"] < C_value_max)]
     grid_df_candidates_medoids_subset = grid_df_candidates_medoids[(grid_df_candidates_medoids["C"] > C_value_min) & (grid_df_candidates_medoids["C"] < C_value_max)]
+    #grid_df_candidates_top_subset = grid_df_candidates_top[(grid_df_candidates_top["C"] > C_value_min) & (grid_df_candidates_top["C"] < C_value_max)]
     
     R = grid_df_subset["R"].values
     G = grid_df_subset["log10(G)"].values
@@ -184,9 +191,13 @@ def update(frame):
                 facecolors='none', edgecolors='orange', s=80, linewidths=1.5, label="Queried Points")
     ax.scatter(grid_df_candidates_subset["R"], grid_df_candidates_subset["log10(G)"],
                 color=grid_df_candidates_subset['cluster_color'], s=10, label="Clusters")
+    #ax.scatter(grid_df_candidates_medoids_subset["R"], grid_df_candidates_medoids_subset["log10(G)"],
+    #            color=grid_df_candidates_medoids_subset['cluster_color'], s=50, label="Cluster Medoid")
+    #ax.scatter(grid_df_candidates_top_subset["R"], grid_df_candidates_top_subset["log10(G)"],
+    #            color='k', marker='*', s=80, label="Next Points")
     ax.scatter(grid_df_candidates_medoids_subset["R"], grid_df_candidates_medoids_subset["log10(G)"],
                 color='k', marker='*', s=80, label="Next Points")
-    ax.set_title(f"Post Prob After It 1 - C: {C_value:.4f} - Top 2.5%")
+    ax.set_title(f"Post Prob After It 2 - C: {C_value:.4f} - Top 2.5%") # Change iteration number
     ax.set_xlabel("R")
     ax.set_ylabel(r"$\log_{10}$G")
     ax.legend(loc='lower left')
@@ -195,7 +206,7 @@ def update(frame):
 
 # Create the animation
 ani = animation.FuncAnimation(fig, update, frames=len(unique_C_values), interval=5, blit=False)
-ani.save(f'posterior_iteration_1_top_2_5.gif', fps=5)
+ani.save(f'posterior_iteration_2_top_2_5.gif', fps=5) # Change iteration number
 print("Animation saved. Script finished.")
 print("Next points to run:")
 print(grid_df_candidates_medoids[["R", "G", "C"]])

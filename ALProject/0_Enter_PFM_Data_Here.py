@@ -68,6 +68,17 @@ karma_data = [
     [0.19, 1e5, 0.12,  0, "Cellular"],
     [0.19, 1e5, 0.3,   0, "Cellular (ish)"],
     [0.19, 1e5, 0.6,   1, "Planar"],
+
+    [0.16959, 3556000, 0.252, 0, "Cellular"], # iteration 1 results
+    [0.17122, 409500,  0.408, 1, "Planar"], # iteration 1 results
+    [0.15980, 790600,  0.312, 1, "Planar"], # iteration 1 results
+    #[0.18510, 868500,  0.396,  , "inconclusive"], # iteration 1 results
+    [0.17449, 1265000, 0.372, 1, "Planar"], # iteration 1 results
+    [0.15408, 212100,  0.372, 1, "Planar"], # iteration 1 results
+    [0.18347, 3556000, 0.276, 0, "Cellular"], # iteration 1 results
+    [0.16469, 175800,  0.408, 1, "Planar"], # iteration 1 results
+    [0.18265, 193100,  0.432, 1, "Planar"], # iteration 1 results
+    [0.15653, 4292000, 0.228, 0, "Cellular"], # iteration 1 results
 ]
 
 # Note: Renaming the fourth column to "Truth" for clarity.
@@ -179,5 +190,5 @@ karma_prior_df = pd.DataFrame(karma_prior_data)
 # 5. Combine and Export to CSV
 # ---------------------------
 combined_df = pd.concat([grid_df, karma_prior_df], ignore_index=True)
-combined_df.to_csv("combined_solidus_karma_results.csv", index=False)
-print("Combined CSV file saved as 'combined_solidus_karma_results.csv'")
+combined_df.to_csv("combined_solidus_karma_results_iteration_1.csv", index=False)
+print("Combined CSV file saved as 'combined_solidus_karma_results_iteration_1.csv'")
