@@ -13,6 +13,14 @@ import matplotlib.animation as animation
 def sigmoid(x):
     return 1 / (1 + np.exp(-x))
 
+def probability3labels(p):
+    if p > 0.85:
+        return 1
+    elif p >= 0.15:
+        return 0.5
+    else:
+        return 0
+
 class GaussianProcessWithPrior:
     def __init__(self, kernel=None, normalize_y=False, n_restarts_optimizer=10):
         self.gpr = GaussianProcessRegressor(kernel=kernel, normalize_y=normalize_y, n_restarts_optimizer=n_restarts_optimizer)
@@ -80,7 +88,7 @@ def aquisitionFunction(df_grid, X_labels, N, top):
     return df_grid_candidates_top, df_grid_candidates_medoids, df_grid_candidates, df_grid
 
 # Load data (Change iteration number)
-combined_df = pd.read_csv("combined_solidus_karma_results_iteration_1.csv", dtype={'Explanation': str})
+combined_df = pd.read_csv("combined_solidus_karma_results_iteration_1_3labels.csv", dtype={'Explanation': str})
 combined_df['log10(G)'] = np.log10(combined_df['G'])
 print("Data read and log10(G) column added.")
 
@@ -131,6 +139,9 @@ predict_prior = grid_df["Prior_Scaled"].values
 grid_df["Predicted_Probability"], grid_df["Std_Dev"] = gp.predict(X_grid, predict_prior)
 print("Posterior predictions done.")
 
+# Label Probability
+grid_df["Label_Probability"] = grid_df["Predicted_Probability"].apply(probability3labels)
+
 # Select next points to be queried based on posterior results
 grid_df_candidates_top, grid_df_candidates_medoids, grid_df_candidates, grid_df  = aquisitionFunction(grid_df.copy(),X_labels,10,2.5)
 print("Next points selected.")
@@ -144,14 +155,14 @@ grid_df_candidates_top.loc[:,X_labels] = X_scaler.inverse_transform(grid_df_cand
 print("Inverse scaling done.")
 
 # Save grid_df_candidates_top, grid_df_candidates_medoids, grid_df and train_df (change iteration number)
-grid_df_candidates_top.to_csv('grid_df_candidates_top_iteration_2.csv', index=False)
-grid_df_candidates_medoids.to_csv('grid_df_candidates_medoids_iteration_2.csv', index=False)
-grid_df.to_csv('grid_df_iteration_2.csv', index=False)
-train_df.to_csv('train_df_iteration_2.csv', index=False)
+grid_df_candidates_top.to_csv('grid_df_candidates_top_iteration_2_3labels.csv', index=False)
+grid_df_candidates_medoids.to_csv('grid_df_candidates_medoids_iteration_2_3labels.csv', index=False)
+grid_df.to_csv('grid_df_iteration_2_3labels.csv', index=False)
+train_df.to_csv('train_df_iteration_2_3labels.csv', index=False)
 print("Data saved as csv")
 
 ### ANIMATION: G vs R while C varies ###
-fig, ax = plt.subplots(figsize=(8, 6))
+fig, ax = plt.subplots(1,2,figsize=(12, 6),sharey=True,width_ratios=[4,5])
 
 # Extract unique `C` values for animation frames
 unique_C_values = np.sort(grid_df["C"].unique())
@@ -159,17 +170,21 @@ unique_C_values_interval = (unique_C_values[1]-unique_C_values[0])/2
 #print(unique_C_values)
 
 # Create a scatter plot that will be updated in the animation
-sc = ax.scatter([], [], c=[], s=[], cmap="coolwarm",vmin=0,vmax=1)
+sc0 = ax[0].scatter([], [], c=[], s=[], cmap="coolwarm",vmin=0,vmax=1)
+sc1 = ax[1].scatter([], [], c=[], s=[], cmap="coolwarm",vmin=0,vmax=1)
 
 # Labels and colorbar
-ax.set_xlabel("R")
-ax.set_ylabel(r"$\log_{10}$G")
-cbar = plt.colorbar(sc, ax=ax)
-cbar.set_label("Predicted Probability")
+ax[0].set_xlabel("R")
+ax[1].set_xlabel("R")
+ax[0].set_ylabel(r"$\log_{10}$G")
+ax[1].set_ylabel(r"$\log_{10}$G")
+cbar = plt.colorbar(sc1, ax=ax[1])
+cbar.set_label("Probability Alloy is Planar")
 
 # Function to update animation frame
 def update(frame):
-    ax.clear()
+    ax[0].clear()
+    ax[1].clear()
     
     C_value = unique_C_values[frame]
     C_value_min = C_value - unique_C_values_interval
@@ -179,34 +194,48 @@ def update(frame):
     grid_df_candidates_subset = grid_df_candidates[grid_df_candidates["C"] == C_value]
     train_df_subset = train_df[(train_df["C"] >= C_value_min) & (train_df["C"] < C_value_max)]
     grid_df_candidates_medoids_subset = grid_df_candidates_medoids[(grid_df_candidates_medoids["C"] > C_value_min) & (grid_df_candidates_medoids["C"] < C_value_max)]
-    #grid_df_candidates_top_subset = grid_df_candidates_top[(grid_df_candidates_top["C"] > C_value_min) & (grid_df_candidates_top["C"] < C_value_max)]
+    grid_df_candidates_top_subset = grid_df_candidates_top[(grid_df_candidates_top["C"] > C_value_min) & (grid_df_candidates_top["C"] < C_value_max)]
     
     R = grid_df_subset["R"].values
     G = grid_df_subset["log10(G)"].values
     predictions = grid_df_subset["Predicted_Probability"].values
+    labelProb = grid_df_subset["Label_Probability"].values
     #std_dev = grid_df_subset["Std_Dev"].values
-    
-    sc = ax.scatter(R, G, c=predictions, cmap="seismic", edgecolor="None",marker='s',s=55,vmin=0,vmax=1)
-    ax.scatter(train_df_subset["R"], train_df_subset["log10(G)"],
+
+    sc0 = ax[0].scatter(R, G, c=labelProb, cmap="seismic", edgecolor="None",marker='s',s=55,vmin=0,vmax=1)
+    ax[0].scatter(train_df_subset["R"], train_df_subset["log10(G)"],
                 facecolors='none', edgecolors='orange', s=80, linewidths=1.5, label="Queried Points")
-    ax.scatter(grid_df_candidates_subset["R"], grid_df_candidates_subset["log10(G)"],
-                color=grid_df_candidates_subset['cluster_color'], s=10, label="Clusters")
-    #ax.scatter(grid_df_candidates_medoids_subset["R"], grid_df_candidates_medoids_subset["log10(G)"],
-    #            color=grid_df_candidates_medoids_subset['cluster_color'], s=50, label="Cluster Medoid")
-    #ax.scatter(grid_df_candidates_top_subset["R"], grid_df_candidates_top_subset["log10(G)"],
+    #ax[0].scatter(grid_df_candidates_top_subset["R"], grid_df_candidates_top_subset["log10(G)"],
     #            color='k', marker='*', s=80, label="Next Points")
-    ax.scatter(grid_df_candidates_medoids_subset["R"], grid_df_candidates_medoids_subset["log10(G)"],
+    ax[0].scatter(grid_df_candidates_medoids_subset["R"], grid_df_candidates_medoids_subset["log10(G)"],
                 color='k', marker='*', s=80, label="Next Points")
-    ax.set_title(f"Post Prob After It 2 - C: {C_value:.4f} - Top 2.5%") # Change iteration number
-    ax.set_xlabel("R")
-    ax.set_ylabel(r"$\log_{10}$G")
-    ax.legend(loc='lower left')
+    ax[0].set_xlabel("R")
+    ax[0].set_ylabel(r"$\log_{10}$G")
     
-    return sc,
+    sc1 = ax[1].scatter(R, G, c=predictions, cmap="seismic", edgecolor="None",marker='s',s=55,vmin=0,vmax=1)
+    ax[1].scatter(train_df_subset["R"], train_df_subset["log10(G)"],
+                facecolors='none', edgecolors='orange', s=80, linewidths=1.5, label="Queried Points")
+    ax[1].scatter(grid_df_candidates_subset["R"], grid_df_candidates_subset["log10(G)"],
+                color=grid_df_candidates_subset['cluster_color'], s=10, label="Clusters")
+    #ax[1].scatter(grid_df_candidates_medoids_subset["R"], grid_df_candidates_medoids_subset["log10(G)"],
+    #            color=grid_df_candidates_medoids_subset['cluster_color'], s=50, label="Cluster Medoid")
+    #ax[1].scatter(grid_df_candidates_top_subset["R"], grid_df_candidates_top_subset["log10(G)"],
+    #            color='k', marker='*', s=80, label="Next Points")
+    ax[1].scatter(grid_df_candidates_medoids_subset["R"], grid_df_candidates_medoids_subset["log10(G)"],
+                color='k', marker='*', s=80, label="Next Points")
+    #ax[0].set_title(f"Post Prob After It 1 - C: {C_value:.4f} - Top 2.5%") # Change iteration number
+    ax[1].set_xlabel("R")
+    
+    ax[1].legend(loc='upper right')
+    
+    fig.suptitle(f"Posterior Iteration 2 - C: {C_value:.4f}")
+    fig.tight_layout()
+
+    return sc0, sc1
 
 # Create the animation
 ani = animation.FuncAnimation(fig, update, frames=len(unique_C_values), interval=5, blit=False)
-ani.save(f'posterior_iteration_2_top_2_5.gif', fps=5) # Change iteration number
+ani.save(f'posterior_iteration_2_3labels_medoids.gif', fps=5) # Change iteration number
 print("Animation saved. Script finished.")
 print("Next points to run:")
-print(grid_df_candidates_medoids[["R", "G", "C"]])
+print(grid_df_candidates_top[["R", "G", "C"]])
