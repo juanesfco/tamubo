@@ -10,16 +10,23 @@ import matplotlib as mpl
 import seaborn as sns
 import matplotlib.animation as animation
 
+iteration = 1
+
 def sigmoid(x):
     return 1 / (1 + np.exp(-x))
 
 def probability3labels(p):
-    if p > 0.85:
+    if p > 0.975:
         return 1
-    elif p >= 0.15:
+    elif p >= 0.025:
         return 0.5
     else:
         return 0
+    
+# Function to map probability values to RGBA
+cmap = mpl.colormaps['bwr']
+def colorMap(p):
+    return(np.array(cmap(int(255*p))))
 
 class GaussianProcessWithPrior:
     def __init__(self, kernel=None, normalize_y=False, n_restarts_optimizer=10):
@@ -88,7 +95,7 @@ def aquisitionFunction(df_grid, X_labels, N, top):
     return df_grid_candidates_top, df_grid_candidates_medoids, df_grid_candidates, df_grid
 
 # Load data (Change iteration number)
-combined_df = pd.read_csv("combined_solidus_karma_results_iteration_1_3labels.csv", dtype={'Explanation': str})
+combined_df = pd.read_csv(f"Data/combined_solidus_karma_results_iteration_{iteration-1}_3labels.csv", dtype={'Explanation': str})
 combined_df['log10(G)'] = np.log10(combined_df['G'])
 print("Data read and log10(G) column added.")
 
@@ -155,10 +162,10 @@ grid_df_candidates_top.loc[:,X_labels] = X_scaler.inverse_transform(grid_df_cand
 print("Inverse scaling done.")
 
 # Save grid_df_candidates_top, grid_df_candidates_medoids, grid_df and train_df (change iteration number)
-grid_df_candidates_top.to_csv('grid_df_candidates_top_iteration_2_3labels.csv', index=False)
-grid_df_candidates_medoids.to_csv('grid_df_candidates_medoids_iteration_2_3labels.csv', index=False)
-grid_df.to_csv('grid_df_iteration_2_3labels.csv', index=False)
-train_df.to_csv('train_df_iteration_2_3labels.csv', index=False)
+grid_df_candidates_top.to_csv(f'Data/grid_df_candidates_top_iteration_{iteration}_3labels.csv', index=False)
+grid_df_candidates_medoids.to_csv(f'Data/grid_df_candidates_medoids_iteration_{iteration}_3labels.csv', index=False)
+grid_df.to_csv(f'Data/grid_df_iteration_{iteration}_3labels.csv', index=False)
+train_df.to_csv(f'Data/train_df_iteration_{iteration}_3labels.csv', index=False)
 print("Data saved as csv")
 
 ### ANIMATION: G vs R while C varies ###
@@ -194,7 +201,7 @@ def update(frame):
     grid_df_candidates_subset = grid_df_candidates[grid_df_candidates["C"] == C_value]
     train_df_subset = train_df[(train_df["C"] >= C_value_min) & (train_df["C"] < C_value_max)]
     grid_df_candidates_medoids_subset = grid_df_candidates_medoids[(grid_df_candidates_medoids["C"] > C_value_min) & (grid_df_candidates_medoids["C"] < C_value_max)]
-    grid_df_candidates_top_subset = grid_df_candidates_top[(grid_df_candidates_top["C"] > C_value_min) & (grid_df_candidates_top["C"] < C_value_max)]
+    #grid_df_candidates_top_subset = grid_df_candidates_top[(grid_df_candidates_top["C"] > C_value_min) & (grid_df_candidates_top["C"] < C_value_max)]
     
     R = grid_df_subset["R"].values
     G = grid_df_subset["log10(G)"].values
@@ -228,14 +235,98 @@ def update(frame):
     
     ax[1].legend(loc='upper right')
     
-    fig.suptitle(f"Posterior Iteration 2 - C: {C_value:.4f}")
+    fig.suptitle(f"Posterior Iteration {iteration} - C: {C_value:.4f}")
     fig.tight_layout()
 
     return sc0, sc1
 
 # Create the animation
 ani = animation.FuncAnimation(fig, update, frames=len(unique_C_values), interval=5, blit=False)
-ani.save(f'posterior_iteration_2_3labels_medoids.gif', fps=5) # Change iteration number
-print("Animation saved. Script finished.")
-print("Next points to run:")
-print(grid_df_candidates_top[["R", "G", "C"]])
+ani.save(f'Figures/posterior_iteration_{iteration}_3labels_medoids.gif', fps=5) # Change iteration number
+print("Animation saved.")
+
+# Sort data by x, y, z for 3D plots
+grid_df_sorted = grid_df.sort_values(by=['R','C','log10(G)'])
+
+# Apply colormap function to all probability values and RGBA colors in a (50,50,50,4) array
+#colorArray = np.stack(grid_df_sorted['Prior'].apply(colorMap).values).reshape(50,50,50,4)
+colorArray = np.stack(grid_df_sorted['Predicted_Probability'].apply(colorMap).values).reshape(50,50,50,4)
+#colorArray = np.stack(grid_df_sorted['Label_Probability'].apply(colorMap).values).reshape(50,50,50,4)
+
+# Create copies and change A parameter (transparency) on desired planes
+colorArray1 = colorArray.copy()
+colorArray2 = colorArray.copy()
+colorArray3 = colorArray.copy()
+
+colorArray1[:,:,:,3] = 0.25
+colorArray1[:,0,:,3] = 1
+colorArray2[:,:,:,3] = 0.25
+colorArray2[:,25,:,3] = 1
+colorArray3[:,:,:,3] = 0.25
+colorArray3[:,49,:,3] = 1
+
+# Create voxel array, initialize with all true because all of them are going to be plotted
+voxelarray = np.full((50, 50, 50), True)
+
+# Create copies and remove desired voxels from each plot
+voxelarray1 = voxelarray.copy()
+voxelarray2 = voxelarray.copy()
+voxelarray2[:,:25,:] = False
+voxelarray3 = voxelarray.copy()
+voxelarray3[:,:49,:] = False
+
+# Create labels and select their respective ticks
+numberRlabels = 4
+numberClabels = 5
+numberlogGlabels = 5
+
+Rlabels = np.linspace(grid_df['R'].min(),grid_df['R'].max(),numberRlabels).round(3)
+Rticks = np.linspace(0,50,numberRlabels)
+Clabels = np.linspace(grid_df['C'].min(),grid_df['C'].max(),numberClabels).round(2)
+Cticks = np.linspace(0,50,numberClabels)
+logGlabels = np.linspace(grid_df['log10(G)'].min(),grid_df['log10(G)'].max(),numberlogGlabels).round(1)
+logGticks = np.linspace(0,50,numberlogGlabels)
+
+# Create figures and add subplots
+fig = plt.figure(figsize=(12, 4))
+ax1 = fig.add_subplot(1, 3, 1, projection='3d')
+ax2 = fig.add_subplot(1, 3, 2, projection='3d')
+ax3 = fig.add_subplot(1, 3, 3, projection='3d')
+ax4 = fig.add_subplot(1, 3, 3)
+
+ax1.voxels(voxelarray1, facecolors=colorArray1)
+ax1.set_xlabel('R')
+ax1.set_ylabel('C')
+ax1.set_zlabel(r'$\log_{10}$(G)')
+ax1.set_xticks(ticks=Rticks,labels=Rlabels)
+ax1.set_yticks(ticks=Cticks,labels=Clabels)
+ax1.set_zticks(ticks=logGticks,labels=logGlabels)
+
+ax2.voxels(voxelarray2, facecolors=colorArray2)
+ax2.set_xlabel('R')
+ax2.set_ylabel('C')
+ax2.set_zlabel(r'$\log_{10}$(G)')
+ax2.set_xticks(ticks=Rticks,labels=Rlabels)
+ax2.set_yticks(ticks=Cticks,labels=Clabels)
+ax2.set_zticks(ticks=logGticks,labels=logGlabels)
+
+ax3.voxels(voxelarray1, facecolors=colorArray3)
+ax3.set_xlabel('R')
+ax3.set_ylabel('C')
+ax3.set_zlabel(r'$\log_{10}$(G)')
+ax3.set_xticks(ticks=Rticks,labels=Rlabels)
+ax3.set_yticks(ticks=Cticks,labels=Clabels)
+ax3.set_zticks(ticks=logGticks,labels=logGlabels)
+
+ax4.axis('off')
+norm = mpl.colors.Normalize(vmin=0, vmax=1)
+sm = plt.cm.ScalarMappable(cmap='bwr', norm=norm)
+sm.set_array([])
+cbar = fig.colorbar(sm,ax=ax4,shrink=0.7,anchor=(3.2,0.5))
+cbar.set_label('Probability Alloy is Planar')
+
+fig.suptitle('Posterior Iteration 3')
+fig.savefig(f'Figures/posterior_iteration_{iteration}_3labels.png')
+print("Figure created and saved.")
+print("Script finished. Next points to run:")
+print(grid_df_candidates_medoids[["R", "G", "C"]])
