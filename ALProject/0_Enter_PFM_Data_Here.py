@@ -5,7 +5,7 @@ import itertools
 # ---------------------------
 # 1. Define the Karma Data
 # ---------------------------
-iteration = 0
+iteration = 1
 
 karma_data = [
     [0.15, 1e7, 0.012, 0, "Cellular"],
@@ -92,6 +92,17 @@ karma_data = [
     #[0.156530612, 790604.32,  0.288, 1, "Planar"], # iteration 2 results
     #[0.169591837, 409491.51,  0.324, 0.5, "Transient"], # iteration 2 results
     #[0.166326531, 5689866.03, 0.276, 1, "Planar"], # iteration 2 results
+
+    [0.16224, 494200, 0.36, 1, "Planar"], # iteration 1 3labels results
+    [0.18510, 1048000,  0.396, 1, "Planar"], # iteration 1 3labels results
+    [0.17367, 954100,  0.384, 1, "Planar"], # iteration 1 3labels results
+    [0.15408, 175800,  0.348,  1, "Planar"], # iteration 1 3labels results
+    [0.15571, 1048000, 0.252, 0, "Cellular"], # iteration 1 3labels results
+    [0.16878, 3237000,  0.264, 0, "Cellular"], # iteration 1 3labels results
+    [0.16796, 175800, 0.408, 1, "Planar"], # iteration 1 3labels results
+    [0.18429, 4292000,  0.264, 0, "Cellular"], # iteration 1 3labels results
+    [0.15653, 5690000,  0.216, 0, "Cellular"], # iteration 1 3labels results
+    [0.18265, 212100, 0.42, 0.5, "Transient"], # iteration 1 3labels results
 ]
 
 # Note: Renaming the fourth column to "Truth" for clarity.

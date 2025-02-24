@@ -10,7 +10,7 @@ import matplotlib as mpl
 import seaborn as sns
 import matplotlib.animation as animation
 
-iteration = 1
+iteration = 2
 
 def sigmoid(x):
     return 1 / (1 + np.exp(-x))
@@ -325,7 +325,7 @@ sm.set_array([])
 cbar = fig.colorbar(sm,ax=ax4,shrink=0.7,anchor=(3.2,0.5))
 cbar.set_label('Probability Alloy is Planar')
 
-fig.suptitle('Posterior Iteration 3')
+fig.suptitle(f'Posterior Iteration {iteration}')
 fig.savefig(f'Figures/posterior_iteration_{iteration}_3labels.png')
 print("Figure created and saved.")
 print("Script finished. Next points to run:")
