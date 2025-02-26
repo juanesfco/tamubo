@@ -54,7 +54,7 @@ class gpr:
     >>> do later
     """
 
-    def __init__(self, kernel=None, sigma_n_squared=1e-10):
+    def __init__(self, kernel=None, sigma_n_squared=1e-2):
         self.kernel = kernel
         self.sigma_n_squared = sigma_n_squared
 
