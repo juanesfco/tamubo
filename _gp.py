@@ -2,9 +2,11 @@
 
 # Author: Juan E Florez-Coronel
 
+import kernels
+import torch
+import utils
 
-
-class GPR:
+class gpr:
     """"Gaussian process regression (GPR).
 
     The implementation is based on Algorithm 2.1 of [RW2006]_.
@@ -52,9 +54,9 @@ class GPR:
     >>> do later
     """
 
-    def __init__(self, kernel=None, alpha=1e-10):
+    def __init__(self, kernel=None, sigma_n_squared=1e-10):
         self.kernel = kernel
-        self.alpha = alpha
+        self.sigma_n_squared = sigma_n_squared
 
     def fit(self, X, y):
         """Fit Gaussian process regression model.
@@ -73,8 +75,48 @@ class GPR:
             GaussianProcessRegressor class instance.
         """
         if self.kernel is None:  # Use an RBF kernel as default
-            self.kernel_ = # Add Kernel
+            self.kernel_ = kernels.rbf()
         else:
-            self.kernel_ = clone(self.kernel)
+            print("Fix")
+            
+        self.X_train_ = utils.numpyToTorch(X)
+        self.y_train_ = utils.numpyToTorch(y).view(-1,1)
+
+        K = self.kernel_(self.X_train_)
+        diag_indices = torch.arange(min(K.shape))
+        K[diag_indices, diag_indices] += self.sigma_n_squared
+        self.L_ = torch.linalg.cholesky(K)
+        self.alpha_ = torch.cholesky_solve(torch.cholesky_solve(self.y_train_,self.L_),torch.transpose(self.L_,0,1))
+        return self
+    
+    def predict(self, X):
+        """Predict using the Gaussian process regression model.
+
+        We can also predict based on an unfitted model by using the GP prior.
+        In addition to the mean of the predictive distribution, the covariance
+        is returned.
+
+        Parameters
+        ----------
+        X : array-like of shape (n_samples, n_features) or list of object
+            Query points where the GP is evaluated.
+
+        Returns
+        -------
+        y_mean : ndarray of shape (n_samples,) or (n_samples, n_targets)
+            Mean of predictive distribution at query points.
+
+        y_cov : ndarray of shape (n_samples, n_samples) or \
+                (n_samples, n_samples, n_targets), optional
+            Covariance of joint predictive distribution at query points.
+        """
+
+        X = utils.numpyToTorch(X)
+        K_trans = self.kernel_(X, self.X_train_)
+        y_mean = torch.mm(K_trans,self.alpha_)
+        y_var = 1 #test
+
+        return y_mean, y_var
+
 
         
