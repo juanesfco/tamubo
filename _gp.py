@@ -128,3 +128,8 @@ class gpr:
         y_var = self.kernel_(X) - torch.mm(torch.transpose(v,0,1),v)
 
         return y_mean, y_var
+    
+    def get_hyper_params(self):
+        # This function obtains the hyperparameters from the trained GP 
+        curr_params = torch.tensor([self.kernel_.length_scale, self.kernel_.sigma_f_squared, self.sigma_n_squared])
+        return curr_params
