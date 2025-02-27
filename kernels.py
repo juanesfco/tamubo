@@ -31,15 +31,17 @@ class rbf:
 
     Parameters
     ----------
-    X : ndarray of shape (n_samples_X, n_features)
-            Left argument of the returned kernel k(X, Y)
-    Y : ndarray of shape (n_samples_Y, n_features), default=None
-            Right argument of the returned kernel k(X, Y). If None, k(X, X)
-            if evaluated instead.
     length_scale : float or ndarray of shape (n_features,), default=1.0
         The length scale of the kernel. If a float, an isotropic kernel is
         used. If an array, an anisotropic kernel is used where each dimension
-        of l defines the length-scale of the respective feature dimension.
+        of length_scale defines the length-scale of the respective feature 
+        dimension.
+
+    sigma_f_squared : float or ndarray of shape (n_features,), default=1.0
+        The signal variance of the kernel. If a float, an isotropic kernel is
+        used. If an array, an anisotropic kernel is used where each dimension
+        of sigma_f_squared defines the signal variance of the respective feature 
+        dimension.
 
     References
     ----------
@@ -55,8 +57,9 @@ class rbf:
     --------
     >>> do later
     """
-    def __init__(self, length_scale=1.0):
+    def __init__(self, length_scale=1.0, sigma_f_squared=1.0):
         self.length_scale = length_scale
+        self.sigma_f_squared = sigma_f_squared
 
     def __call__(self, X, Y=None):
         """Return the kernel k(X, Y) and optionally its gradient.
@@ -67,12 +70,12 @@ class rbf:
             Left argument of the returned kernel k(X, Y)
 
         Y : ndarray of shape (n_samples_Y, n_features), default=None
-            Right argument of the returned kernel k(X, Y). If None, k(X, X)
-            if evaluated instead.
+            Right argument of the returned kernel k(X, Y). If None, 
+            k(X, X) if evaluated instead.
 
         Returns
         -------
-        K : ndarray of shape (n_samples_X, n_samples_Y)
+        K : Tensor of shape (n_samples_X, n_samples_Y)
             Kernel k(X, Y)
         """
 
@@ -80,12 +83,12 @@ class rbf:
         # https://discuss.pytorch.org/t/matmul-on-multiple-gpus/33122/2
 
         X = utils.numpyToTorch(X)
-        
         if Y is None:
             dists = torch.cdist(X/self.length_scale,X/self.length_scale)**2
-            return torch.exp(-0.5*dists)
+
+            return self.sigma_f_squared*torch.exp(-0.5*dists)
         else:
             Y = utils.numpyToTorch(Y)
 
             dists = torch.cdist(X/self.length_scale,Y/self.length_scale)**2
-            return torch.exp(-0.5*dists)
+            return self.sigma_f_squared*torch.exp(-0.5*dists)

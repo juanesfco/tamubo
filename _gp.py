@@ -5,6 +5,7 @@
 import kernels
 import torch
 import utils
+from copy import deepcopy
 
 class gpr:
     """"Gaussian process regression (GPR).
@@ -54,7 +55,7 @@ class gpr:
     >>> do later
     """
 
-    def __init__(self, kernel=None, sigma_n_squared=1e-2):
+    def __init__(self, kernel=None, sigma_n_squared=1e-10):
         self.kernel = kernel
         self.sigma_n_squared = sigma_n_squared
 
@@ -77,16 +78,21 @@ class gpr:
         if self.kernel is None:  # Use an RBF kernel as default
             self.kernel_ = kernels.rbf()
         else:
-            print("Fix")
+            self.kernel_ = deepcopy(self.kernel)
             
         self.X_train_ = utils.numpyToTorch(X)
         self.y_train_ = utils.numpyToTorch(y).view(-1,1)
 
+        n_samples = X.shape[0]
+
+        # Alg. 2.1, page 19, line 1 (I guess)
         K = self.kernel_(self.X_train_)
-        diag_indices = torch.arange(min(K.shape))
+        # Alg. 2.1, page 19, line 2
+        diag_indices = torch.arange(n_samples)
         K[diag_indices, diag_indices] += self.sigma_n_squared
         self.L_ = torch.linalg.cholesky(K)
-        self.alpha_ = torch.cholesky_solve(torch.cholesky_solve(self.y_train_,self.L_),torch.transpose(self.L_,0,1))
+        # Alg. 2.1, page 19, line 3
+        self.alpha_ = torch.linalg.solve_triangular(torch.transpose(self.L_,0,1), torch.linalg.solve_triangular(self.L_, self.y_train_, upper=False), upper=False)
         return self
     
     def predict(self, X):
@@ -112,11 +118,13 @@ class gpr:
         """
 
         X = utils.numpyToTorch(X)
-        K_trans = self.kernel_(X, self.X_train_)
-        y_mean = torch.mm(K_trans,self.alpha_)
-        y_var = 1 #test
+        
+        # Alg. 2.1, page 19, line 4
+        K_star = self.kernel_(self.X_train_, X)
+        y_mean = torch.mm(torch.transpose(K_star,0,1),self.alpha_)
+        # Alg. 2.1, page 19, line 5
+        v = torch.linalg.solve_triangular(self.L_, K_star, upper=False)
+        # Alg. 2.1, page 19, line 6
+        y_var = self.kernel_(X) - torch.mm(torch.transpose(v,0,1),v)
 
         return y_mean, y_var
-
-
-        
