@@ -61,7 +61,7 @@ class rbf:
         self.length_scale = length_scale
         self.sigma_f_squared = sigma_f_squared
 
-    def __call__(self, X, Y=None):
+    def __call__(self, X, Y=None, grad=False):
         """Return the kernel k(X, Y) and optionally its gradient.
 
         Parameters
@@ -73,22 +73,45 @@ class rbf:
             Right argument of the returned kernel k(X, Y). If None, 
             k(X, X) if evaluated instead.
 
+        grad : bool, default=False
+            Determines whether the gradient with respect to the log of
+            the kernel hyperparameter is computed. Only when Y is None.
+
         Returns
         -------
         K : Tensor of shape (n_samples_X, n_samples_Y)
             Kernel k(X, Y)
+
+        K_gradient : Tensor of shape (n_samples_X, n_samples_X, n_dims), \
+                optional
+            The gradient of the kernel k(X, X) with respect to the log of the
+            hyperparameter of the kernel. Only returned when `grad`
+            is True.
         """
 
         # Later: Change to parallel matrix operations:
         # https://discuss.pytorch.org/t/matmul-on-multiple-gpus/33122/2
 
         X = utils.numpyToTorch(X)
-        if Y is None:
-            dists = torch.cdist(X/self.length_scale,X/self.length_scale)**2
 
-            return self.sigma_f_squared*torch.exp(-0.5*dists)
+        if Y is None:
+            dists = torch.pdist(X/self.length_scale)**2
+            K = self.sigma_f_squared*torch.exp(-0.5*dists)
+            K = utils.torch_squareform(K)
+            K.fill_diagonal_(1)
+
         else:
+            if grad:
+                raise ValueError("Gradient can only be evaluated when Y is None.")
             Y = utils.numpyToTorch(Y)
 
             dists = torch.cdist(X/self.length_scale,Y/self.length_scale)**2
-            return self.sigma_f_squared*torch.exp(-0.5*dists)
+            K = self.sigma_f_squared*torch.exp(-0.5*dists)
+
+        if grad:
+            K_grad = (K*utils.torch_squareform(dists))[:, :, None]
+            return K, K_grad
+        else:
+            return K
+
+        
