@@ -1,19 +1,12 @@
 from __future__ import annotations
-import heapq
-from dataclasses import dataclass
 import numpy as np
 from typing import List, Tuple
 
-from .partition import Box, split_box, corners
+from .partition import Box, split_box, hypermask
 from .ei import expected_improvement
 from .ei_bounds import ei_bounds_from_mu_sigma_intervals, EIBounds
 
 Array = np.ndarray
-
-@dataclass(order=True)
-class _PQItem:
-    priority: float  # negative of EI upper (max-heap behavior)
-    idx: int
 
 class PartitionMaxEISearch:
     """
@@ -22,61 +15,131 @@ class PartitionMaxEISearch:
     Assumes `model.predict(X, return_std=True) -> (mu, std)` with (n,1) arrays.
     """
 
-    def __init__(self, model, f_best: float, init_boxes: List[Box]):
+    def __init__(self, model, init_box: Box, precision: Array | float | None = None, grid: Array | None = None):
         self.model = model
-        self.f_best = float(f_best)
-        self.boxes: List[Box] = list(init_boxes)
-        self.heap: List[_PQItem] = []
-        self.incumbent_ei: float = 0.0
+        self.domain = init_box.bounds
+        self.boxes: List[Box] = [init_box]
+        if not precision:
+            self.precision = 0.1*init_box.width
+        elif precision.dtype == Array:
+            self.precision = precision
+        else:
+            self.precision = precision*init_box.width            
+        
+        if grid:
+            self.grid = grid
+        else:
+            self.grid = self.create_grid()
+
+        self.max_ei: float = 0.0
         self.best_x: Array | None = None
-        self._initialized = False
 
-    def _mu_sigma_intervals(self, box: Box) -> Tuple[float, float, float, float]:
+    def ei_bound(self, box: Box) -> float:
         """Crude but safe: evaluate μ,σ on corners and take min/max."""
-        Xc = corners(box.bounds)
-        mu, std = self.model.predict(Xc, return_std=True)
-        mu = mu.reshape(-1)
-        var = (std.reshape(-1)) ** 2
-        return float(mu.min()), float(mu.max()), float(var.min()), float(var.max())
+        
+        return None
 
-    def _push(self, idx: int):
-        mu_lo, mu_hi, v_lo, v_hi = self._mu_sigma_intervals(self.boxes[idx])
-        eb = ei_bounds_from_mu_sigma_intervals(mu_lo, mu_hi, v_lo, v_hi, self.f_best)
-        heapq.heappush(self.heap, _PQItem(priority=-eb.upper, idx=idx))
+    def create_grid(self) -> Array:
+        """
+        Create a dense grid over self.domain with per-dim steps in self.precision.
 
-    def initialize(self):
-        for i in range(len(self.boxes)):
-            self._push(i)
-        self._initialized = True
+        Returns
+        -------
+        X : (k, d) ndarray
+            All grid points, row-major (np.meshgrid(..., indexing="ij") then raveled).
+        """
+        d = self.domain.shape[0]
+        axes = []
+        for i in range(d):
+            lo, hi = self.domain[i, 0], self.domain[i, 1]
+            step = self.precision[i]
+            if step <= 0:
+                raise ValueError(f"precision[{i}] must be > 0, got {step}")
 
-    def _choose_axis(self, box: Box) -> int:
-        """Split along the widest dimension (simple heuristic)."""
-        return int(np.argmax(box.width))
+            # arange may miss the endpoint due to float, so pad a step
+            arr = np.arange(lo, hi + step, step, dtype=float)
 
-    def run(self, max_iters: int = 200):
-        if not self._initialized:
-            self.initialize()
+            # if we overshot slightly, clamp last point to hi
+            if arr[-1] != hi and arr.size > 1:
+                arr[-1] = hi
 
+            axes.append(arr)
+
+        # build meshgrid
+        grids = np.meshgrid(*axes, indexing="ij")
+        # each grid is shape (n1, n2, ..., nd); stack and reshape
+        stacked = np.stack([g for g in grids], axis=-1)   # (..., d)
+        X = stacked.reshape(-1, d)                        # (k, d)
+        return X
+    
+    def sample_ei_active_boxes(self, percentage: float = 0.01, seed = None) -> float:
+        active_boxes_bounds = []
+        for box in self.boxes:
+            if box.active:
+                active_boxes_bounds.append(box.bounds)
+        mask_big = hypermask(np.array(active_boxes_bounds), self.grid)
+
+        rng = np.random.default_rng(seed)
+        grid_sample = rng.choice(self.grid[mask_big], size=int(round(percentage*mask_big.sum())), replace=False)
+        ei_sample = expected_improvement(grid_sample, self.model)
+        best_id = np.argmax(ei_sample)
+        best_x = grid_sample[best_id]
+        max_ei = ei_sample[best_id]
+        return best_x, max_ei
+    
+    def sample_ei_active_boxes_centers(self) -> float:
+        active_boxes_centers = []
+        for box in self.boxes:
+            if box.active:
+                active_boxes_centers.append(box.center)
+        active_boxes_centers = np.array(active_boxes_centers)
+        ei_sample = expected_improvement(active_boxes_centers, self.model)
+        best_id = np.argmax(ei_sample)
+        best_x = active_boxes_centers[best_id]
+        max_ei = ei_sample[best_id]
+        return best_x, max_ei
+    
+    def check_sampled(self, bounds):
+        X = self.model.X_train_
+        mask = hypermask(bounds, X)
+        if np.sum(mask) > 0:
+            return True
+        else:
+            return False
+
+    def run(self, max_iters: int = 10):
         it = 0
-        while self.heap and it < max_iters:
+        while it < max_iters:
+            boxes_it = []
             it += 1
-            item = heapq.heappop(self.heap)
-            box = self.boxes[item.idx]
+            best_x, max_ei = self.sample_ei_active_boxes()
+            if max_ei > self.max_ei:
+                self.max_ei = max_ei
+                self.best_x = best_x
+            for box in self.boxes:
+                if not box.active:
+                    boxes_it.append(box)
+                else:
+                    if box.sampled:
+                        if self.check_sampled(box.bounds):
+                            boxes_it = boxes_it + split_box[box]
+                        else:
+                            box.sampled = False
+                            if self.ei_bound(box) >= self.max_ei:
+                                boxes_it = boxes_it + split_box[box]
+                            else:
+                                box.active = False
+                                boxes_it.append(box)
+                    else:
+                        if self.ei_bound(box) >= self.max_ei:
+                            boxes_it = boxes_it + split_box[box]
+                        else:
+                            box.active = False
+                            boxes_it.append(box)
+            self.boxes = boxes_it
+        best_x, max_ei = self.sample_ei_active_boxes_centers()
+        if max_ei > self.max_ei:
+            self.max_ei = max_ei
+            self.best_x = best_x
 
-            # Midpoint EI as a cheap eval
-            x_mid = box.center[None, :]
-            mu_mid, std_mid = self.model.predict(x_mid, return_std=True)
-            ei_mid = float(expected_improvement(mu_mid, std_mid, self.f_best))
-            if ei_mid > self.incumbent_ei:
-                self.incumbent_ei = ei_mid
-                self.best_x = x_mid
-
-            # Subdivide
-            axis = self._choose_axis(box)
-            left, right = split_box(box, axis)
-            li = len(self.boxes); self.boxes.append(left)
-            ri = len(self.boxes); self.boxes.append(right)
-            self._push(li)
-            self._push(ri)
-
-        return self.best_x, self.incumbent_ei
+        return self.best_x, self.max_ei
