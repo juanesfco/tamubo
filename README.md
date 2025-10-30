@@ -6,39 +6,73 @@ TAMU Bayesian Optimization tools
 
 Use a lightweight setup:
 
-## Prerequisites
+### Prerequisites
 
 * Python 3.9+
 * Dependencies: `scikit-learn`, `pandas`, `scipy`, `numpy`, etc.
 
-## Setup
+### Setup
 
 ```bash
 git clone https://github.com/juanesfco/tamubo.git
+cd tamubo
 python -m venv venv
 source venv/bin/activate # On Windows: venv/Scripts/activate
 python -m pip install --upgrade pip
-pip install -r tamubo/requirements.txt
+pip install -e .
+pip install -r requirements.txt
 ```
 
 ## Repo layout
 
-```
-exactBO/
+```bash
+tamubo
+├── development
+│   ├── boTorch.ipynb
+│   ├── exactBO.ipynb
+│   ├── Figures
+│   ├── gpflow.ipynb
+│   ├── gpNumpy.ipynb
+│   ├── gpytorch.ipynb
+│   ├── pytorch.ipynb
+│   ├── runpython.sh
+│   └── torchNumpyExample.py
+├── examples
+│   ├── demo_2d.py
+│   └── test.ipynb
+├── pyproject.toml
 ├── README.md
-├── requirements.txt              
-├── src/
-│   └── exactbo/
-│       ├── __init__.py
-│       ├── partition.py        # domain partition algorithm
-│       ├── ei.py               # EI for minimization
-│       ├── kernel_bounds.py    # Kernel bounds per training point over each interval
-│       ├── posterior_bounds.py # Posterior μ, σ² bounds over domain interval
-│       ├── ei_bounds.py        # EI bounds over (μ, σ²) intervals
-│       ├── loop_partition.py   # max-EI search (no GP updates)
-│       └── loop_exactbo.py     # outer exact BO loop
-└── examples/
-    └── demo_2d.py
+├── requirements.txt
+└── src
+    └── tamubo
+        ├── __init__.py
+        ├── exactbo
+        │   ├── __init__.py
+        │   ├── ei_bounds.py
+        │   ├── ei.py
+        │   ├── kernel_bounds.py
+        │   ├── loop_exactbo.py
+        │   ├── loop_partition.py
+        │   ├── partition.py
+        │   └── posterior_bounds.py
+        ├── gpugp
+        │   ├── __init__.py
+        │   ├── _gp.py
+        │   ├── kernels.py
+        │   ├── test.ipynb
+        │   ├── testObjSpace.ipynb
+        │   └── utils.py
+        └── mobbo
+            ├── __init__.py
+            ├── acquisitionFunc.py
+            ├── current_rep.csv
+            ├── gpModel.py
+            ├── hv_average_rand.csv
+            ├── hv_curr_rand.csv
+            ├── hv_stdv_rand.csv
+            ├── main_BO.py
+            ├── multiobjective.py
+            └── test.ipynb
 ```
 
 ---
@@ -46,7 +80,8 @@ exactBO/
 ## ExactBO
 
 A minimal, modular scaffold for **Exact Bayesian Optimization** with four core pieces:
-1) **Domain partition** (axis-aligned hyperboxes)  
+
+1) **Domain partition** (axis-aligned hyperboxes)
 2) **EI bounds** estimation over boxes  
 3) **Partition loop** to find max EI **without** updating the GP  
 4) **Outer exactBO loop** to drive to the global optimum
