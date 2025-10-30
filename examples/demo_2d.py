@@ -7,8 +7,9 @@ import numpy as np
 from sklearn.gaussian_process import GaussianProcessRegressor
 from sklearn.gaussian_process.kernels import RBF, ConstantKernel as C
 
-from exactbo.loop_exactbo import ExactBOLoop
+from tamubo.exactbo import ExactBOLoop
 
+"""
 # Domain: [0,1]^2
 bounds = np.array([[0.0, 1.0],
                    [0.0, 1.0]])
@@ -34,3 +35,4 @@ res = bo.run(X0=X0, y0=y0, budget=20)
 
 print("Best y:", res.y_best)
 print("Best x:", res.x_best.ravel())
+"""
