@@ -1,7 +1,7 @@
 from __future__ import annotations
 from dataclasses import dataclass
 import numpy as np
-from typing import Callable
+from typing import List, Callable
 
 from .partition import Box
 from .loop_partition import PartitionMaxEISearch
@@ -24,7 +24,7 @@ class ExactBOLoop:
       4) repeat
     """
 
-    def __init__(self, model, bounds: Array, precision: Array | float | None = None, verbose: bool = False):
+    def __init__(self, model, bounds: Array, precision: Array | float | None = None, log: List | bool = False):
         self.model = model
         self.init_box = Box(bounds, True)
         if not precision:
@@ -36,7 +36,7 @@ class ExactBOLoop:
         else:
             raise TypeError("Precision must be Array, float or None")
         
-        self.verbose = verbose
+        self.log = log
         self.grid = self.create_grid()
         self._oracle: Callable[[Array], Array] | None = None
 
@@ -84,7 +84,7 @@ class ExactBOLoop:
     def run(self, X0: Array, y0: Array, budget: int) -> BOResult:
         X, y = X0.copy(), y0.copy()
         for i in range(int(budget)):
-            if self.verbose:
+            if self.log:
                 print("ExactBO iteration: ", i)
             self.model.fit(X, y.ravel())
 

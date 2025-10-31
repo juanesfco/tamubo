@@ -3,6 +3,7 @@ from dataclasses import dataclass
 import numpy as np
 from itertools import product
 from typing import List
+from .bounds import Bounds
 
 Array = np.ndarray
 
@@ -12,6 +13,8 @@ class Box:
     bounds: Array  # shape (d,2) with [lo, hi]
     sampled: bool
     active: bool = True
+    ei: Bounds | None = None
+
 
     def __post_init__(self):
         # 1) coerce to numpy

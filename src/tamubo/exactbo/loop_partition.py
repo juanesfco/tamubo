@@ -1,6 +1,6 @@
 from __future__ import annotations
 import numpy as np
-from typing import List, Tuple
+from typing import List
 
 from .partition import Box, split_box, hypermask
 from .ei import expected_improvement
@@ -86,7 +86,9 @@ class PartitionMaxEISearch:
                             if np.all(box.width <= self.precision):
                                 boxes_it.append(box)
                             else:
-                                if ei_bounds(box, self.model).hi >= self.max_ei:
+                                ei = ei_bounds(box, self.model)
+                                box.ei = ei
+                                if ei.hi >= self.max_ei:
                                     boxes_it = boxes_it + split_box(box)
                                 else:
                                     box.active = False
@@ -95,7 +97,9 @@ class PartitionMaxEISearch:
                         if np.all(box.width <= self.precision):
                             boxes_it.append(box)
                         else:
-                            if ei_bounds(box, self.model).hi >= self.max_ei:
+                            ei = ei_bounds(box, self.model)
+                            box.ei = ei
+                            if ei.hi >= self.max_ei:
                                 boxes_it = boxes_it + split_box(box)
                             else:
                                 box.active = False
