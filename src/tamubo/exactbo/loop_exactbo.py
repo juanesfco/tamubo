@@ -1,19 +1,25 @@
 from __future__ import annotations
 from dataclasses import dataclass
 import numpy as np
-from typing import List, Callable
+from typing import Callable
 
 from .partition import Box
 from .loop_partition import PartitionMaxEISearch
+from .plots import plot_iterations, plot_iterations_2d
 
 Array = np.ndarray
 
 @dataclass
 class BOResult:
-    X: Array
-    y: Array
-    x_best: Array
-    y_best: float
+    X     : Array
+    y     : Array
+    X_opt : Array | None = None
+    y_min : float | None = None
+    
+    def __post_init__(self):
+        idx = int(np.argmin(self.y))
+        self.X_opt = self.X[idx:idx+1]
+        self.y_min = float(self.y[idx])
 
 class ExactBOLoop:
     """
@@ -24,7 +30,7 @@ class ExactBOLoop:
       4) repeat
     """
 
-    def __init__(self, model, bounds: Array, precision: Array | float | None = None, log: List | bool = False):
+    def __init__(self, model, bounds: Array, precision: Array | float | None = None, log: dict | bool = False):
         self.model = model
         self.init_box = Box(bounds, True)
         if not precision:
@@ -36,7 +42,11 @@ class ExactBOLoop:
         else:
             raise TypeError("Precision must be Array, float or None")
         
-        self.log = log
+        if log:
+            self.log = {"ebo_log": True}
+        else:
+            self.log = log
+        
         self.grid = self.create_grid()
         self._oracle: Callable[[Array], Array] | None = None
 
@@ -82,13 +92,15 @@ class ExactBOLoop:
         return self._oracle(x)
 
     def run(self, X0: Array, y0: Array, budget: int) -> BOResult:
+        if self.log:
+            self.log["start"] = {"oracle": self._oracle, "domain": self.init_box.bounds}
         X, y = X0.copy(), y0.copy()
         for i in range(int(budget)):
             if self.log:
-                print("ExactBO iteration: ", i)
+                self.log[f"ebo_it{i}"] = {"start": BOResult(X, y)}
             self.model.fit(X, y.ravel())
 
-            search = PartitionMaxEISearch(self.model, self.init_box, self.grid, self.precision, self.verbose)
+            search = PartitionMaxEISearch(self.model, self.init_box, self.grid, self.precision, self.log)
             x_next, _ = search.run()
             if x_next is None:
                 break
@@ -97,5 +109,19 @@ class ExactBOLoop:
             X = np.vstack([X, x_next])
             y = np.concatenate([y, y_next])
 
-        idx = int(np.argmin(y))
-        return BOResult(X=X, y=y, x_best=X[idx:idx+1], y_best=float(y[idx]))
+        res = BOResult(X=X, y=y)
+        if self.log:
+            self.log["result"] = res
+        return res
+    
+    def plot(self, path: str | None = None):
+        if self.log:
+            d = self.init_box.dim
+            if d > 2:
+                raise ValueError("Dimension is too high to plot.")
+            elif d == 2:
+                plot_iterations_2d(self.log, self.model, path)
+            else:
+                plot_iterations(self.log, self.model, path)
+        else:
+            raise AttributeError("Create ExactBOLoop with log=True and then ExactBOLoop.run() before plotting.")

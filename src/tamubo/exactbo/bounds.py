@@ -116,6 +116,8 @@ def ei_bounds_from_mu_sigma(mu: Bounds, sig: Bounds, model) -> Bounds:
     Returns:
       Bounds(EI_lo, EI_hi)
     """
+    # Include 0 in EI bounds flag
+    include_0_flag = False
     # Extract f_min from model
     y = np.asarray(model.y_train_, dtype=float).ravel()
     y_min = np.min(y)
@@ -127,19 +129,16 @@ def ei_bounds_from_mu_sigma(mu: Bounds, sig: Bounds, model) -> Bounds:
     N = Bounds(f_min - mu.hi, f_min - mu.lo)
     
     # This can be improved
-    # If σ_lo == 0, use a safe enclosure: EI increases with σ (for fixed μ), so
-    # lower bound at σ=0; upper bound at (μ=μ_lo, σ=σ_hi).
-    if sig.lo == 0.0:
-        EI_lo = max(0.0, N.lo)  # EI(μ=μ_hi, σ=0) is a lower bound
-        if sig.hi > 0.0:
-            Z_hi = N.hi / sig.hi
-            EI_hi = N.hi * norm.cdf(Z_hi) + sig.hi * norm.pdf(Z_hi)
-            # Ensure nonnegativity
-            EI_hi = max(EI_hi, EI_lo)
-        else:
-            # σ_hi is also zero → EI is exactly max(0, N)
-            EI_hi = max(0.0, N.hi)
-        return Bounds(EI_lo, EI_hi)
+    # If σ_hi == 0, EI must be 0, if σ_lo == 0
+    # use a safe enclosure: choose a pad for σ_lo
+    # and keep in mind EI bounds must include 0.
+    if sig.hi == 0.0:
+        return Bounds(0,0)
+    else:
+      if sig.lo == 0:
+        pad = 1e-5
+        sig.lo = pad
+        include_0_flag = True
     
     # Otherwise, proceed with explicit IA through Z, norm.cdf, norm.pdf
     # J = 1/σ ∈ [1/σ_hi, 1/σ_lo]
@@ -160,7 +159,10 @@ def ei_bounds_from_mu_sigma(mu: Bounds, sig: Bounds, model) -> Bounds:
     # EI = U + V 
     EI = add_bounds(U, V)
     
-    return Bounds(max(0, EI.lo), max(0, EI.hi)) # Ensure nonegativity
+    if include_0_flag:
+        return Bounds(min(0, EI.lo), max(0, EI.hi)) # Ensure zero is in bounds
+    else:
+        return EI
 
 def ei_bounds(box: Box, model) -> Bounds:
     """

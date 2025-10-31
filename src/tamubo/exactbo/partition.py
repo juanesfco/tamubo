@@ -3,7 +3,7 @@ from dataclasses import dataclass
 import numpy as np
 from itertools import product
 from typing import List
-from .bounds import Bounds
+from .interval_arithmetics import Bounds
 
 Array = np.ndarray
 

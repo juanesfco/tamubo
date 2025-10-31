@@ -15,12 +15,12 @@ class PartitionMaxEISearch:
     Assumes `model.predict(X, return_std=True) -> (mu, std)` with (n,1) arrays.
     """
 
-    def __init__(self, model, init_box: Box, grid: Array, precision: Array, verbose: bool = False):
+    def __init__(self, model, init_box: Box, grid: Array, precision: Array, log: dict | bool = False):
         self.model = model
         self.boxes: List[Box] = [init_box]
         self.grid = grid
         self.precision = precision
-        self.verbose = verbose
+        self.log = log
         self.max_ei: float = 0.0
         self.best_x: Array | None = None
     
@@ -61,9 +61,13 @@ class PartitionMaxEISearch:
             return False
 
     def run(self, max_iters: int = 10):
+        if self.log:
+            iteration_key = list(self.log.keys())[-1]
+            self.log[iteration_key]["ploop_start"] = {"boxes": self.boxes, "best_x": self.best_x, "max_ei": self.max_ei}
+        
         it = 0
         flag = True
-        prev_box_count = len(self.boxes)
+        #prev_box_count = len(self.boxes)
         while it < max_iters and flag:
             boxes_it = []
             it += 1
@@ -104,19 +108,21 @@ class PartitionMaxEISearch:
                             else:
                                 box.active = False
                                 boxes_it.append(box)
-            self.boxes = boxes_it
-
-            if prev_box_count == len(self.boxes):
-                flag = False
-            else:
-                prev_box_count = len(self.boxes)
             
-            if self.verbose:
-                print("Partition iteration: ", it-1)
+            if self.log:
+                self.log[iteration_key][f"ploop_{it - 1}"] = {"boxes": self.boxes, "best_x": self.best_x, "max_ei": self.max_ei}
+
+            if len(self.boxes) == len(boxes_it):
+                flag = False
+
+            self.boxes = boxes_it
         
         best_x, max_ei = self.sample_ei_active_boxes_centers()
         if max_ei > self.max_ei:
             self.max_ei = max_ei
             self.best_x = best_x
+        
+        if self.log:
+            self.log[iteration_key]["ploop_final"] = {"boxes": self.boxes, "best_x": self.best_x, "max_ei": self.max_ei}
 
         return self.best_x, self.max_ei
