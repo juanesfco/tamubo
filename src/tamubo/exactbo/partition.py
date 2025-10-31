@@ -12,7 +12,6 @@ class Box:
     bounds: Array  # shape (d,2) with [lo, hi]
     sampled: bool
     active: bool = True
-    parent: int | None = None
 
     def __post_init__(self):
         # 1) coerce to numpy
@@ -71,7 +70,7 @@ def split_box(box: Box) -> List[Box]:
         # New hi: mid values on axes where bit=0, old hi value on axes where bit=1
         child[:, 1] = np.where(mask, mid, hi)
 
-        children.append(Box(bounds=child, sampled=box.sampled, parent=box))
+        children.append(Box(bounds=child, sampled=box.sampled))
 
     return children
 

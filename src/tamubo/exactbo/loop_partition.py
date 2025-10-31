@@ -4,7 +4,7 @@ from typing import List, Tuple
 
 from .partition import Box, split_box, hypermask
 from .ei import expected_improvement
-from .ei_bounds import ei_bounds_from_mu_sigma_intervals, EIBounds
+from .bounds import ei_bounds
 
 Array = np.ndarray
 
@@ -15,62 +15,14 @@ class PartitionMaxEISearch:
     Assumes `model.predict(X, return_std=True) -> (mu, std)` with (n,1) arrays.
     """
 
-    def __init__(self, model, init_box: Box, precision: Array | float | None = None, grid: Array | None = None):
+    def __init__(self, model, init_box: Box, grid: Array, precision: Array, verbose: bool = False):
         self.model = model
-        self.domain = init_box.bounds
         self.boxes: List[Box] = [init_box]
-        if not precision:
-            self.precision = 0.1*init_box.width
-        elif precision.dtype == Array:
-            self.precision = precision
-        else:
-            self.precision = precision*init_box.width            
-        
-        if grid:
-            self.grid = grid
-        else:
-            self.grid = self.create_grid()
-
+        self.grid = grid
+        self.precision = precision
+        self.verbose = verbose
         self.max_ei: float = 0.0
         self.best_x: Array | None = None
-
-    def ei_bound(self, box: Box) -> float:
-        """Crude but safe: evaluate μ,σ on corners and take min/max."""
-        
-        return None
-
-    def create_grid(self) -> Array:
-        """
-        Create a dense grid over self.domain with per-dim steps in self.precision.
-
-        Returns
-        -------
-        X : (k, d) ndarray
-            All grid points, row-major (np.meshgrid(..., indexing="ij") then raveled).
-        """
-        d = self.domain.shape[0]
-        axes = []
-        for i in range(d):
-            lo, hi = self.domain[i, 0], self.domain[i, 1]
-            step = self.precision[i]
-            if step <= 0:
-                raise ValueError(f"precision[{i}] must be > 0, got {step}")
-
-            # arange may miss the endpoint due to float, so pad a step
-            arr = np.arange(lo, hi + step, step, dtype=float)
-
-            # if we overshot slightly, clamp last point to hi
-            if arr[-1] != hi and arr.size > 1:
-                arr[-1] = hi
-
-            axes.append(arr)
-
-        # build meshgrid
-        grids = np.meshgrid(*axes, indexing="ij")
-        # each grid is shape (n1, n2, ..., nd); stack and reshape
-        stacked = np.stack([g for g in grids], axis=-1)   # (..., d)
-        X = stacked.reshape(-1, d)                        # (k, d)
-        return X
     
     def sample_ei_active_boxes(self, percentage: float = 0.01, seed = None) -> float:
         active_boxes_bounds = []
@@ -99,8 +51,9 @@ class PartitionMaxEISearch:
         max_ei = ei_sample[best_id]
         return best_x, max_ei
     
-    def check_sampled(self, bounds):
+    def check_sampled(self, box: Box):
         X = self.model.X_train_
+        bounds = np.array([box.bounds]) # To ensure shape (1,d,2)
         mask = hypermask(bounds, X)
         if np.sum(mask) > 0:
             return True
@@ -109,7 +62,9 @@ class PartitionMaxEISearch:
 
     def run(self, max_iters: int = 10):
         it = 0
-        while it < max_iters:
+        flag = True
+        prev_box_count = len(self.boxes)
+        while it < max_iters and flag:
             boxes_it = []
             it += 1
             best_x, max_ei = self.sample_ei_active_boxes()
@@ -121,22 +76,40 @@ class PartitionMaxEISearch:
                     boxes_it.append(box)
                 else:
                     if box.sampled:
-                        if self.check_sampled(box.bounds):
-                            boxes_it = boxes_it + split_box[box]
+                        if self.check_sampled(box):
+                            if np.all(box.width <= self.precision):
+                                boxes_it.append(box)
+                            else:
+                                boxes_it = boxes_it + split_box(box)
                         else:
                             box.sampled = False
-                            if self.ei_bound(box) >= self.max_ei:
-                                boxes_it = boxes_it + split_box[box]
+                            if np.all(box.width <= self.precision):
+                                boxes_it.append(box)
+                            else:
+                                if ei_bounds(box, self.model).hi >= self.max_ei:
+                                    boxes_it = boxes_it + split_box(box)
+                                else:
+                                    box.active = False
+                                    boxes_it.append(box)
+                    else:
+                        if np.all(box.width <= self.precision):
+                            boxes_it.append(box)
+                        else:
+                            if ei_bounds(box, self.model).hi >= self.max_ei:
+                                boxes_it = boxes_it + split_box(box)
                             else:
                                 box.active = False
                                 boxes_it.append(box)
-                    else:
-                        if self.ei_bound(box) >= self.max_ei:
-                            boxes_it = boxes_it + split_box[box]
-                        else:
-                            box.active = False
-                            boxes_it.append(box)
             self.boxes = boxes_it
+
+            if prev_box_count == len(self.boxes):
+                flag = False
+            else:
+                prev_box_count = len(self.boxes)
+            
+            if self.verbose:
+                print("Partition iteration: ", it-1)
+        
         best_x, max_ei = self.sample_ei_active_boxes_centers()
         if max_ei > self.max_ei:
             self.max_ei = max_ei
