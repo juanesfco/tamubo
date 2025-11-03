@@ -2,6 +2,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import numpy as np
 from typing import Callable
+from copy import deepcopy
 
 from .partition import Box
 from .loop_partition import PartitionMaxEISearch
@@ -96,10 +97,11 @@ class ExactBOLoop:
             self.log["start"] = {"oracle": self._oracle, "domain": self.init_box.bounds}
         X, y = X0.copy(), y0.copy()
         for i in range(int(budget)):
-            if self.log:
-                self.log[f"ebo_it{i}"] = {"start": BOResult(X, y)}
             self.model.fit(X, y.ravel())
-
+            
+            if self.log:
+                self.log[f"ebo_it{i}"] = {"start": BOResult(X, y), "model": deepcopy(self.model)}
+            
             search = PartitionMaxEISearch(self.model, self.init_box, self.grid, self.precision, self.log)
             x_next, _ = search.run()
             if x_next is None:
@@ -120,8 +122,8 @@ class ExactBOLoop:
             if d > 2:
                 raise ValueError("Dimension is too high to plot.")
             elif d == 2:
-                plot_iterations_2d(self.log, self.model, path)
+                plot_iterations_2d(self.log, path)
             else:
-                plot_iterations(self.log, self.model, path)
+                plot_iterations(self.log, path)
         else:
             raise AttributeError("Create ExactBOLoop with log=True and then ExactBOLoop.run() before plotting.")
