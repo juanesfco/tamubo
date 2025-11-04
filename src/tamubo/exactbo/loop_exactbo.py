@@ -3,9 +3,11 @@ from dataclasses import dataclass
 import numpy as np
 from typing import Callable
 from copy import deepcopy
+import time
 
 from .partition import Box
 from .loop_partition import PartitionMaxEISearch
+from .ei import expected_improvement
 from .plots import plot_iterations, plot_iterations_2d
 
 Array = np.ndarray
@@ -102,8 +104,22 @@ class ExactBOLoop:
             if self.log:
                 self.log[f"ebo_it{i}"] = {"start": BOResult(X, y), "model": deepcopy(self.model)}
             
-            search = PartitionMaxEISearch(self.model, self.init_box, self.grid, self.precision, self.log)
-            x_next, _ = search.run()
+            if self.log:
+                boStartTime = time.perf_counter()
+                ei_xx = expected_improvement(self.grid, self.model)
+                best_i_ei = np.argmax(ei_xx)
+                _ = self.grid[best_i_ei]
+                boEndTime = time.perf_counter()
+                eboStartTime = time.perf_counter()
+                search = PartitionMaxEISearch(self.model, self.init_box, self.grid, self.precision, self.log)
+                x_next, _ = search.run()
+                eboEndTime = time.perf_counter()
+                self.log[f"ebo_it{i}"]["times"] = {"bo":boEndTime-boStartTime, "ebo":eboEndTime-eboStartTime}
+
+            else:
+                search = PartitionMaxEISearch(self.model, self.init_box, self.grid, self.precision, self.log)
+                x_next, _ = search.run()
+                
             if x_next is None:
                 break
 

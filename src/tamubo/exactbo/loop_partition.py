@@ -69,7 +69,7 @@ class PartitionMaxEISearch:
         else:
             return False
 
-    def run(self, max_iters: int = 10):
+    def run(self, max_iters: int = 100):
         it = 0
         flag = True
         

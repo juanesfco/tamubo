@@ -155,7 +155,7 @@ class Boxes:
                 out[i, 1] = b.ei.hi
         return out
 
-def split_box(box: Box) -> List[Box]:
+def split_box(box: Box, type: str = "full") -> List[Box]:
     """
     Split `box` along EVERY axis at the midpoint, returning 2^d sub-boxes
     whose union equals the original box (overlaps only on boundaries).
@@ -171,17 +171,22 @@ def split_box(box: Box) -> List[Box]:
     mid = 0.5 * (lo + hi)
 
     children: Boxes = Boxes()
-    # Each bit in pattern selects left(0)=[lo,mid] or right(1)=[mid,hi] for that axis
-    for pattern in product((0, 1), repeat=d):
-        child = np.empty_like(b)
-        # Mask where bit == 0
-        mask = np.array(pattern) == 0
-        # New lo: Old lo values on axes where bit=0, mid value on axes where bit=1
-        child[:, 0] = np.where(mask, lo, mid)
-        # New hi: mid values on axes where bit=0, old hi value on axes where bit=1
-        child[:, 1] = np.where(mask, mid, hi)
 
-        children.append(Box(bounds=child, sampled=box.sampled))
+    if type == "full":
+        # Each bit in pattern selects left(0)=[lo,mid] or right(1)=[mid,hi] for that axis
+        for pattern in product((0, 1), repeat=d):
+            child = np.empty_like(b)
+            # Mask where bit == 0
+            mask = np.array(pattern) == 0
+            # New lo: Old lo values on axes where bit=0, mid value on axes where bit=1
+            child[:, 0] = np.where(mask, lo, mid)
+            # New hi: mid values on axes where bit=0, old hi value on axes where bit=1
+            child[:, 1] = np.where(mask, mid, hi)
+
+            children.append(Box(bounds=child, sampled=box.sampled))
+
+    elif type == "centered":
+        print("falta")
 
     return children
 

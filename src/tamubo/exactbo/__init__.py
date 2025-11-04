@@ -8,7 +8,7 @@ Exports:
 - Bounds, prod_bound_scalar, add_bounds, sub_bounds, prod_bounds, square_bounds, sqrt_bounds, forward_solve_bounds
 - PartitionMaxEISearch
 - ExactBOLoop, BOResult
-- plot_iterations, plot_iterations_2d
+- plot_iterations, plot_iterations_2d, plot_function_2d, plot_partitions_2d, plot_ploop_2d
 """
 from .partition import Box, Boxes, split_box, hypermask
 from .ei import expected_improvement
@@ -16,7 +16,7 @@ from .bounds import rbf_k_bounds, mu_bounds, sigma_bounds, ei_bounds_from_mu_sig
 from .interval_arithmetics import Bounds, prod_bound_scalar, add_bounds, sub_bounds, prod_bounds, square_bounds, sqrt_bounds, forward_solve_bounds
 from .loop_partition import PartitionMaxEISearch
 from .loop_exactbo import ExactBOLoop, BOResult
-from .plots import plot_iterations
+from .plots import plot_iterations, plot_iterations_2d, plot_function_2d, plot_partitions_2d, plot_ploop_2d
 
 __all__ = [
     "Box",
@@ -42,4 +42,7 @@ __all__ = [
     "BOResult",
     "plot_iterations",
     "plot_iterations_2d",
+    "plot_function_2d",
+    "plot_partitions_2d",
+    "plot_ploop_2d",
 ]
