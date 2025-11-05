@@ -32,9 +32,11 @@ def plot_iterations_2d(log: dict, path: str | None = None):
     return None
 
 def plot_function_2d(domain: Array, f, path: str | None = None):
-    N = 400
+    N = 1000
     xa, xb = domain[0,0], domain[0,1]
     ya, yb = domain[1,0], domain[1,1]
+    plotPadx = (xb - xa)/40
+    plotPady = (yb - ya)/40
 
     x = np.linspace(xa, xb, N)
     y = np.linspace(ya, yb, N)
@@ -43,21 +45,22 @@ def plot_function_2d(domain: Array, f, path: str | None = None):
     ZZ = f(xx)
     iZZmin = ZZ.argmin()
     xxmin = xx[iZZmin]
+    zzmin = ZZ[iZZmin]
     ZZ = ZZ.reshape((N, N))
 
     fig = plt.figure(figsize=(8, 6))
     plt.contourf(XX, YY, ZZ, levels=contourfLevels, cmap=colormap)
     plt.colorbar(label='f(x, y)')
     plt.contour(XX, YY, ZZ, levels=20, colors='k', linewidths=0.3, alpha=0.5)
-    plt.scatter(xxmin[0],xxmin[1], color=colorBOBestX, marker="*", label="Minimum")
+    plt.scatter(xxmin[0],xxmin[1], color=colorBOBestX, marker="*", label=f"Min: f({xxmin[0]:.3f}, {xxmin[1]:.3f}) = {zzmin:.3f}")
     Lx, Ly = domain[:,0]
     Rx, Ry = domain[:,1]
     plt.vlines(Lx, Ly, Ry, color=colorToSample, linewidth=1)
     plt.vlines(Rx, Ly, Ry, color=colorToSample, linewidth=1)
     plt.hlines(Ly, Lx, Rx, color=colorToSample, linewidth=1)
     plt.hlines(Ry, Lx, Rx, color=colorToSample, linewidth=1)
-    plt.xlim(xa-1, xb+1)
-    plt.ylim(ya-1, yb+1)
+    plt.xlim(xa-plotPadx, xb+plotPadx)
+    plt.ylim(ya-plotPady, yb+plotPady)
     plt.xlabel("x")
     plt.ylabel("y")
     plt.legend()
@@ -103,6 +106,8 @@ def plot_ploop_2d(it, p, ploop, domain, f, X, ei_xx, path = None):
     N = 400
     xa, xb = domain[0,0], domain[0,1]
     ya, yb = domain[1,0], domain[1,1]
+    plotPadx = (xb - xa)/40
+    plotPady = (yb - ya)/40
 
     x = np.linspace(xa, xb, N)
     y = np.linspace(ya, yb, N)
@@ -175,8 +180,8 @@ def plot_ploop_2d(it, p, ploop, domain, f, X, ei_xx, path = None):
         plt.scatter(best_x[0],best_x[1], color=colorEBOBestX, marker="X", label=f"exact BO Best X: EI = {max_ei:.2f}")
     
     plt.colorbar(sm, ax=ax1, label="Boxes EI Top Bound")
-    plt.xlim(xa-1, xb+1)
-    plt.ylim(ya-1, yb+1)
+    plt.xlim(xa-plotPadx, xb+plotPadx)
+    plt.ylim(ya-plotPady, yb+plotPady)
     plt.xlabel("x")
     plt.ylabel("y")
 
@@ -220,8 +225,8 @@ def plot_ploop_2d(it, p, ploop, domain, f, X, ei_xx, path = None):
     if best_x is not None:
         plt.scatter(best_x[0],best_x[1], color=colorEBOBestX, marker="X", label=f"exact BO Best X: EI = {max_ei:.2f}")
     
-    plt.xlim(xa-1, xb+1)
-    plt.ylim(ya-1, yb+1)
+    plt.xlim(xa-plotPadx, xb+plotPadx)
+    plt.ylim(ya-plotPady, yb+plotPady)
     plt.xlabel("x")
     plt.ylabel("y")
 
@@ -267,8 +272,8 @@ def plot_ploop_2d(it, p, ploop, domain, f, X, ei_xx, path = None):
     best_i_ei_xx = np.argmax(ei_xx)
     plt.scatter(xx[best_i_ei_xx][0],xx[best_i_ei_xx][1], color=colorBOBestX, marker="*", label=f"BO Best X: EI = {np.max(ei_xx):.2f}")
 
-    plt.xlim(xa-1, xb+1)
-    plt.ylim(ya-1, yb+1)
+    plt.xlim(xa-plotPadx, xb+plotPadx)
+    plt.ylim(ya-plotPady, yb+plotPady)
     plt.xlabel("x")
     plt.ylabel("y")
     

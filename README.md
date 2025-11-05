@@ -40,6 +40,9 @@ tamubo
 ├── examples
 │   ├── demo_2d.py
 │   └── test.ipynb
+├── experiments
+│   ├── exactBO_experiment.py
+│   └── exactBO_logs
 ├── pyproject.toml
 ├── README.md
 ├── requirements.txt

@@ -155,7 +155,7 @@ class Boxes:
                 out[i, 1] = b.ei.hi
         return out
 
-def split_box(box: Box, type: str = "full") -> List[Box]:
+def split_box(box: Box, split_type: str = "full", domain_width: Array | None = None) -> List[Box]:
     """
     Split `box` along EVERY axis at the midpoint, returning 2^d sub-boxes
     whose union equals the original box (overlaps only on boundaries).
@@ -166,13 +166,13 @@ def split_box(box: Box, type: str = "full") -> List[Box]:
     """
     b = box.bounds
     d = box.dim
+    mid = box.center
     lo = b[:, 0]
     hi = b[:, 1]
-    mid = 0.5 * (lo + hi)
-
+    
     children: Boxes = Boxes()
 
-    if type == "full":
+    if split_type == "full":
         # Each bit in pattern selects left(0)=[lo,mid] or right(1)=[mid,hi] for that axis
         for pattern in product((0, 1), repeat=d):
             child = np.empty_like(b)
@@ -185,8 +185,38 @@ def split_box(box: Box, type: str = "full") -> List[Box]:
 
             children.append(Box(bounds=child, sampled=box.sampled))
 
-    elif type == "centered":
-        print("falta")
+    elif split_type == "centered":
+        w = box.width
+        if domain_width is None:
+            domain_width = np.ones(d)
+        w_dw = w / domain_width
+        split_order = np.argsort(w_dw)[::-1]
+
+        mid_box_bounds  = b.copy()
+
+        for id in range(d):
+            split_d = split_order[id]
+            c = mid[split_d]
+            l = lo[split_d]
+            r = hi[split_d]
+            
+            ld, rd = c - l, r - c
+            wc = 0.5 * min(ld, rd)
+
+            lb = c - 0.5 * wc
+            rb = c + 0.5 * wc
+
+            left_box_bounds = mid_box_bounds.copy();  left_box_bounds[split_d, 1] = lb
+            right_box_bounds= mid_box_bounds.copy();  right_box_bounds[split_d, 0] = rb
+            mid_box_bounds[split_d, 0] = lb; mid_box_bounds[split_d, 1] = rb
+
+            children.append(Box(bounds=left_box_bounds, sampled=box.sampled))
+            children.append(Box(bounds=right_box_bounds, sampled=box.sampled))
+                
+        children.append(Box(bounds=mid_box_bounds, sampled=box.sampled))
+    
+    else:
+        raise ValueError("split_type not supported")
 
     return children
 

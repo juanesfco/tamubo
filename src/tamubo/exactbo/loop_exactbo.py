@@ -4,6 +4,7 @@ import numpy as np
 from typing import Callable
 from copy import deepcopy
 import time
+from sklearn.base import clone
 
 from .partition import Box
 from .loop_partition import PartitionMaxEISearch
@@ -21,7 +22,7 @@ class BOResult:
     
     def __post_init__(self):
         idx = int(np.argmin(self.y))
-        self.X_opt = self.X[idx:idx+1]
+        self.X_opt = self.X[idx]
         self.y_min = float(self.y[idx])
 
 class ExactBOLoop:
@@ -93,10 +94,31 @@ class ExactBOLoop:
         if self._oracle is None:
             raise NotImplementedError("No oracle set. Call `set_oracle(fn)` first.")
         return self._oracle(x)
+    
+    def estimate_opt(self):
+        d = self.init_box.dim
+        axes = []
+        for i in range(d):
+            lo, hi = self.init_box.bounds[i, 0], self.init_box.bounds[i, 1]
+            arr = np.linspace(lo, hi, 1000, dtype=float)
+            axes.append(arr)
 
-    def run(self, X0: Array, y0: Array, budget: int) -> BOResult:
+        # build meshgrid
+        grids = np.meshgrid(*axes, indexing="ij")
+        # each grid is shape (n1, n2, ..., nd); stack and reshape
+        stacked = np.stack([g for g in grids], axis=-1)   # (..., d)
+        X = stacked.reshape(-1, d)                        # (k, d)
+        y = self._evaluate_oracle(X)
+        i_min = y.argmin()
+        x_min = X[i_min]
+        y_min = y[i_min]
+        return BOResult(x_min.reshape(1,d), np.array([y_min]))
+
+    def run(self, X0: Array, y0: Array, budget: int, max_splits: int = 100, split_type: str = "full") -> BOResult:
         if self.log:
-            self.log["start"] = {"oracle": self._oracle, "domain": self.init_box.bounds}
+            self.log["start"] = {"oracle": self._oracle, "domain": self.init_box.bounds, "precision": self.precision}
+            Xc, yc = X0.copy(), y0.copy()
+            modelc = clone(self.model)
         X, y = X0.copy(), y0.copy()
         for i in range(int(budget)):
             self.model.fit(X, y.ravel())
@@ -105,20 +127,24 @@ class ExactBOLoop:
                 self.log[f"ebo_it{i}"] = {"start": BOResult(X, y), "model": deepcopy(self.model)}
             
             if self.log:
+                modelc.fit(Xc, yc.ravel())
                 boStartTime = time.perf_counter()
-                ei_xx = expected_improvement(self.grid, self.model)
+                ei_xx = expected_improvement(self.grid, modelc)
                 best_i_ei = np.argmax(ei_xx)
-                _ = self.grid[best_i_ei]
+                best_x_ei = self.grid[best_i_ei]
                 boEndTime = time.perf_counter()
+                y_next_ei = self._evaluate_oracle(best_x_ei.reshape((1,self.init_box.dim)))
+                Xc = np.vstack([Xc, best_x_ei])
+                yc = np.concatenate([yc, y_next_ei])
                 eboStartTime = time.perf_counter()
                 search = PartitionMaxEISearch(self.model, self.init_box, self.grid, self.precision, self.log)
-                x_next, _ = search.run()
+                x_next, _ = search.run(max_splits, split_type)
                 eboEndTime = time.perf_counter()
-                self.log[f"ebo_it{i}"]["times"] = {"bo":boEndTime-boStartTime, "ebo":eboEndTime-eboStartTime}
+                self.log[f"ebo_it{i}"]["compare"] = {"timeBO":boEndTime-boStartTime, "timeEBO":eboEndTime-eboStartTime, "best_x_BO": best_x_ei, "best_x_EBO": x_next}
 
             else:
                 search = PartitionMaxEISearch(self.model, self.init_box, self.grid, self.precision, self.log)
-                x_next, _ = search.run()
+                x_next, _ = search.run(max_splits, split_type)
                 
             if x_next is None:
                 break
@@ -129,7 +155,8 @@ class ExactBOLoop:
 
         res = BOResult(X=X, y=y)
         if self.log:
-            self.log["result"] = res
+            res_ei = BOResult(X=Xc, y=yc)
+            self.log["result"] = {"EBO": res, "BO": res_ei, "Opt": self.estimate_opt()}
         return res
     
     def plot(self, path: str | None = None):

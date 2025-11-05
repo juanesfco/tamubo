@@ -21,6 +21,7 @@ class PartitionMaxEISearch:
         self.grid = grid
         self.precision = precision
         self.log = log
+        self.domain_width = init_box.width
         self.max_ei: float = 0.0
         self.best_x: Array | None = None
     
@@ -37,7 +38,7 @@ class PartitionMaxEISearch:
         mask_grid = hypermask(mask_boxes.bounds, self.grid)
 
         rng = np.random.default_rng(seed)
-        grid_sample = rng.choice(self.grid[mask_grid], size=int(round(percentage*mask_grid.sum())), replace=False)
+        grid_sample = rng.choice(self.grid[mask_grid], size=int(np.ceil(percentage*mask_grid.sum())), replace=False)
         ei_sample = expected_improvement(grid_sample, self.model)
         
         best_id = np.argmax(ei_sample)
@@ -69,11 +70,11 @@ class PartitionMaxEISearch:
         else:
             return False
 
-    def run(self, max_iters: int = 100):
+    def run(self, max_splits: int = 100, split_type: str = "full"):
         it = 0
         flag = True
         
-        while it < max_iters and flag:
+        while it < max_splits and flag:
             boxes_it = Boxes()
             it += 1
             best_x, max_ei = self.random_sample_ei_active_non_sampled_boxes()
@@ -89,7 +90,7 @@ class PartitionMaxEISearch:
                             if np.all(box.width <= self.precision):
                                 boxes_it.append(box)
                             else:
-                                boxes_it.extend(split_box(box))
+                                boxes_it.extend(split_box(box, split_type, self.domain_width))
                         else:
                             box.sampled = False
                             ei = ei_bounds(box, self.model)
@@ -102,7 +103,7 @@ class PartitionMaxEISearch:
                                 if np.all(box.width <= self.precision):    
                                     boxes_it.append(box)
                                 else:
-                                    boxes_it.extend(split_box(box))
+                                    boxes_it.extend(split_box(box, split_type, self.domain_width))
                     else:
                         ei = ei_bounds(box, self.model)
                         box.ei = ei
@@ -114,7 +115,7 @@ class PartitionMaxEISearch:
                             if np.all(box.width <= self.precision):    
                                 boxes_it.append(box)
                             else:
-                                boxes_it.extend(split_box(box))
+                                boxes_it.extend(split_box(box, split_type, self.domain_width))
             
             if self.log:
                 iteration_key = list(self.log.keys())[-1]

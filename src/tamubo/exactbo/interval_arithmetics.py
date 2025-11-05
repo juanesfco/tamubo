@@ -9,6 +9,20 @@ class Bounds:
     lo: float | Array
     hi: float | Array
 
+    def __post_init__(self):
+        # 1) coerce to numpy if array
+        if (type(self.lo) not in [int, float]) and (type(self.hi) not in [int, float]):
+            self.lo = np.asarray(self.lo, dtype=float)
+            self.hi = np.asarray(self.hi, dtype=float)
+    
+    @property
+    def asarray(self) -> Array:
+        if type(self.lo) == Array and type(self.hi) == Array:
+            bounds = np.stack((self.lo,self.hi), axis=1)
+            return bounds
+        else:
+            raise TypeError("self.lo and self.hi must be arrays.")
+
 def prod_bound_scalar(c: float, X: Bounds):
     """Return bounds for c*X, where X is Bounds(lo,hi)."""
     a,b = c*X.lo, c*X.hi
