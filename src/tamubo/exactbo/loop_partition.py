@@ -50,16 +50,20 @@ class PartitionMaxEISearch:
     def sample_ei_active_non_sampled_boxes_centers(self) -> float:
         active_boxes_mask = self.boxes.active
         non_sampled_boxes_mask = ~self.boxes.sampled
+        active_non_sampled_boxes_mask = active_boxes_mask & non_sampled_boxes_mask
 
-        active_non_sampled_boxes = Boxes(self.boxes.items[active_boxes_mask & non_sampled_boxes_mask])
+        if np.any(active_non_sampled_boxes_mask):
+            active_non_sampled_boxes = Boxes(self.boxes.items[active_non_sampled_boxes_mask])
 
-        ei_sample = expected_improvement(active_non_sampled_boxes.centers, self.model)
+            ei_sample = expected_improvement(active_non_sampled_boxes.centers, self.model)
 
-        best_id = np.argmax(ei_sample)
-        best_x = active_non_sampled_boxes.centers[best_id]
-        max_ei = ei_sample[best_id]
+            best_id = np.argmax(ei_sample)
+            best_x = active_non_sampled_boxes.centers[best_id]
+            max_ei = ei_sample[best_id]
 
-        return best_x, max_ei
+            return best_x, max_ei
+        else:
+            return None, 0
     
     def check_sampled(self, box: Box):
         X = self.model.X_train_
