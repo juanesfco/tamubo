@@ -121,9 +121,12 @@ class PartitionMaxEISearch:
                             else:
                                 boxes_it.extend(split_box(box, split_type, self.domain_width))
             
-            if self.log:
+            if self.log["ebo_log"] != "none":
                 iteration_key = list(self.log.keys())[-1]
-                self.log[iteration_key][f"ploop_{it - 1}"] = {"boxes": self.boxes, "best_x": self.best_x, "max_ei": self.max_ei}
+                if self.log["ebo_log"] == "plot":
+                    self.log[iteration_key][f"ploop_{it - 1}"] = {"boxes": self.boxes, "best_x": self.best_x, "max_ei": self.max_ei}
+                elif self.log["ebo_log"] == "simple":
+                    self.log[iteration_key][f"ploop_{it - 1}"] = {"best_x": self.best_x, "max_ei": self.max_ei}
 
             if len(self.boxes) == len(boxes_it):
                 flag = False
@@ -135,9 +138,10 @@ class PartitionMaxEISearch:
             self.max_ei = max_ei
             self.best_x = best_x
         
-        if self.log:
-            self.log[iteration_key]["ploop_final"] = {"boxes": self.boxes, "best_x": self.best_x, "max_ei": self.max_ei}
-            #self.log[iteration_key]["ploop_final"] = {"boxes": self.boxes, "best_x": best_x, "max_ei": max_ei}
+        if self.log["ebo_log"] != "none":
+            if self.log["ebo_log"] == "plot":
+                self.log[iteration_key]["ploop_final"] = {"boxes": self.boxes, "best_x": self.best_x, "max_ei": self.max_ei}
+            elif self.log["ebo_log"] == "simple":
+                self.log[iteration_key]["ploop_final"] = {"best_x": self.best_x, "max_ei": self.max_ei}
 
         return self.best_x, self.max_ei
-        #return best_x, max_ei

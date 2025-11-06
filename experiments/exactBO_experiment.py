@@ -23,7 +23,7 @@ N = int(sys.argv[1]) # Points per dimension
 precision = 1/(N-1)
 
 # Create object
-eboloop = ebo.ExactBOLoop(gp, bounds, precision, log=True)
+eboloop = ebo.ExactBOLoop(gp, bounds, precision, log="simple")
 
 # Function to minimize
 # f(x,y)= \alpha(x^2 + y^2) - \sum_{i=1}^3 A_i \exp \left( -\frac{(x - Cx_i)^2 + (y - Cy_i)^2}{B_i} \right) + D

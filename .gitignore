@@ -2,3 +2,4 @@ venvs/
 __pycache__/
 .DS_Store
 tamubo.egg-info/
+.ipynb_checkpoints/

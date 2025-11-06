@@ -34,7 +34,7 @@ class ExactBOLoop:
       4) repeat
     """
 
-    def __init__(self, model, bounds: Array, precision: Array | float | None = None, log: dict | bool = False):
+    def __init__(self, model, bounds: Array, precision: Array | float | None = None, log: str = "none"):
         self.model = model
         self.init_box = Box(bounds, True)
         if not precision:
@@ -46,10 +46,7 @@ class ExactBOLoop:
         else:
             raise TypeError("Precision must be Array, float or None")
         
-        if log:
-            self.log = {"ebo_log": True}
-        else:
-            self.log = log
+        self.log = {"ebo_log": log}
         
         self.grid = self.create_grid()
         self._oracle: Callable[[Array], Array] | None = None
@@ -115,18 +112,24 @@ class ExactBOLoop:
         return BOResult(x_min.reshape(1,d), np.array([y_min]))
 
     def run(self, X0: Array, y0: Array, budget: int, max_splits: int = 100, split_type: str = "full") -> BOResult:
-        if self.log:
-            self.log["start"] = {"oracle": self._oracle, "domain": self.init_box.bounds, "precision": self.precision}
+        if self.log["ebo_log"] != "none":
+            if self.log["ebo_log"] == "plot":
+                self.log["start"] = {"oracle": self._oracle, "domain": self.init_box.bounds, "precision": self.precision}
+            elif self.log["ebo_log"] == "simple":
+                self.log["start"] = {"domain": self.init_box.bounds, "precision": self.precision}
             Xc, yc = X0.copy(), y0.copy()
             modelc = clone(self.model)
         X, y = X0.copy(), y0.copy()
         for i in range(int(budget)):
             self.model.fit(X, y.ravel())
             
-            if self.log:
-                self.log[f"ebo_it{i}"] = {"start": BOResult(X, y), "model": deepcopy(self.model)}
+            if self.log["ebo_log"] != "none":
+                if self.log["ebo_log"] == "plot":
+                    self.log[f"ebo_it{i}"] = {"start": BOResult(X, y), "model": deepcopy(self.model)}
+                elif self.log["ebo_log"] == "simple":
+                    self.log[f"ebo_it{i}"] = {"start": BOResult(X, y)}
             
-            if self.log:
+            if self.log["ebo_log"] != "none":
                 modelc.fit(Xc, yc.ravel())
                 boStartTime = time.perf_counter()
                 ei_xx = expected_improvement(self.grid, modelc)
@@ -154,13 +157,13 @@ class ExactBOLoop:
             y = np.concatenate([y, y_next])
 
         res = BOResult(X=X, y=y)
-        if self.log:
+        if self.log["ebo_log"] != "none":
             res_ei = BOResult(X=Xc, y=yc)
             self.log["result"] = {"EBO": res, "BO": res_ei, "Opt": self.estimate_opt()}
         return res
     
     def plot(self, path: str | None = None):
-        if self.log:
+        if self.log["ebo_log"] == "plot":
             d = self.init_box.dim
             if d > 2:
                 raise ValueError("Dimension is too high to plot.")
@@ -169,4 +172,4 @@ class ExactBOLoop:
             else:
                 plot_iterations(self.log, path)
         else:
-            raise AttributeError("Create ExactBOLoop with log=True and then ExactBOLoop.run() before plotting.")
+            raise AttributeError("Create ExactBOLoop with log=plot and then ExactBOLoop.run() before plotting.")
