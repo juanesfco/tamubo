@@ -1,5 +1,5 @@
 # Print starting
-print("Starting")
+print("Starting - Partition Script")
 
 import tamubo.exactbo as ebo
 import cupynumeric as cp
@@ -9,12 +9,6 @@ from legate.timing import time
 
 # Print modules loaded
 print("Modules Loaded")
-
-# Define bounds
-bounds = [[0,2],[0,2]]
-
-# Define initial box
-init_box = ebo.Box(bounds,True)
 
 # Define boxes splitting algorithm
 def split_boxes(boxes_bounds_L, boxes_bounds_R, domain_width, n, d):
@@ -55,49 +49,59 @@ def split_boxes(boxes_bounds_L, boxes_bounds_R, domain_width, n, d):
         
     return(boxes_bounds_L_out, boxes_bounds_R_out)
 
-# Define boxes object
-boxes = ebo.Boxes([init_box])
+def main():
+    # Define bounds
+    bounds = [[0,2],[0,2]]
 
-# Number of boxes
-n = len(boxes)
-d = init_box.dim
-w = cp.array(init_box.width)
+    # Define initial box
+    init_box = ebo.Box(bounds,True)
 
-# Boxes bounds to cupynumeric
-boxes_bounds = boxes.bounds.reshape(n*d,2)
-boxes_bounds_L = cp.array(boxes_bounds[:,0].reshape(n,d))
-boxes_bounds_R = cp.array(boxes_bounds[:,1].reshape(n,d))
+    # Define boxes object
+    boxes = ebo.Boxes([init_box])
 
-# Start loop to partition a couple of times
-Ns = []
-times = []
-Ls = []
-Rs = []
-for p in range(8):
-    n_p = boxes_bounds_L.shape[0]
-    start_time = time()
-    new_boxes_bounds_L, new_boxes_bounds_R = split_boxes(boxes_bounds_L, boxes_bounds_R, w, n_p, d)
-    end_time = time()
-    
-    Ns.append(n_p)
-    times.append((end_time-start_time)/1e6)
-    Ls.append(new_boxes_bounds_L.copy())
-    Rs.append(new_boxes_bounds_R.copy())
+    # Number of boxes
+    n = len(boxes)
+    d = init_box.dim
+    w = cp.array(init_box.width)
 
-    boxes_bounds_L = new_boxes_bounds_L
-    boxes_bounds_R = new_boxes_bounds_R
+    # Boxes bounds to cupynumeric
+    boxes_bounds = boxes.bounds.reshape(n*d,2)
+    boxes_bounds_L = cp.array(boxes_bounds[:,0].reshape(n,d))
+    boxes_bounds_R = cp.array(boxes_bounds[:,1].reshape(n,d))
 
-# Results dictionary
-results = {
-    'Ns': Ns,
-    'times': times,
-    'Ls': Ls,
-    'Rs': Rs
-}
+    # Start loop to partition a couple of times
+    ns = []
+    times = []
+    Ls = []
+    Rs = []
+    for _ in range(8):
+        n = boxes_bounds_L.shape[0]
+        start_time = time()
+        new_boxes_bounds_L, new_boxes_bounds_R = split_boxes(boxes_bounds_L, boxes_bounds_R, w, n, d)
+        end_time = time()
+        
+        ns.append(n)
+        times.append((end_time-start_time)/1e6)
+        Ls.append(new_boxes_bounds_L.copy())
+        Rs.append(new_boxes_bounds_R.copy())
 
-# Save results as pickle
-with open("examples/Data/results_partition_cupynumeric.pkl", "wb") as f:
-    pickle.dump(results, f)
+        boxes_bounds_L = new_boxes_bounds_L
+        boxes_bounds_R = new_boxes_bounds_R
+
+    # Results dictionary
+    results = {
+        'ns': ns,
+        'times': times,
+        'Ls': Ls,
+        'Rs': Rs
+    }
+
+    # Save results as pickle
+    with open("examples/Data/results_partition_cupynumeric.pkl", "wb") as f:
+        pickle.dump(results, f)
+
+if __name__ == '__main__':
+    main()
 
 # Print done
-print("Done")
+print("Done - Partition Script")
