@@ -34,6 +34,7 @@ def partition_loop(X_data, bounds, epsilon, gp, max_partitions):
     w = bounds_U[0] - bounds_L[0]  # Bounds with per dimension (d,)
     partition = 0
     w_max = w.copy()
+    ei_max = 0
 
     while partition < max_partitions and cp.all(w_max > epsilon):
         # Total number of boxes
@@ -59,9 +60,10 @@ def partition_loop(X_data, bounds, epsilon, gp, max_partitions):
         box_U = bounds_U[idx_max_ei_hi,:]  # (d,)
         box_center = (box_L + box_U) / 2.0  # (d,)
         mu_pred, sigma_pred = gp.predict(cp.asnumpy(box_center).reshape(1,-1), return_std=True)
-        ei_max = expected_improvement(mu_pred[0], sigma_pred[0], y_min)
+        ei_max = cp.max(ei_max,expected_improvement(mu_pred[0], sigma_pred[0], y_min))
 
-
+        # Active boxes are the ones where ei_hi is higher than ei_max
+        active_boxes_mask = ei_hi > ei_max  # (n,)
 
         # Update maximum with of active boxes
         w_max = cp.max(bounds_U - bounds_L, axis=0)
