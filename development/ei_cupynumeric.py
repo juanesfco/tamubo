@@ -29,21 +29,25 @@ def norm_cdf(z):
 def norm_pdf(z):
     return inv_sqrt2pi * cp.exp(-0.5 * z * z)
 
-def expected_improvement(mu,sigma,y_min):
+def expected_improvement(mu, sigma, y_min):
     """
     Compute Expected Improvement (EI) for a minimization objective.
 
     Args:
-        mu (float): Predictive mean at the candidate point.
-        sigma (float): Predictive standard deviation at the candidate point.
-        y_min (float): Best (minimum) observed objective value so far.
+        mu (float or cp.ndarray): Predictive mean(s) at candidate points.
+        sigma (float or cp.ndarray): Predictive std dev(s) at candidate points.
+        y_min (float or cp.ndarray): Best observed objective value(s). Broadcastable
+            to mu/sigma.
 
     Returns:
-        float: Expected improvement (non-negative).
+        cp.ndarray: Expected improvement values, non-negative, same broadcasted shape
+        as mu/sigma. When sigma == 0, EI is 0.
     """
-    if sigma == 0:
-        return 0
-    else:
-        Z = (y_min - mu) / sigma # to minimize
-        ei = (y_min - mu) * norm_cdf(Z) + sigma * norm_pdf(Z) # to minimize
-    return ei
+    mu = cp.asarray(mu)
+    sigma = cp.asarray(sigma)
+    y_min = cp.asarray(y_min)
+
+    safe_sigma = cp.where(sigma == 0, 1.0, sigma)
+    Z = (y_min - mu) / safe_sigma  # to minimize
+    ei = (y_min - mu) * norm_cdf(Z) + safe_sigma * norm_pdf(Z)  # to minimize
+    return cp.where(sigma == 0, 0.0, ei)

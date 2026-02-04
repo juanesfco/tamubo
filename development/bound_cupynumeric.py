@@ -434,7 +434,8 @@ def main():
         mu_los.append(mu_lo)
         mu_his.append(mu_hi)
 
-        bounds_L, bounds_U = split_boxes(bounds_L, bounds_U, w, n, d)
+        active_boxes_mask = cp.ones(n, dtype=bool)
+        bounds_L, bounds_U = split_boxes(bounds_L, bounds_U, active_boxes_mask, w, n, d)
 
     # Results dictionary
     results = {

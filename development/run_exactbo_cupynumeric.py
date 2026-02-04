@@ -1,14 +1,13 @@
+# Run with: CUPYNUMERIC_REPORT_COVERAGE=1 legate --cpus 1 --gpus 1 --show-config run_exactbo_cupynumeric.py <N>
 # Import libraries
 print("Starting")
 
 import sys
-import cupynumeric as cp
 import numpy as np
 from legate.timing import time
 from loops_cupynumeric import exactbo_loop
 from sklearn.gaussian_process import GaussianProcessRegressor
 from sklearn.gaussian_process.kernels import RBF, ConstantKernel, WhiteKernel
-import pickle
 
 print("Libraries loaded")
 
@@ -21,8 +20,8 @@ gp = GaussianProcessRegressor(kernel=kernel, alpha=1e-10, normalize_y=True)
 ## Each row is a dimension, 
 ## first column is lower bound, 
 ## second column is upper bound
-bounds = np.array([[0,1],
-                   [0,1]])
+bounds = np.array([[0.0,1.0],
+                   [0.0,1.0]])
 
 # Define precision
 N = int(sys.argv[1]) # Points per dimension
@@ -62,7 +61,18 @@ X0 = np.array([[0.25,0.25],
 
 # Optimization parameters
 max_iters = 5
-max_partitions = 10
+max_partitions = 20
 
 # Run optimization
 res = exactbo_loop(X0, bounds, epsilon, gp, f, max_iters, max_partitions)
+
+Xres = res[0]
+yres = res[1]
+
+idx = np.argmin(yres)
+x_best = Xres[idx]
+y_best = yres[idx]
+
+print("Optimization finished")
+print(f"Best point: {x_best}")
+print(f"Best value: {y_best}")

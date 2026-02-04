@@ -15,8 +15,8 @@ def partition_loop(X_data, bounds, epsilon, gp, max_partitions):
     # Initialize boxes
     ## One row per box (initially one box)
     ## One column per dimension
-    bounds_L = cp.array([bounds[:,0]]) # (n,d)
-    bounds_U = cp.array([bounds[:,1]]) # (n,d)
+    bounds_L = cp.asarray([bounds[:,0]], dtype=cp.float64) # (n,d)
+    bounds_U = cp.asarray([bounds[:,1]], dtype=cp.float64) # (n,d)
 
     # GP hyperparameters
     gp_kernel_params = gp.kernel_.get_params()
@@ -27,6 +27,7 @@ def partition_loop(X_data, bounds, epsilon, gp, max_partitions):
     y_train_mean = gp._y_train_mean
     L = cp.array(gp.L_)
     y_min = cp.min(gp.y_train_)
+    y_min_unscaled = y_min * y_train_std + y_train_mean
 
     # Partition parameters
     N = X_data.shape[0]  # Number of data points
@@ -36,7 +37,7 @@ def partition_loop(X_data, bounds, epsilon, gp, max_partitions):
     w_max = w.copy()
     ei_max = 0
 
-    while partition < max_partitions and cp.all(w_max > epsilon):
+    while partition < max_partitions and cp.any(w_max > epsilon):
         # Total number of boxes
         n = bounds_L.shape[0]
         
@@ -56,24 +57,42 @@ def partition_loop(X_data, bounds, epsilon, gp, max_partitions):
         
         # Compute actual EI in the center of the hyperbox with highest upper EI bound
         idx_max_ei_hi = cp.argmax(ei_hi)
-        box_L = bounds_L[idx_max_ei_hi,:]  # (d,)
-        box_U = bounds_U[idx_max_ei_hi,:]  # (d,)
-        box_center = (box_L + box_U) / 2.0  # (d,)
-        mu_pred, sigma_pred = gp.predict(cp.asnumpy(box_center).reshape(1,-1), return_std=True)
-        ei_max = cp.max(ei_max,expected_improvement(mu_pred[0], sigma_pred[0], y_min))
+        max_ei_hi_box_L = bounds_L[idx_max_ei_hi,:]  # (d,)
+        max_ei_hi_box_U = bounds_U[idx_max_ei_hi,:]  # (d,)
+        max_ei_hi_box_center = (max_ei_hi_box_L + max_ei_hi_box_U) / 2.0  # (d,)
+        mu_pred, sigma_pred = gp.predict(np.array(max_ei_hi_box_center).reshape(1,-1), return_std=True)
+        ei_max = max(ei_max,expected_improvement(mu_pred[0], sigma_pred[0], y_min_unscaled))
 
         # Active boxes are the ones where ei_hi is higher than ei_max
         active_boxes_mask = ei_hi > ei_max  # (n,)
+        if not bool(cp.any(active_boxes_mask)):
+            idx_max = cp.argmax(ei_hi)
+            active_boxes_mask = cp.zeros(n, dtype=bool)
+            active_boxes_mask[idx_max] = True
 
-        # Update maximum with of active boxes
-        w_max = cp.max(bounds_U - bounds_L, axis=0)
-        # Split boxes
-        bounds_L, bounds_U = split_boxes(bounds_L, bounds_U, epsilon)
+        # Update maximum width of active boxes
+        w_max = cp.max(bounds_U[active_boxes_mask] - bounds_L[active_boxes_mask], axis=0)
 
+        # Print status
+        print(f" Partition {partition+1}/{max_partitions}, Boxes: {n}, Active: {cp.sum(active_boxes_mask)}, Max EI: {ei_max:.6f}, Max Width: {w_max}")
+        
         # Update partition count
         partition += 1
 
-    return
+        # Split active boxes (don't if its the last partition)
+        if partition < max_partitions and bool(cp.any(w_max > epsilon)):
+            bounds_L, bounds_U = split_boxes(bounds_L, bounds_U, active_boxes_mask, w, n, d)
+
+    # Check EI in the center of the active boxes and return the best point
+    bound_U_active = bounds_U[active_boxes_mask]  # (m,d)
+    bound_L_active = bounds_L[active_boxes_mask]  # (m,d)
+    center_active = (bound_L_active + bound_U_active) / 2.0  # (m,d)
+    mu_active, sigma_active = gp.predict(np.array(center_active), return_std=True) # (m,) both
+    ei_active = expected_improvement(cp.array(mu_active), cp.array(sigma_active), y_min_unscaled)  # (m,)
+    idx_best = cp.argmax(ei_active)
+    best_x = center_active[idx_best]
+
+    return best_x
 
 def exactbo_loop(X0, bounds, epsilon, gp, f, max_iters, max_partitions):
     # Initialize data
@@ -83,6 +102,7 @@ def exactbo_loop(X0, bounds, epsilon, gp, f, max_iters, max_partitions):
         print(f"Iteration {iteration+1}/{max_iters}")
         # Evaluate function at current data points
         y_data = f(X_data) # (N,)
+        print(f"Current training data: X: {X_data}, y: {y_data}")
 
         # Fit Gaussian Process
         gp.fit(X_data, y_data)
