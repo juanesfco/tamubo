@@ -2,5 +2,7 @@ venvs/
 __pycache__/
 .DS_Store
 tamubo.egg-info/
+*.egg-info/
 .ipynb_checkpoints/
 cufile.log
+development/
