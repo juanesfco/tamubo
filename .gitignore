@@ -5,4 +5,3 @@ tamubo.egg-info/
 *.egg-info/
 .ipynb_checkpoints/
 cufile.log
-development/
