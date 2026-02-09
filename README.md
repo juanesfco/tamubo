@@ -32,7 +32,6 @@ Use one environment per framework:
 
 ```text
 tamubo/
-├── development/                  # branch-local exploration (scratch notebooks/scripts)
 ├── envs/                         # conda environments per framework
 │   └── exactbo.yml
 ├── examples/                     # lightweight runnable demos
