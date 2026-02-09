@@ -1,5 +1,5 @@
 # Print starting
-print("Starting - Loops Script")
+#print("Starting - Loops Script")
 
 import cupynumeric as cp
 import numpy as np
@@ -54,7 +54,7 @@ def partition_loop(X_data, bounds, epsilon, gp, max_partitions):
         sig_lo, sig_hi = sigma_bounds(K_lo,K_hi,L,n,N,sigma_f_2,y_train_std,False) # (n,) both
         ## EI
         ei_lo, ei_hi = ei_bounds(mu_lo,mu_hi,sig_lo,sig_hi,y_min,y_train_mean,y_train_std,False) # (n,) both
-        
+
         # Compute actual EI in the center of the hyperbox with highest upper EI bound
         idx_max_ei_hi = cp.argmax(ei_hi)
         max_ei_hi_box_L = bounds_L[idx_max_ei_hi,:]  # (d,)
@@ -72,9 +72,6 @@ def partition_loop(X_data, bounds, epsilon, gp, max_partitions):
 
         # Update maximum width of active boxes
         w_max = cp.max(bounds_U[active_boxes_mask] - bounds_L[active_boxes_mask], axis=0)
-
-        # Print status
-        print(f" Partition {partition+1}/{max_partitions}, Boxes: {n}, Active: {cp.sum(active_boxes_mask)}, Max EI: {ei_max:.6f}, Max Width: {w_max}")
         
         # Update partition count
         partition += 1
@@ -82,6 +79,9 @@ def partition_loop(X_data, bounds, epsilon, gp, max_partitions):
         # Split active boxes (don't if its the last partition)
         if partition < max_partitions and bool(cp.any(w_max > epsilon)):
             bounds_L, bounds_U = split_boxes(bounds_L, bounds_U, active_boxes_mask, w, n, d)
+
+        # Print status
+        print(f" Partition {partition}/{max_partitions}, Boxes: {n}, Active: {cp.sum(active_boxes_mask)}, Max EI: {ei_max:.6f}, Max Width: {w_max}")
 
     # Check EI in the center of the active boxes and return the best point
     bound_U_active = bounds_U[active_boxes_mask]  # (m,d)

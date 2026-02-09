@@ -1,5 +1,5 @@
 # Print done
-print("Starting - Bound Script")
+#print("Starting - Bound Script")
 
 import sys
 import pickle
@@ -12,7 +12,7 @@ from legate.timing import time
 from partition_cupynumeric import split_boxes
 
 # Print done
-print("Modules Loaded")
+#print("Modules Loaded")
 
 # Define rbf_k_bounds
 def rbf_k_bounds(bounds_L, bounds_U, xi, n, d, sigma_f_2, length_scale, validation=True):
@@ -458,4 +458,4 @@ if __name__ == '__main__':
     main()
 
 # Print done
-print("Done - Bound Script")
+#print("Done - Bound Script")

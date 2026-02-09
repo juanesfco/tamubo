@@ -1,5 +1,5 @@
 # Print starting
-print("Starting - Partition Script")
+#print("Starting - Partition Script")
 
 import tamubo.exactbo as ebo
 import cupynumeric as cp
@@ -8,7 +8,7 @@ import pickle
 from legate.timing import time
 
 # Print modules loaded
-print("Modules Loaded")
+#print("Modules Loaded")
 
 def split_boxes(bounds_L, bounds_U, active_boxes_mask, domain_width, n, d):
     """
@@ -151,4 +151,4 @@ if __name__ == '__main__':
     main()
 
 # Print done
-print("Done - Partition Script")
+#print("Done - Partition Script")
