@@ -1,18 +1,4 @@
-# Print done
-#print("Starting - Bound Script")
-
-import sys
-import pickle
-import tamubo.exactbo as ebo
 import cupynumeric as cp
-import numpy as np
-from sklearn.gaussian_process import GaussianProcessRegressor
-from sklearn.gaussian_process.kernels import RBF, ConstantKernel, WhiteKernel
-from legate.timing import time
-from partition_cupynumeric import split_boxes
-
-# Print done
-#print("Modules Loaded")
 
 # Define rbf_k_bounds
 def rbf_k_bounds(bounds_L, bounds_U, xi, n, d, sigma_f_2, length_scale, validation=True):
@@ -40,7 +26,7 @@ def rbf_k_bounds(bounds_L, bounds_U, xi, n, d, sigma_f_2, length_scale, validati
     Returns
     -------
     (K_lo, K_hi) : tuple[cupynumeric.ndarray, cupynumeric.ndarray]
-        Lower and upper kernel bounds for each box, each with shape (n,).
+        Lower and upper kernel bounds for each box, each with shape (n,N).
     """
     if validation:
         if bounds_L.ndim == 2:
@@ -64,12 +50,6 @@ def rbf_k_bounds(bounds_L, bounds_U, xi, n, d, sigma_f_2, length_scale, validati
     K_hi = sigma_f_2*cp.exp(-1/(2*length_scale**2)*cp.power(D_min,2))
     
     return(K_lo,K_hi)
-    
-    #K = cp.zeros((n,2))
-    #K[:,0] = sigma_f_2*cp.exp(-1/(2*length_scale**2)*cp.power(D_max,2))
-    #K[:,1] = sigma_f_2*cp.exp(-1/(2*length_scale**2)*cp.power(D_min,2))
-
-    #return(K)
 
 def mu_bounds(alpha, K_lo, K_hi, n, N, y_train_mean=0, y_train_std=1, validate=True):
     """
@@ -126,8 +106,6 @@ def mu_bounds(alpha, K_lo, K_hi, n, N, y_train_mean=0, y_train_std=1, validate=T
     mu_lo = y_train_mean + y_train_std * mu_lo
 
     return (mu_lo, mu_hi)
-
-import cupynumeric as cp
 
 def sigma_bounds(K_lo, K_hi, L, n, N, sigma_f_2, y_train_std=1, validate=True):
     """
@@ -212,8 +190,6 @@ def sigma_bounds(K_lo, K_hi, L, n, N, sigma_f_2, y_train_std=1, validate=True):
     sig_hi = sig_hi * y_train_std    
 
     return (sig_lo, sig_hi)
-
-import cupynumeric as cp
 
 def ei_bounds(mu_lo, mu_hi, sig_lo, sig_hi, y_min, y_train_mean=0, y_train_std=1, validate=True):
     """
@@ -332,130 +308,3 @@ def ei_bounds(mu_lo, mu_hi, sig_lo, sig_hi, y_min, y_train_mean=0, y_train_std=1
     EI_hi = cp.where(mask_ei_0, 0.0, cp.maximum(EI_hi,0)) # (n,)
 
     return (EI_lo, EI_hi)
-
-
-def main():
-    # Define model
-    kernel = ConstantKernel(1.0, (1e-2, 1e3)) * RBF(length_scale=0.2, length_scale_bounds=(1e-2, 10.0)) + WhiteKernel(noise_level=1e-3, noise_level_bounds=(1e-10, 1e1))
-    gp = GaussianProcessRegressor(kernel=kernel, alpha=1e-10, normalize_y=True)
-
-    # Define bounds
-    bounds = [[0,1],[0,1]]
-
-    # Define initial box
-    init_box = ebo.Box(bounds,True)
-
-    # Function to minimize
-    # f(x,y)= \alpha(x^2 + y^2) - \sum_{i=1}^3 A_i \exp \left( -\frac{(x - Cx_i)^2 + (y - Cy_i)^2}{B_i} \right) + D
-    def f(X):
-        x, y = X[:,0], X[:,1]
-
-        # Parameters
-        alpha = 0.1
-        A  = np.array([4, 3, 2])
-        B  = np.array([0.08, 0.05, 0.02])    # betas
-        C  = np.array([[0.9, 0.3 ],      # centers (x1,y1)
-                    [0.1 , 0.8],
-                    [0.6 , 0.7 ]])
-        D = 2
-        
-        # Compute function value
-        val = alpha*(x**2 + y**2)
-        for Ai, Bi, (xi, yi) in zip(A, B, C):
-            r2 = (x - xi)**2 + (y - yi)**2
-            val -= Ai * np.exp(-r2 / Bi)
-        val += D
-        return val
-
-    # Create initial points and evaluate
-    X0 = np.array([[0,0],[1,1],[0.5,0.5],[0,1],[1,0]])
-    X0_cp = cp.array(X0.tolist())
-
-    N = X0.shape[0]
-
-    y0 = f(X0)
-
-    # Train model
-    gp.fit(X0,y0.ravel())
-
-    # Get parameters
-    gp_kernel_params = gp.kernel_.get_params()
-    sigma_f_2 = gp_kernel_params['k1__k1__constant_value']
-    length_scale = gp_kernel_params['k1__k2__length_scale']
-    #sigma_n_2 = gp_kernel_params['k2__noise_level']
-    alpha = cp.array(gp.alpha_)
-
-    # Define boxes object
-    boxes = ebo.Boxes([init_box])
-
-    # Number of boxes
-    n = len(boxes)
-    d = init_box.dim
-    w = cp.array(init_box.width)
-
-    # Boxes bounds to cupynumeric
-    boxes_bounds = boxes.bounds.reshape(n*d,2)
-    bounds_L = cp.array(boxes_bounds[:,0].reshape(n,d))
-    bounds_U = cp.array(boxes_bounds[:,1].reshape(n,d))
-
-    # Loop over different amount of boxes
-    ns = []
-    times = []
-    #Ls = []
-    #Rs = []
-    #Ks = []
-    #K_los = []
-    #K_his = []
-    mu_los = []
-    mu_his = []
-    for _ in range(10):
-        n = bounds_L.shape[0]
-
-        # Find kernel bounds (timing it)
-        start_time = time()
-        #K = cp.zeros((n,2*N))
-        K_lo = cp.zeros((n,N))
-        K_hi = cp.zeros((n,N))
-        for i in range(N):
-            xi = X0_cp[i]
-            K_lo[:,i], K_hi[:,i] = rbf_k_bounds(bounds_L.ravel(),bounds_U.ravel(),xi,n,d,sigma_f_2,length_scale)
-            #K[:,2*i:2*(i+1)] = rbf_k_bounds(bounds_L.ravel(),bounds_U.ravel(),xi,n,d,sigma_f_2,length_scale)
-        mu_lo, mu_hi = mu_bounds(alpha,K_lo,K_hi,n,N)
-        end_time = time()
-
-        # Save results
-        ns.append(n)
-        times.append((end_time-start_time)/1e6)
-        #Ks.append(K)
-        #Ls.append(bounds_L)
-        #Rs.append(bounds_U)
-        #K_los.append(K_lo)
-        #K_his.append(K_hi)
-        mu_los.append(mu_lo)
-        mu_his.append(mu_hi)
-
-        active_boxes_mask = cp.ones(n, dtype=bool)
-        bounds_L, bounds_U = split_boxes(bounds_L, bounds_U, active_boxes_mask, w, n, d)
-
-    # Results dictionary
-    results = {
-        'ns': ns,
-        'times': times,
-        #'Ls': Ls,
-        #'Rs': Rs,
-        #'Ks': Ks,
-        #'K_los': K_los,
-        #'K_his': K_his,
-        'mu_los': mu_los,
-        'mu_his': mu_his
-    }
-
-    # Save results as pickle
-    with open("examples/Data/results_bounds_cupynumeric.pkl", "wb") as f:
-        pickle.dump(results, f)
-
-if __name__ == '__main__':
-    main()
-
-# Print done
-#print("Done - Bound Script")

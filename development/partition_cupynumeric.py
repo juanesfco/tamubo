@@ -1,14 +1,4 @@
-# Print starting
-#print("Starting - Partition Script")
-
-import tamubo.exactbo as ebo
 import cupynumeric as cp
-import numpy as np
-import pickle
-from legate.timing import time
-
-# Print modules loaded
-#print("Modules Loaded")
 
 def split_boxes(bounds_L, bounds_U, active_boxes_mask, domain_width, n, d):
     """
@@ -94,61 +84,3 @@ def split_boxes(bounds_L, bounds_U, active_boxes_mask, domain_width, n, d):
     bounds_L_out = cp.concatenate([bounds_L_out, inactive_bounds_L], axis=0)
     bounds_U_out = cp.concatenate([bounds_U_out, inactive_bounds_U], axis=0)
     return bounds_L_out, bounds_U_out
-
-def main():
-    # Define bounds
-    bounds = [[0,2],[0,2]]
-
-    # Define initial box
-    init_box = ebo.Box(bounds,True)
-
-    # Define boxes object
-    boxes = ebo.Boxes([init_box])
-
-    # Number of boxes
-    n = len(boxes)
-    d = init_box.dim
-    w = cp.array(init_box.width)
-
-    # Boxes bounds to cupynumeric
-    boxes_bounds = boxes.bounds.reshape(n*d,2)
-    boxes_bounds_L = cp.array(boxes_bounds[:,0].reshape(n,d))
-    boxes_bounds_R = cp.array(boxes_bounds[:,1].reshape(n,d))
-
-    # Start loop to partition a couple of times
-    ns = []
-    times = []
-    Ls = []
-    Rs = []
-    for _ in range(8):
-        n = boxes_bounds_L.shape[0]
-        active_boxes_mask = cp.ones(n,dtype=bool)
-        start_time = time()
-        new_boxes_bounds_L, new_boxes_bounds_R = split_boxes(boxes_bounds_L, boxes_bounds_R, active_boxes_mask, w, n, d)
-        end_time = time()
-        
-        ns.append(n)
-        times.append((end_time-start_time)/1e6)
-        Ls.append(new_boxes_bounds_L.copy())
-        Rs.append(new_boxes_bounds_R.copy())
-
-        boxes_bounds_L = new_boxes_bounds_L
-        boxes_bounds_R = new_boxes_bounds_R
-
-    # Results dictionary
-    results = {
-        'ns': ns,
-        'times': times,
-        'Ls': Ls,
-        'Rs': Rs
-    }
-
-    # Save results as pickle
-    with open("examples/Data/results_partition_cupynumeric.pkl", "wb") as f:
-        pickle.dump(results, f)
-
-if __name__ == '__main__':
-    main()
-
-# Print done
-#print("Done - Partition Script")

@@ -1,14 +1,29 @@
-# Print starting
-#print("Starting - Loops Script")
-
 import cupynumeric as cp
 import numpy as np
-from legate.timing import time
 from partition_cupynumeric import split_boxes
 from bound_cupynumeric import rbf_k_bounds, mu_bounds, sigma_bounds, ei_bounds
 from ei_cupynumeric import expected_improvement
 
 def partition_loop(X_data, bounds, epsilon, gp, max_partitions):
+    """
+    Find the next candidate point by iteratively partitioning the search box.
+
+    The routine builds EI lower/upper bounds on each hyperbox, keeps only active
+    boxes whose upper EI can still beat the current best EI, and splits active
+    boxes until `max_partitions` is reached or the active-box widths are below
+    `epsilon`. The returned point is the center of the active box with highest
+    exact EI.
+
+    Args:
+        X_data: Training inputs with shape (N, d), used by the fitted GP.
+        bounds: Search-space bounds with shape (d, 2), [lower, upper] per dim.
+        epsilon: Per-dimension stopping tolerance for active-box widths.
+        gp: Fitted scikit-learn GaussianProcessRegressor-like model.
+        max_partitions: Maximum number of partition/split iterations.
+
+    Returns:
+        best_x: Candidate point with shape (d,) selected for the next evaluation.
+    """
     # X to CuPyNumeric
     X_cp = cp.array(X_data) # (N,d)
     
@@ -95,6 +110,26 @@ def partition_loop(X_data, bounds, epsilon, gp, max_partitions):
     return best_x
 
 def exactbo_loop(X0, bounds, epsilon, gp, f, max_iters, max_partitions):
+    """
+    Run the outer ExactBO optimization loop.
+
+    At each iteration, this function evaluates the objective on current data,
+    fits the GP, calls `partition_loop` to select the next point, evaluates that
+    point, and appends it to the dataset.
+
+    Args:
+        X0: Initial design points with shape (N0, d).
+        bounds: Search-space bounds with shape (d, 2), [lower, upper] per dim.
+        epsilon: Partition stopping tolerance passed to `partition_loop`.
+        gp: Gaussian process regressor instance used for surrogate fitting.
+        f: Objective function that maps inputs to scalar values.
+        max_iters: Number of BO outer iterations.
+        max_partitions: Max partition steps per BO iteration.
+
+    Returns:
+        X_data: Final evaluated inputs with shape (N0 + max_iters, d).
+        y_data: Final objective values aligned with `X_data`.
+    """
     # Initialize data
     X_data = X0.copy() # (N,d), initially N=N0
 

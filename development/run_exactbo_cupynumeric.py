@@ -4,7 +4,6 @@ print("Starting")
 
 import sys
 import numpy as np
-from legate.timing import time
 from loops_cupynumeric import exactbo_loop
 from sklearn.gaussian_process import GaussianProcessRegressor
 from sklearn.gaussian_process.kernels import RBF, ConstantKernel, WhiteKernel
