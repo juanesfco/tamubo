@@ -1,4 +1,4 @@
-# Run with: CUPYNUMERIC_REPORT_COVERAGE=1 legate --cpus 1 --gpus 1 --show-config run_exactbo_cupynumeric.py <N>
+# Run with: CUPYNUMERIC_REPORT_COVERAGE=1 legate --cpus 16 --gpus 1 --show-config run_exactbo_cupynumeric.py <RESOLUTION>
 # Import libraries
 print("Starting")
 
@@ -23,8 +23,8 @@ bounds = np.array([[0.0,1.0],
                    [0.0,1.0]])
 
 # Define precision
-N = int(sys.argv[1]) # Points per dimension
-epsilon = 1/(N-1)
+R = int(sys.argv[1]) # Points per dimension
+epsilon = 1/(R-1)
 print(f"Using precision: {epsilon}")
 
 # Function to minimize

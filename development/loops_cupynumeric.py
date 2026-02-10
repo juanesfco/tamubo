@@ -4,6 +4,13 @@ from partition_cupynumeric import split_boxes
 from bound_cupynumeric import rbf_k_bounds, mu_bounds, sigma_bounds, ei_bounds
 from ei_cupynumeric import expected_improvement
 
+
+def _evaluate_objective(f, x):
+    """Evaluate objective and always return a 1D numpy array."""
+    x = np.asarray(x)
+    x_eval = x.reshape(1, -1) if x.ndim == 1 else x
+    return np.asarray(f(x_eval)).ravel()
+
 def partition_loop(X_data, bounds, epsilon, gp, max_partitions):
     """
     Find the next candidate point by iteratively partitioning the search box.
@@ -24,8 +31,11 @@ def partition_loop(X_data, bounds, epsilon, gp, max_partitions):
     Returns:
         best_x: Candidate point with shape (d,) selected for the next evaluation.
     """
+    # Keep host-side state in numpy; move only kernel inputs to CuPyNumeric.
+    X_data = np.asarray(X_data, dtype=np.float64)
+
     # X to CuPyNumeric
-    X_cp = cp.array(X_data) # (N,d)
+    X_cp = cp.asarray(X_data, dtype=cp.float64) # (N,d)
     
     # Initialize boxes
     ## One row per box (initially one box)
@@ -37,10 +47,10 @@ def partition_loop(X_data, bounds, epsilon, gp, max_partitions):
     gp_kernel_params = gp.kernel_.get_params()
     sigma_f_2 = gp_kernel_params['k1__k1__constant_value']
     length_scale = gp_kernel_params['k1__k2__length_scale']
-    alpha = cp.array(gp.alpha_)
+    alpha = cp.asarray(gp.alpha_, dtype=cp.float64) 
     y_train_std = gp._y_train_std
     y_train_mean = gp._y_train_mean
-    L = cp.array(gp.L_)
+    L = cp.asarray(gp.L_, dtype=cp.float64) # (N,N)
     y_min = cp.min(gp.y_train_)
     y_min_unscaled = y_min * y_train_std + y_train_mean
 
@@ -48,6 +58,11 @@ def partition_loop(X_data, bounds, epsilon, gp, max_partitions):
     N = X_data.shape[0]  # Number of data points
     d = bounds.shape[0]  # Number of dimensions
     w = bounds_U[0] - bounds_L[0]  # Bounds with per dimension (d,)
+    epsilon = cp.asarray(epsilon, dtype=cp.float64)
+    if epsilon.ndim == 0:
+        epsilon = cp.full((d,), epsilon, dtype=cp.float64)
+    elif epsilon.shape != (d,):
+        raise ValueError(f"epsilon must be scalar or shape ({d},), got {tuple(epsilon.shape)}")
     partition = 0
     w_max = w.copy()
     ei_max = 0
@@ -58,8 +73,8 @@ def partition_loop(X_data, bounds, epsilon, gp, max_partitions):
         
         # Bounds
         ## Kernel
-        K_lo = cp.zeros((n,N))
-        K_hi = cp.zeros((n,N))
+        K_lo = cp.zeros((n,N), dtype=cp.float64)
+        K_hi = cp.zeros((n,N), dtype=cp.float64)
         for i in range(N):
             xi = X_cp[i]
             K_lo[:,i], K_hi[:,i] = rbf_k_bounds(bounds_L.ravel(),bounds_U.ravel(),xi,n,d,sigma_f_2,length_scale,False)
@@ -76,7 +91,8 @@ def partition_loop(X_data, bounds, epsilon, gp, max_partitions):
         max_ei_hi_box_U = bounds_U[idx_max_ei_hi,:]  # (d,)
         max_ei_hi_box_center = (max_ei_hi_box_L + max_ei_hi_box_U) / 2.0  # (d,)
         mu_pred, sigma_pred = gp.predict(np.array(max_ei_hi_box_center).reshape(1,-1), return_std=True)
-        ei_max = max(ei_max,expected_improvement(mu_pred[0], sigma_pred[0], y_min_unscaled))
+        ei_center = expected_improvement(mu_pred[0], sigma_pred[0], y_min_unscaled)
+        ei_max = max(ei_max, float(np.asarray(ei_center).ravel()[0]))
 
         # Active boxes are the ones where ei_hi is higher than ei_max
         active_boxes_mask = ei_hi > ei_max  # (n,)
@@ -103,11 +119,11 @@ def partition_loop(X_data, bounds, epsilon, gp, max_partitions):
     bound_L_active = bounds_L[active_boxes_mask]  # (m,d)
     center_active = (bound_L_active + bound_U_active) / 2.0  # (m,d)
     mu_active, sigma_active = gp.predict(np.array(center_active), return_std=True) # (m,) both
-    ei_active = expected_improvement(cp.array(mu_active), cp.array(sigma_active), y_min_unscaled)  # (m,)
+    ei_active = expected_improvement(cp.asarray(mu_active), cp.asarray(sigma_active), y_min_unscaled)  # (m,)
     idx_best = cp.argmax(ei_active)
     best_x = center_active[idx_best]
 
-    return best_x
+    return np.asarray(best_x)
 
 def exactbo_loop(X0, bounds, epsilon, gp, f, max_iters, max_partitions):
     """
@@ -131,12 +147,12 @@ def exactbo_loop(X0, bounds, epsilon, gp, f, max_iters, max_partitions):
         y_data: Final objective values aligned with `X_data`.
     """
     # Initialize data
-    X_data = X0.copy() # (N,d), initially N=N0
+    X_data = np.asarray(X0, dtype=np.float64).copy() # (N,d), initially N=N0
 
     for iteration in range(max_iters):
         print(f"Iteration {iteration+1}/{max_iters}")
         # Evaluate function at current data points
-        y_data = f(X_data) # (N,)
+        y_data = _evaluate_objective(f, X_data) # (N,)
         print(f"Current training data: X: {X_data}, y: {y_data}")
 
         # Fit Gaussian Process
@@ -144,8 +160,8 @@ def exactbo_loop(X0, bounds, epsilon, gp, f, max_iters, max_partitions):
         print("GP fitted")
 
         # Run partitioning to find next point and evaluate it
-        X_new = partition_loop(X_data, bounds, epsilon, gp, max_partitions) # (d,)
-        y_new = f(X_new) # (1,)
+        X_new = np.asarray(partition_loop(X_data, bounds, epsilon, gp, max_partitions), dtype=np.float64).ravel() # (d,)
+        y_new = _evaluate_objective(f, X_new) # (1,)
         print(f"Evaluated new point: {X_new} -> {y_new}")
 
         # Update data

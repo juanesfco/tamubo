@@ -51,15 +51,15 @@ def split_boxes(bounds_L, bounds_U, active_boxes_mask, domain_width, n, d):
     boxes_split_order = cp.argsort(boxes_width_prop, axis=1)
 
     for dd in range(d):
-        mask_L = cp.ones(2*d+1)
-        mask_L[:2*(d-dd-1)] = 0
-        mask_L[2*(d-dd-1)] = 0
-        mask_L_out = cp.tile(mask_L, nt) == 1
+        mask_L = cp.ones(2*d+1, dtype=bool)
+        mask_L[:2*(d-dd-1)] = False
+        mask_L[2*(d-dd-1)] = False
+        mask_L_out = cp.tile(mask_L, nt)
 
-        mask_R = cp.ones(2*d+1)
-        mask_R[:2*(d-dd-1)] = 0
-        mask_R[2*(d-dd-1)+1] = 0
-        mask_R_out = cp.tile(mask_R, nt) == 1
+        mask_R = cp.ones(2*d+1, dtype=bool)
+        mask_R[:2*(d-dd-1)] = False
+        mask_R[2*(d-dd-1)+1] = False
+        mask_R_out = cp.tile(mask_R, nt)
 
         mask_order = boxes_split_order == dd
         c = boxes_mid[mask_order]
@@ -67,16 +67,23 @@ def split_boxes(bounds_L, bounds_U, active_boxes_mask, domain_width, n, d):
         l = cp.subtract(c, 0.5 * w)
         r = cp.add(c, 0.5 * w)
 
-        mask_subs = cp.ones(2*(dd+1))
-        mask_subs[0] = 0
-        mask_subs_out = cp.tile(mask_subs, nt) == 1
+        mask_subs = cp.ones(2*(dd+1), dtype=bool)
+        mask_subs[0] = False
+        mask_subs_out = cp.tile(mask_subs, nt)
 
         rows_mask_order, cols_mask_order = cp.where(mask_order)
 
-        bounds_L_out[rows_mask_order[mask_L_out][mask_subs_out], cols_mask_order[mask_L_out][mask_subs_out]] = l[mask_L_out][mask_subs_out]
-        bounds_L_out[rows_mask_order[mask_L_out][~mask_subs_out], cols_mask_order[mask_L_out][~mask_subs_out]] = r[mask_R_out][~mask_subs_out]
-        bounds_U_out[rows_mask_order[mask_R_out][~mask_subs_out], cols_mask_order[mask_R_out][~mask_subs_out]] = l[mask_L_out][~mask_subs_out]
-        bounds_U_out[rows_mask_order[mask_R_out][mask_subs_out], cols_mask_order[mask_R_out][mask_subs_out]] = r[mask_R_out][mask_subs_out]
+        rows_l = rows_mask_order[mask_L_out]
+        cols_l = cols_mask_order[mask_L_out]
+        vals_l = l[mask_L_out]
+        rows_r = rows_mask_order[mask_R_out]
+        cols_r = cols_mask_order[mask_R_out]
+        vals_r = r[mask_R_out]
+
+        bounds_L_out[rows_l[mask_subs_out], cols_l[mask_subs_out]] = vals_l[mask_subs_out]
+        bounds_L_out[rows_l[~mask_subs_out], cols_l[~mask_subs_out]] = vals_r[~mask_subs_out]
+        bounds_U_out[rows_r[~mask_subs_out], cols_r[~mask_subs_out]] = vals_l[~mask_subs_out]
+        bounds_U_out[rows_r[mask_subs_out], cols_r[mask_subs_out]] = vals_r[mask_subs_out]
     
     if inactive_bounds_L.shape[0] == 0:
         return bounds_L_out, bounds_U_out

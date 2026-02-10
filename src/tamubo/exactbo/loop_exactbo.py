@@ -37,12 +37,17 @@ class ExactBOLoop:
     def __init__(self, model, bounds: Array, precision: Array | float | None = None, log: str = "none"):
         self.model = model
         self.init_box = Box(bounds, True)
-        if not precision:
-            self.precision = 0.1*self.init_box.width
-        elif type(precision) == Array:
-            self.precision = precision
-        elif type(precision) == float:
-            self.precision = precision*self.init_box.width
+        if precision is None:
+            self.precision = 0.1 * self.init_box.width
+        elif isinstance(precision, np.ndarray):
+            p = np.asarray(precision, dtype=float).ravel()
+            if p.size != self.init_box.dim:
+                raise ValueError(
+                    f"precision array must have size {self.init_box.dim}, got {p.size}"
+                )
+            self.precision = p
+        elif np.isscalar(precision):
+            self.precision = float(precision) * self.init_box.width
         else:
             raise TypeError("Precision must be Array, float or None")
         

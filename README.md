@@ -8,6 +8,33 @@ TAMU Bayesian Optimization tools with multiple framework implementations.
 - `tamubo.gpugp`: GPU-oriented GP components.
 - `tamubo.mobbo`: multi-objective BO utilities.
 
+## ExactBO Backends
+
+`tamubo.exactbo` now supports a backend selector with CPU fallback:
+
+- `backend="numpy"`: sequential CPU path (current stable implementation).
+- `backend="cupynumeric"`: vectorized GPU-oriented path (requires `cupynumeric`).
+- `backend="auto"`: picks `cupynumeric` when available, else falls back to `numpy`.
+
+Unified entry point:
+
+```python
+from tamubo.exactbo import run_exactbo
+
+result = run_exactbo(
+    x0=X0,
+    bounds=bounds,
+    epsilon=epsilon,
+    gp=gp,
+    f=f,
+    max_iters=10,
+    max_partitions=30,
+    backend="auto",
+)
+print(result.backend.selected)
+print(result.X.shape, result.y.shape)
+```
+
 ## Conda Setup (ExactBO)
 
 This repository now uses framework-specific Conda environments.
