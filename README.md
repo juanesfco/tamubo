@@ -35,16 +35,51 @@ print(result.backend.selected)
 print(result.X.shape, result.y.shape)
 ```
 
-## Conda Setup (ExactBO)
+## How To Run ExactBO
 
-This repository now uses framework-specific Conda environments.
+There are multiple ways to run `tamubo.exactbo`:
+
+1. `conda` (recommended, most stable): `envs/exactbo.yml`
+2. `pip` build: `envs/exactbo.txt`
+3. `pip` fallback without `cupynumeric`: `envs/exactbo_nocp.txt`
+
+### Option 1: Conda (Most Stable)
+
+Use this when possible. It has the same hardware/runtime expectations as Legate and requires an NVIDIA GPU.
 
 ```bash
 git clone https://github.com/juanesfco/tamubo.git
 cd tamubo
 conda env create -f envs/exactbo.yml
 conda activate tamubo-exactbo
-python -m pip install -e .
+pip install -U pip
+pip install -e .
+```
+
+### Option 2: Pip Build
+
+```bash
+git clone https://github.com/juanesfco/tamubo.git
+cd tamubo
+python -m venv venvs/tamubo_exactbo
+source venvs/tamubo_exactbo/bin/activate
+pip install -U pip
+pip install -r envs/exactbo.txt
+pip install -e .
+```
+
+If `cupynumeric` cannot be built/resolved in your environment, use the fallback below.
+
+### Option 3: Pip Fallback Without cupynumeric
+
+```bash
+git clone https://github.com/juanesfco/tamubo.git
+cd tamubo
+python -m venv venvs/tamubo_exactbo
+source venvs/tamubo_exactbo/bin/activate
+pip install -U pip
+pip install -r envs/exactbo_nocp.txt
+pip install -e .
 ```
 
 ## Environment Strategy
@@ -61,7 +96,9 @@ Use one environment per framework:
 tamubo/
 ├── development/                  # branch-local exploration (scratch notebooks/scripts)
 ├── envs/                         # conda environments per framework
-│   └── exactbo.yml
+│   ├── exactbo.yml
+│   ├── exactbo.txt
+│   └── exactbo_nocp.txt
 ├── examples/                     # lightweight runnable demos
 │   ├── exactbo/
 │   ├── gpugp/
