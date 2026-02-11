@@ -10,16 +10,30 @@ from tamubo.exactbo import run_exactbo
 # 2D domain [0, 1] x [0, 1]
 BOUNDS = np.array([[0.0, 1.0], [0.0, 1.0]], dtype=float)
 
+# Function to minimize
+## f(x,y)= \alpha*(x^2 + y^2) - \sum_{i=1}^3 A_i \exp \left( -\frac{(x - Cx_i)^2 + (y - Cy_i)^2}{B_i} \right) + D
+def objective(X):
+    if len(X.shape) == 1:
+        X = X.reshape(1,-1)
 
-def objective(x):
-    x = np.asarray(x)
-    if x.ndim == 1:
-        x = x.reshape(1, -1)
+    x, y = X[:,0], X[:,1]
 
-    xx = x[:, 0]
-    yy = x[:, 1]
-    return (xx - 0.2) ** 2 + (yy - 0.7) ** 2 - 0.2 * np.exp(-20 * ((xx - 0.8) ** 2 + (yy - 0.3) ** 2))
-
+    # Parameters
+    alpha = 0.1
+    A  = np.array([4, 3, 2])
+    B  = np.array([0.08, 0.05, 0.02])    # betas
+    C  = np.array([[0.9, 0.3 ],      # centers (x1,y1)
+                [0.1 , 0.8],
+                [0.6 , 0.7 ]])
+    D = 2
+    
+    # Compute function value
+    val = alpha*(x**2 + y**2)
+    for Ai, Bi, (xi, yi) in zip(A, B, C):
+        r2 = (x - xi)**2 + (y - yi)**2
+        val -= Ai * np.exp(-r2 / Bi)
+    val += D
+    return val
 
 def main():
     kernel = (
@@ -29,7 +43,7 @@ def main():
     )
     gp = GaussianProcessRegressor(kernel=kernel, alpha=1e-10, normalize_y=True)
 
-    x0 = np.array(
+    X0 = np.array(
         [
             [0.25, 0.25],
             [0.25, 0.75],
@@ -40,14 +54,15 @@ def main():
     )
 
     result = run_exactbo(
-        x0=x0,
+        x0=X0,
         bounds=BOUNDS,
-        epsilon=0.05,
+        epsilon=0.005,
         gp=gp,
         f=objective,
         max_iters=5,
         max_partitions=20,
         backend="auto",
+        verbose=True,
     )
 
     idx = int(np.argmin(result.y))

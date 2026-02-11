@@ -106,7 +106,7 @@ def run_exactbo(
         from .vectorized_loop import exactbo_loop_cupynumeric
 
         x_data, y_data = exactbo_loop_cupynumeric(
-            x0=x0,
+            X0=x0,
             bounds=bounds,
             epsilon=eps,
             gp=gp,
