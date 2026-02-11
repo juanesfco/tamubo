@@ -56,7 +56,7 @@ def main():
     result = run_exactbo(
         x0=X0,
         bounds=BOUNDS,
-        epsilon=0.005,
+        epsilon=0.05,
         gp=gp,
         f=objective,
         max_iters=5,
