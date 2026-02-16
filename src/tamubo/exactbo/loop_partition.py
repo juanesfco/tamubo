@@ -3,7 +3,7 @@ import numpy as np
 from typing import List
 
 from .partition import Box, Boxes, split_box, hypermask
-from .ei import expected_improvement
+from tamubo.acquisition_functions import expected_improvement
 from .bounds import ei_bounds
 
 Array = np.ndarray

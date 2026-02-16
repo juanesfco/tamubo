@@ -8,21 +8,16 @@ BackendName = Literal["auto", "numpy", "cupynumeric"]
 SelectedBackend = Literal["numpy", "cupynumeric"]
 __all__ = ["BackendName", "SelectedBackend", "BackendInfo", "has_cupynumeric", "resolve_backend"]
 
-
 @dataclass(frozen=True)
 class BackendInfo:
     """Resolved backend configuration."""
-
     requested: BackendName
     selected: SelectedBackend
     cupynumeric_available: bool
 
-
 def has_cupynumeric() -> bool:
     """Return True when cupynumeric can be imported in this environment."""
-
     return find_spec("cupynumeric") is not None
-
 
 def resolve_backend(backend: BackendName = "auto") -> BackendInfo:
     """
@@ -38,21 +33,17 @@ def resolve_backend(backend: BackendName = "auto") -> BackendInfo:
     BackendInfo
         Final backend selection plus availability information.
     """
-
     cupynumeric_available = has_cupynumeric()
-
     if backend not in ("auto", "numpy", "cupynumeric"):
         raise ValueError(
             f"Unsupported backend '{backend}'. Choose from 'auto', 'numpy', 'cupynumeric'."
         )
-
     if backend == "numpy":
         return BackendInfo(
             requested="numpy",
             selected="numpy",
             cupynumeric_available=cupynumeric_available,
         )
-
     if backend == "cupynumeric":
         if not cupynumeric_available:
             raise ImportError(
@@ -64,7 +55,6 @@ def resolve_backend(backend: BackendName = "auto") -> BackendInfo:
             selected="cupynumeric",
             cupynumeric_available=True,
         )
-
     selected: SelectedBackend = "cupynumeric" if cupynumeric_available else "numpy"
     return BackendInfo(
         requested="auto",

@@ -5,7 +5,7 @@ import numpy as np
 
 from .vectorized_partition import split_boxes
 from .vectorized_bounds import rbf_k_bounds, mu_bounds, sigma_bounds, ei_bounds
-from .vectorized_ei import expected_improvement
+from tamubo.acquisition_functions import expected_improvement
 
 
 def _evaluate_objective(f, x):

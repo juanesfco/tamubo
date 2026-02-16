@@ -8,7 +8,7 @@ from sklearn.base import clone
 
 from .partition import Box
 from .loop_partition import PartitionMaxEISearch
-from .ei import expected_improvement
+from tamubo.acquisition_functions import expected_improvement
 from .plots import plot_iterations, plot_iterations_2d
 
 Array = np.ndarray
