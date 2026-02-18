@@ -48,6 +48,7 @@ def _array_module(backend: BackendName = "auto"):
     # Import cupynumeric only when it is the selected backend.
     return import_module("cupynumeric")
 
+
 def exactbo(
     X0: np.ndarray,
     bounds: np.ndarray,
@@ -59,7 +60,7 @@ def exactbo(
     max_partitions: int,
     *,
     backend: BackendName = "auto",
-    validation: bool = False,
+    validation: bool = True,
     verbose: bool = False,
     logMask: bool = False,
 ) -> ExactBOResult:
@@ -86,7 +87,7 @@ def exactbo(
         Max partition loops per BO iteration.
     backend : {"auto", "numpy", "cupynumeric"}, default="auto"
         Execution backend.
-    validation : bool, default=False
+    validation : bool, default=True
         Run additional checks for validation purposes (not optimized).
     verbose : bool, default=False
         Print loop-level progress.
@@ -121,13 +122,14 @@ def exactbo(
     if logMask:
         log = {}
 
+    ei_actives = [] #ELIMINATE
     for iteration in range(max_iters):
         if verbose:
             print(f"Iteration {iteration + 1}/{max_iters}")
         # Evaluate function at current data points
         y = _evaluate_objective(f, X)  # (N,)
         if verbose:
-            print(f"Current training data: X: {X}, y: {y}")
+            print(f"Current training data: \nX: {X}, \ny: {y}")
         if logMask:
             log[f"i{iteration}"] = {"X": X.copy(), "y": y.copy()}
 
@@ -137,7 +139,8 @@ def exactbo(
             print("GP fitted")
 
         # Run partitioning to find next point and evaluate it
-        partitioning_result = exactbo_partitioning(X, bounds, epsilon_X, epsilon_ei, gp, max_partitions, backend_info.selected, validation, verbose, logMask)
+        partitioning_result, ei_active = exactbo_partitioning(X, bounds, epsilon_X, epsilon_ei, gp, max_partitions, backend=backend_info.selected, validation=validation, verbose=verbose, logMask=logMask) #ELIMINATE
+        #partitioning_result = exactbo_partitioning(X, bounds, epsilon_X, epsilon_ei, gp, max_partitions, backend=backend_info.selected, validation=validation, verbose=verbose, logMask=logMask)
         Xn = np.asarray(partitioning_result.Xn, dtype=np.float64).ravel()  # (d,)
         yn = _evaluate_objective(f, Xn)  # (1,)
         if verbose:
@@ -149,40 +152,12 @@ def exactbo(
         # Update data
         X = np.vstack((X, Xn))  # (N+1,d)
         y = np.hstack((y, yn))  # (N+1,)
+
+        ei_actives.append(ei_active) #ELIMIATE
     
-    return ExactBOResult(X, y, backend_info, log if logMask else None)
+    return ExactBOResult(X, y, backend_info, log if logMask else None), ei_actives #ELIMINATE
+    #return ExactBOResult(X, y, backend_info, log if logMask else None)
 
-"""    
-    if backend_info.selected == "cupynumeric":
-        from .vectorized_loop import exactbo_loop_cupynumeric
-
-        x_data, y_data = exactbo_loop_cupynumeric(
-            X0=x0,
-            bounds=bounds,
-            epsilon=eps,
-            gp=gp,
-            f=f,
-            max_iters=max_iters,
-            max_partitions=max_partitions,
-            verbose=verbose,
-        )
-        return ExactBORunResult(X=np.asarray(x_data), y=np.asarray(y_data), backend=backend_info)
-
-    y0 = _evaluate_objective(f, x0)
-
-    loop = ExactBOLoop(model=gp, bounds=bounds, precision=eps, log="none")
-    loop.set_oracle(lambda x: _evaluate_objective(f, x))
-
-    res = loop.run(
-        X0=x0,
-        y0=y0,
-        budget=max_iters,
-        max_splits=max_partitions,
-        split_type=split_type,
-    )
-
-    return ExactBORunResult(X=res.X, y=res.y, backend=backend_info)
-"""
 
 def exactbo_partitioning(
     X: np.ndarray,
@@ -192,8 +167,8 @@ def exactbo_partitioning(
     gp,
     max_partitions: int,
     *,
-    backend_selected: str,
-    validation: bool = False,
+    backend: BackendName = "auto",
+    validation: bool = True,
     verbose: bool = False,
     logMask: bool = False,
 ) -> ExactBOPartitioningResult:
@@ -216,9 +191,9 @@ def exactbo_partitioning(
         Current BO iteration.
     max_partitions : int
         Max partition loops per BO iteration.
-    backend_selected : str
-        Selected execution backend.
-    validation : bool, default=False
+    backend : {"auto", "numpy", "cupynumeric"}, default="auto"
+        Backend used for array ops.
+    validation : bool, default=True
         Run additional checks for validation purposes (not optimized).
     verbose : bool, default=False
         Print loop-level progress.
@@ -230,7 +205,7 @@ def exactbo_partitioning(
     ExactBOPartitioningResult
         Next design point, backend resolution info and log.
     """
-    xp = _array_module(backend_selected)
+    xp = _array_module(backend)
 
     # Copy of X for partitioning, converted to backend array
     Xc = xp.asarray(X, dtype=xp.float64)
@@ -276,13 +251,13 @@ def exactbo_partitioning(
         K_hi = xp.zeros((n, N), dtype=xp.float64)
         for i in range(N):
             xi = Xc[i]
-            K_lo[:, i], K_hi[:, i] = rbf_k_bounds(bounds_L.ravel(),bounds_U.ravel(),xi,n,d,sigma_f_2,length_scale,backend_selected,validation)  # (n,) both
+            K_lo[:, i], K_hi[:, i] = rbf_k_bounds(bounds_L.ravel(),bounds_U.ravel(),xi,n,d,sigma_f_2,length_scale,backend=backend,validation=validation)  # (n,) both
         ## Mean
-        mu_lo, mu_hi = mu_bounds(alpha, K_lo, K_hi, n, N, y_train_mean, y_train_std, backend_selected, validation)  # (n,) both
+        mu_lo, mu_hi = mu_bounds(alpha, K_lo, K_hi, n, N, y_train_mean=y_train_mean, y_train_std=y_train_std, backend=backend, validation=validation)  # (n,) both
         ## Sigma
-        sig_lo, sig_hi = sigma_bounds(K_lo, K_hi, L, n, N, sigma_f_2, y_train_std, backend_selected, validation)  # (n,) both
+        sig_lo, sig_hi = sigma_bounds(K_lo, K_hi, L, n, N, sigma_f_2, y_train_std=y_train_std, backend=backend, validation=validation)  # (n,) both
         ## EI
-        ei_lo, ei_hi = ei_bounds(mu_lo, mu_hi, sig_lo, sig_hi, y_min, y_train_mean, y_train_std, backend_selected, validation)  # (n,) both
+        ei_lo, ei_hi = ei_bounds(mu_lo, mu_hi, sig_lo, sig_hi, n, y_min_unscaled, backend=backend, validation=validation)  # (n,) both
 
         # Compute actual EI in the center of the hyperbox with highest upper EI bound
         idx_max_ei_hi = xp.argmax(ei_hi)
@@ -290,7 +265,7 @@ def exactbo_partitioning(
         max_ei_hi_box_U = bounds_U[idx_max_ei_hi, :]  # (d,)
         max_ei_hi_box_center = (max_ei_hi_box_L + max_ei_hi_box_U) / 2.0  # (d,)
         mu_pred, sigma_pred = gp.predict(np.array(max_ei_hi_box_center).reshape(1, -1), return_std=True)
-        ei_center = expected_improvement(mu_pred[0], sigma_pred[0], y_min_unscaled, backend_selected)  # scalar
+        ei_center = expected_improvement(mu_pred[0], sigma_pred[0], y_min_unscaled, backend=backend)  # scalar
         ei_max = max(ei_max, float(ei_center.ravel()[0]))
 
         # Active boxes are the ones where ei_hi is higher than ei_max
@@ -303,17 +278,10 @@ def exactbo_partitioning(
         # Update maximum width of active boxes
         w_max = xp.max(bounds_U[active_boxes_mask] - bounds_L[active_boxes_mask], axis=0)
 
-        # Update partition count
-        partition += 1
-
-        # Split active boxes (don't if its the last partition)
-        if partition < max_partitions and bool(xp.any(w_max > epsilon_X)):
-            bounds_L, bounds_U = split_boxes(bounds_L, bounds_U, active_boxes_mask, w, n, d, backend_selected, validation)
-
         # Print status
         if verbose:
             print(
-                f" Partition {partition}/{max_partitions}, Boxes: {n}, "
+                f" Partition {partition}/{max_partitions-1}, Boxes: {n}, "
                 f"Active: {xp.sum(active_boxes_mask)}, Max EI: {ei_max:.6f}, Max Width: {w_max}"
             )
 
@@ -323,14 +291,22 @@ def exactbo_partitioning(
                 "bounds_U": np.asarray(bounds_U),
                 "active_boxes_mask": np.asarray(active_boxes_mask),
             }
+        
+        # Update partition count
+        partition += 1
+
+        # Split active boxes (don't if its the last partition)
+        if partition < max_partitions and bool(xp.any(w_max > epsilon_X)):
+            bounds_L, bounds_U = split_boxes(bounds_L, bounds_U, active_boxes_mask, w, n, d, backend=backend, validation=validation)
 
     # Check EI in the center of the active boxes and return the best point
     bound_U_active = bounds_U[active_boxes_mask]  # (m,d)
     bound_L_active = bounds_L[active_boxes_mask]  # (m,d)
     center_active = (bound_L_active + bound_U_active) / 2.0  # (m,d)
     mu_active, sigma_active = gp.predict(np.array(center_active), return_std=True)  # (m,) both
-    ei_active = expected_improvement(xp.asarray(mu_active), xp.asarray(sigma_active), y_min_unscaled, backend_selected)  # (m,)
+    ei_active = expected_improvement(xp.asarray(mu_active), xp.asarray(sigma_active), y_min_unscaled, backend=backend)  # (m,)
     idx_best = xp.argmax(ei_active)
     best_x = center_active[idx_best]
 
-    return ExactBOPartitioningResult(Xn=np.asarray(best_x), logIteration=log if logMask else None)
+    return ExactBOPartitioningResult(Xn=np.asarray(best_x), logIteration=log if logMask else None), np.asarray(ei_active) #ELIMINATE
+    #return ExactBOPartitioningResult(Xn=np.asarray(best_x), logIteration=log if logMask else None)

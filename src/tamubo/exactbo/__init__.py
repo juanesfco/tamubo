@@ -2,49 +2,20 @@
 exactBO: minimal exact Bayesian Optimization scaffold.
 
 Exports:
-- Box, Boxes, split_box, hypermask
-- rbf_k_bounds, mu_bounds, sigma_bounds, ei_bounds_from_mu_sigma, ei_bounds
-- Bounds, prod_bound_scalar, add_bounds, sub_bounds, prod_bounds, square_bounds, sqrt_bounds, forward_solve_bounds
-- PartitionMaxEISearch
-- ExactBOLoop, BOResult
-- run_exactbo, ExactBORunResult
-- BackendInfo, has_cupynumeric, resolve_backend
-- plot_iterations, plot_iterations_2d, plot_function_2d, plot_partitions_2d, plot_ploop_2d
+- Bounds functions: rbf_k_bounds, mu_bounds, sigma_bounds, ei_bounds
+- Result classes: ExactBOResult, ExactBOPartitioningResult
+- Main functions: exactbo, exactbo_partitioning
+- Partitioning utility: split_boxes
+- 2D Plotting helpers: plot_f, plot_log, plot_opt
 """
-from .partition import Box, Boxes, split_box, hypermask
-from .bounds import rbf_k_bounds, mu_bounds, sigma_bounds, ei_bounds_from_mu_sigma, ei_bounds
-from .interval_arithmetics import Bounds, prod_bound_scalar, add_bounds, sub_bounds, prod_bounds, square_bounds, sqrt_bounds, forward_solve_bounds
-from .loop_partition import PartitionMaxEISearch
-from .loop_exactbo import ExactBOLoop, BOResult
-from .run import ExactBORunResult, run_exactbo
-from .plots import plot_iterations, plot_iterations_2d, plot_function_2d, plot_partitions_2d, plot_ploop_2d
+from .bounds import rbf_k_bounds, mu_bounds, sigma_bounds, ei_bounds
+from .run import ExactBOResult, ExactBOPartitioningResult, exactbo, exactbo_partitioning
+from .partition import split_boxes
+from .plot2D import plot_f, plot_log, plot_opt
 
 __all__ = [
-    "Box",
-    "Boxes",
-    "split_box",
-    "hypermask",
-    "rbf_k_bounds",
-    "mu_bounds",
-    "sigma_bounds",
-    "ei_bounds_from_mu_sigma",
-    "ei_bounds",
-    "Bounds",
-    "prod_bound_scalar",
-    "add_bounds",
-    "sub_bounds",
-    "prod_bounds",
-    "square_bounds",
-    "sqrt_bounds",
-    "forward_solve_bounds",
-    "PartitionMaxEISearch",
-    "ExactBOLoop",
-    "BOResult",
-    "ExactBORunResult",
-    "run_exactbo",
-    "plot_iterations",
-    "plot_iterations_2d",
-    "plot_function_2d",
-    "plot_partitions_2d",
-    "plot_ploop_2d",
+    "rbf_k_bounds", "mu_bounds", "sigma_bounds", "ei_bounds",
+    "ExactBOResult", "ExactBOPartitioningResult", "exactbo", "exactbo_partitioning",
+    "split_boxes",
+    "plot_f", "plot_log", "plot_opt"
 ]

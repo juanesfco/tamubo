@@ -7,3 +7,4 @@ tamubo.egg-info/
 cufile.log
 development/Data/
 development/Figures/
+examples/exactbo/logs/

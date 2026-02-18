@@ -1,255 +1,241 @@
 from __future__ import annotations
-from dataclasses import dataclass, field
+
+from importlib import import_module
+
 import numpy as np
-from itertools import product
-from typing import List, Optional, Iterable
-from .interval_arithmetics import Bounds
 
-Array = np.ndarray
-
-@dataclass
-class Box:
-    """Axis-aligned hyperbox with (d,2) bounds [[lo,hi], ...]."""
-    bounds: Array  # shape (d,2) with [lo, hi]
-    sampled: bool
-    active: bool = True
-    ei: Optional[Bounds] = None
+from tamubo.utils import BackendName, resolve_backend
 
 
-    def __post_init__(self):
-        # 1) coerce to numpy
-        b = np.asarray(self.bounds, dtype=float)
+def _array_module(backend: BackendName = "auto"):
+    """Return the resolved array module (`numpy` or `cupynumeric`)."""
+    backend_info = resolve_backend(backend)
+    if backend_info.selected == "numpy":
+        return np
+    # Import cupynumeric only when it is the selected backend.
+    return import_module("cupynumeric")
 
-        # 2) shape checks
-        if b.ndim != 2:
-            raise ValueError(f"Box.bounds must be 2D (d,2), got shape {b.shape}")
-        if b.shape[1] != 2:
-            raise ValueError(f"Box.bounds second dim must be 2 (lo, hi), got {b.shape}")
 
-        # 3) optional: lo <= hi
-        lo = b[:, 0]
-        hi = b[:, 1]
-        if not np.all(lo <= hi):
-            raise ValueError("Box.bounds must satisfy lo <= hi for all dimensions")
-
-        # if everything is ok, assign back
-        self.bounds = b
-
-    @property
-    def dim(self) -> int:
-        return int(self.bounds.shape[0])
-
-    @property
-    def center(self) -> Array:
-        return 0.5 * (self.bounds[:, 0] + self.bounds[:, 1])
-
-    @property
-    def width(self) -> Array:
-        return self.bounds[:, 1] - self.bounds[:, 0]
-
-@dataclass
-class Boxes:
-    """Collection of Box objects with convenient aggregated views."""
-    items: Array = field(default_factory=lambda: np.empty((0,), dtype=object))
-
-    def __post_init__(self):
-        # Accept iterables or arrays and normalize to 1D object array
-        if isinstance(self.items, np.ndarray):
-            if self.items.dtype != object:
-                # e.g., array of Box but wrong dtype, or nested list
-                self.items = np.array(list(self.items), dtype=object)
-        else:
-            # items is an iterable of Box
-            self.items = np.array(list(self.items), dtype=object)
-
-        # Ensure 1D
-        if self.items.ndim != 1:
-            self.items = self.items.reshape(-1).astype(object)
-
-    # --- sequence-like behavior ---
-    def __len__(self) -> int:
-        return self.items.size
-
-    def __iter__(self):
-        return iter(self.items)
-
-    def __getitem__(self, idx):
-        return self.items[idx]
-
-    def append(self, box: Box) -> None:
-        """Append a single Box."""
-        self.items = np.concatenate(
-            [self.items, np.array([box], dtype=object)]
-        )
-
-    def extend(self, boxes: Iterable[Box]) -> None:
-        """Append multiple Box instances."""
-        arr = np.array(list(boxes), dtype=object)
-        if arr.size > 0:
-            self.items = np.concatenate([self.items, arr])
-
-    # --- aggregated properties ---
-
-    @property
-    def bounds(self) -> Array:
-        """Stacked bounds as (n_boxes, d, 2)."""
-        if len(self) == 0:
-            return np.empty((0, 0, 2), dtype=float)
-        return np.stack([b.bounds for b in self.items], axis=0)
-
-    @property
-    def sampled(self) -> Array:
-        """Boolean array (n_boxes,) indicating which boxes are sampled."""
-        return np.array([b.sampled for b in self.items], dtype=bool)
-
-    @property
-    def active(self) -> Array:
-        """Boolean array (n_boxes,) indicating which boxes are active."""
-        return np.array([b.active for b in self.items], dtype=bool)
-
-    @property
-    def centers(self) -> Array:
-        """Array of centers with shape (n_boxes, d)."""
-        if len(self) == 0:
-            return np.empty((0, 0), dtype=float)
-        return np.stack([b.center for b in self.items], axis=0)
-
-    @property
-    def widths(self) -> Array:
-        """Array of widths with shape (n_boxes, d)."""
-        if len(self) == 0:
-            return np.empty((0, 0), dtype=float)
-        return np.stack([b.width for b in self.items], axis=0)
-
-    @property
-    def ei_hi(self) -> list[Optional[Bounds]]:
-        """List of EI high bounds (or None) per box."""
-        n = len(self)
-        out = np.full(n, np.nan, dtype=float)
-        for i, b in enumerate(self.items):
-            if b.ei is not None:
-                out[i] = b.ei.hi
-        return out
-    
-    @property
-    def ei_lo(self) -> list[Optional[Bounds]]:
-        """List of EI low bounds (or None) per box."""
-        n = len(self)
-        out = np.full(n, np.nan, dtype=float)
-        for i, b in enumerate(self.items):
-            if b.ei is not None:
-                out[i] = b.ei.lo
-        return out
-
-    @property
-    def ei_array(self) -> Array:
-        """
-        Array of EI [lower, upper] for boxes where ei is not None.
-        Missing entries are NaN. Shape: (n_boxes, 2).
-        """
-        n = len(self)
-        out = np.full((n, 2), np.nan, dtype=float)
-        for i, b in enumerate(self.items):
-            if b.ei is not None:
-                out[i, 0] = b.ei.lo
-                out[i, 1] = b.ei.hi
-        return out
-
-def split_box(box: Box, split_type: str = "full", domain_width: Array | None = None) -> List[Box]:
+def split_boxes(
+    bounds_L, 
+    bounds_U, 
+    active_boxes_mask, 
+    domain_width, 
+    n: int, 
+    d: int,
+    *,
+    backend: BackendName = "auto", 
+    validation: bool = True,
+) -> tuple:
     """
-    Split `box` along EVERY axis at the midpoint, returning 2^d sub-boxes
-    whose union equals the original box (overlaps only on boundaries).
-
-    Returns
-    -------
-    children : list[Box] of length 2^d
-    """
-    b = box.bounds
-    d = box.dim
-    mid = box.center
-    lo = b[:, 0]
-    hi = b[:, 1]
-    
-    children: Boxes = Boxes()
-
-    if split_type == "full":
-        # Each bit in pattern selects left(0)=[lo,mid] or right(1)=[mid,hi] for that axis
-        for pattern in product((0, 1), repeat=d):
-            child = np.empty_like(b)
-            # Mask where bit == 0
-            mask = np.array(pattern) == 0
-            # New lo: Old lo values on axes where bit=0, mid value on axes where bit=1
-            child[:, 0] = np.where(mask, lo, mid)
-            # New hi: mid values on axes where bit=0, old hi value on axes where bit=1
-            child[:, 1] = np.where(mask, mid, hi)
-
-            children.append(Box(bounds=child, sampled=box.sampled))
-
-    elif split_type == "centered":
-        w = box.width
-        if domain_width is None:
-            domain_width = np.ones(d)
-        w_dw = w / domain_width
-        split_order = np.argsort(w_dw)[::-1]
-
-        mid_box_bounds  = b.copy()
-
-        for id in range(d):
-            split_d = split_order[id]
-            c = mid[split_d]
-            l = lo[split_d]
-            r = hi[split_d]
-            
-            ld, rd = c - l, r - c
-            wc = 0.5 * min(ld, rd)
-
-            lb = c - 0.5 * wc
-            rb = c + 0.5 * wc
-
-            left_box_bounds = mid_box_bounds.copy();  left_box_bounds[split_d, 1] = lb
-            right_box_bounds= mid_box_bounds.copy();  right_box_bounds[split_d, 0] = rb
-            mid_box_bounds[split_d, 0] = lb; mid_box_bounds[split_d, 1] = rb
-
-            children.append(Box(bounds=left_box_bounds, sampled=box.sampled))
-            children.append(Box(bounds=right_box_bounds, sampled=box.sampled))
-                
-        children.append(Box(bounds=mid_box_bounds, sampled=box.sampled))
-    
-    else:
-        raise ValueError("split_type not supported")
-
-    return children
-
-def hypermask(boxes_bounds: np.ndarray, X: np.ndarray):
-    """
-    Return a boolean mask marking which points in X lie inside at least one
-    hyperbox from `boxes_bounds`. Bounds are inclusive.
+    Split active hyperboxes following the DIRECT partition rule in d dimensions.
 
     Parameters
     ----------
-    boxes_bounds : array_like, shape (n, d, 2) or (d, 2)
-        n hyperboxes in d dimensions. For each box, boxes[i, 0] is the left
-        bound in dimension i and boxes[i, 1] is the right bound.
-    X : array_like, shape (k, d)
-        k points in the same d-dimensional space.
+    bounds_L : np.ndarray or cupynumeric.ndarray, shape (n, d)
+        Lower bounds of the hyperboxes.
+    bounds_U : np.ndarray or cupynumeric.ndarray, shape (n, d)
+        Upper bounds of the hyperboxes.
+    active_boxes_mask : np.ndarray or cupynumeric.ndarray, shape (n,)
+        Boolean mask indicating which boxes to split.
+    domain_width : np.ndarray or cupynumeric.ndarray or scalar, shape (d,) or ()
+        Domain widths used to normalize box widths for split ordering.
+    n : int
+        Number of input hyperboxes.
+    d : int
+        Dimension of the hyperboxes.
+    backend : {"auto", "numpy", "cupynumeric"}, default="auto"
+        Backend used for array ops.
+    validation : bool, default=True
+        Run additional checks for validation purposes (not optimized).
 
     Returns
     -------
-    mask : ndarray, shape (k,), dtype=bool
-        True if the point lies in any hyperbox (inclusive bounds).
+    bounds_L_out : np.ndarray or cupynumeric.ndarray, shape (nt*(2*d+1) + (n-nt), d)
+        Lower bounds of the output boxes (split actives + unchanged inactives).
+    bounds_U_out : np.ndarray or cupynumeric.ndarray, shape (nt*(2*d+1) + (n-nt), d)
+        Upper bounds of the output boxes (split actives + unchanged inactives).
     """
-    boxes_bounds = np.asarray(boxes_bounds)
-    X = np.asarray(X)
+    # Convert inputs to the appropriate array type based on the backend.   
+    xp = _array_module(backend)
+    active_boxes_mask = xp.asarray(active_boxes_mask).astype(bool)
+    bounds_L = bounds_L.astype(xp.float64, copy=False)
+    bounds_U = bounds_U.astype(xp.float64, copy=False)
+    domain_width = xp.asarray(domain_width, dtype=xp.float64)
 
-    if boxes_bounds.ndim != 3 or boxes_bounds.shape[-1] != 2:
-        raise ValueError("`boxes` must have shape (n, d, 2).")
-    if X.ndim != 2 or X.shape[1] != boxes_bounds.shape[1]:
-        raise ValueError(f"`X` must have shape (k, {boxes_bounds.shape[1]}).")
+    # Validate input shapes if requested.
+    if validation:
+        assert bounds_L.shape == (n, d), f"bounds_L must have shape (n, d), got {bounds_L.shape}"
+        assert bounds_U.shape == (n, d), f"bounds_U must have shape (n, d), got {bounds_U.shape}"
+        assert active_boxes_mask.shape == (n,), f"active_boxes_mask must have shape (n,), got {active_boxes_mask.shape}"
 
-    left, right = boxes_bounds[..., 0], boxes_bounds[..., 1]  # (n, d) each
+    # Check if using numpy or cupynumeric
+    if xp is np:
+        # Serial computation for numpy (more efficient for small n).
+        return _split_boxes_numpy(bounds_L, bounds_U, active_boxes_mask, domain_width, n, d)
+    else:
+        # Vectorized computation for cupynumeric (more efficient for large n).
+        return _split_boxes_cupynumeric(bounds_L, bounds_U, active_boxes_mask, domain_width, d)
 
-    ge_left = X[:, None, :] >= left[None, :, :]
-    le_right = X[:, None, :] <= right[None, :, :]
 
-    inside_per_box = np.logical_and(ge_left, le_right).all(axis=-1)  # (k, n)
-    return inside_per_box.any(axis=1)
+def _split_boxes_numpy(bounds_L, bounds_U, active_boxes_mask, domain_width, n, d):
+    bounds_L_out = []
+    bounds_U_out = []
+    # Iterate over each box and split if active, otherwise keep unchanged.
+    for i in range(n):
+        # If the box is active, split it according to the DIRECT rule.
+        if active_boxes_mask[i]:
+            # Extract the bounds for the i-th box
+            box_L = bounds_L[i] # (d,)
+            box_U = bounds_U[i] # (d,)
+            # Compute the width and width proportion for each dimension
+            box_width = box_U - box_L # (d,)
+            box_width_prop = box_width / domain_width # (d,)
+            # Determine the order of dimensions to split based on width proportion. 
+            # DIRECT splits along the largest dimension first so we invert argsort order.
+            split_order = np.argsort(box_width_prop)[::-1] # (d,)
+
+            # Initialize the center box which will be updated in-place during the splitting process
+            cbox_L = box_L.copy()
+            cbox_U = box_U.copy()
+
+            # Split the box along the dimensions in the determined order, 
+            # creating 2 new boxes for each split (one on each side of the center box).
+            for dd in range(d):
+                # Split dimension in the order of width proportion (largest first).
+                dim_to_split = split_order[dd]
+                # Extract the lower and upper bounds for the dimension to split
+                l = box_L[dim_to_split]
+                u = box_U[dim_to_split]
+                # Extract the width of the box along the dimension to split
+                w = box_width[dim_to_split]
+                
+                # Compute the split points (1/3 and 2/3) along the dimension to split
+                lb = l + w/3
+                ub = u - w/3
+
+                # Create the lower box 
+                lbox_L = cbox_L.copy()
+                lbox_U = cbox_U.copy()
+                # Upper bound of the lower box is the lower split point
+                lbox_U[dim_to_split] = lb
+
+                # Create the upper box
+                ubox_L = cbox_L.copy()
+                ubox_U = cbox_U.copy()
+                # Lower bound of the upper box is the upper split point
+                ubox_L[dim_to_split] = ub
+                
+                # Update the center box for the next split
+                cbox_L[dim_to_split] = lb
+                cbox_U[dim_to_split] = ub
+
+                # Append the new boxes to the output lists
+                bounds_L_out.append(lbox_L)
+                bounds_U_out.append(lbox_U)
+                bounds_L_out.append(ubox_L)
+                bounds_U_out.append(ubox_U)
+            
+            # Finally, append the center box after all splits
+            bounds_L_out.append(cbox_L)
+            bounds_U_out.append(cbox_U)
+        
+        # If the box is inactive, keep it unchanged.
+        else:
+            bounds_L_out.append(bounds_L[i])
+            bounds_U_out.append(bounds_U[i])
+
+    # Convert the output lists to arrays and return
+    return np.array(bounds_L_out), np.array(bounds_U_out)
+
+
+def _split_boxes_cupynumeric(bounds_L, bounds_U, active_boxes_mask, domain_width, d):
+    import cupynumeric as cp
+
+    # Split active boxes from inactive boxes.
+    active_bounds_L = bounds_L[active_boxes_mask] # (nt, d)
+    active_bounds_U = bounds_U[active_boxes_mask] # (nt, d)
+    inactive_bounds_L = bounds_L[~active_boxes_mask] # ((n-nt), d)
+    inactive_bounds_U = bounds_U[~active_boxes_mask] # ((n-nt), d)
+
+    # Number of active boxes
+    nt = active_bounds_L.shape[0]
+    # If there are no active boxes, return the original bounds unchanged.
+    if nt == 0:
+        return bounds_L, bounds_U
+
+    # Prepare the output arrays for the split boxes. Each active box will 
+    # generate 2*d new boxes plus 1 center box.
+    bounds_L_out = cp.repeat(active_bounds_L, repeats=2 * d + 1, axis=0) # (nt*(2*d+1), d)
+    bounds_U_out = cp.repeat(active_bounds_U, repeats=2 * d + 1, axis=0) # (nt*(2*d+1), d)
+    # Compute the width of each active box along each dimension and 
+    # the proportion of the width relative to the domain width.
+    boxes_width = cp.repeat(cp.subtract(active_bounds_U, active_bounds_L), repeats=2 * d + 1, axis=0) # (nt*(2*d+1), d)
+    boxes_width_prop = cp.divide(boxes_width, domain_width) # (nt*(2*d+1), d)
+    # Determine the order of dimensions to split for each box based on width proportion. 
+    # DIRECT splits along the largest dimension first. In our implementation below we will follow this
+    # in the big picture but we will start by updating the bounds for the smallest dimensions first.
+    boxes_split_order = cp.argsort(boxes_width_prop, axis=1) # (nt*(2*d+1), d)
+
+    # Perform the splitting for each active box according to the determined order.
+    for dd in range(d):
+        # Column mask for dimension to split in the current iteration.
+        # We will modify bounds along smallest dimension first.
+        mask_order = boxes_split_order == dd # (nt*(2*d+1), d)
+
+        # Row and column indices that correspond to the current dimension being split, 
+        # used for indexing the output bounds.
+        rows_mask_order, cols_mask_order = cp.where(mask_order) # (nt*(2*d+1),) both
+
+        # Extract the bounds and widths along the current dimension.
+        l = bounds_L_out[mask_order] # (nt*(2*d+1),)
+        u = bounds_U_out[mask_order] # (nt*(2*d+1),)
+        w = boxes_width[mask_order] # (nt*(2*d+1),)
+
+        # Compute the split points (1/3 and 2/3) along the dimension to split.
+        lb = l + w/3 # (nt*(2*d+1),)
+        ub = u - w/3 # (nt*(2*d+1),)
+
+        # This masks identify which of the 2*d+1 boxes (per original active box) bounds we will modify.
+        mask_L = cp.ones(2 * d + 1, dtype=bool) # (2*d+1,)
+        mask_U = cp.ones(2 * d + 1, dtype=bool) # (2*d+1,)
+        # The smallest dimensions will have the smallest amount of bounds modified. And the opposite too.
+        # Center box bounds will always be modified.
+        mask_L[: 2 * (d - dd - 1)] = False
+        mask_L[2 * (d - dd - 1)] = False
+        mask_U[: 2 * (d - dd - 1)] = False
+        mask_U[2 * (d - dd - 1) + 1] = False
+        # Tile masks to match the shape of the output bounds for all active boxes.
+        mask_L_out = cp.tile(mask_L, nt) # (nt*(2*d+1),) -> sum(mask_L_out) = nt*2*(dd+1)
+        mask_U_out = cp.tile(mask_U, nt) # (nt*(2*d+1),) -> sum(mask_U_out) = nt*2*(dd+1)
+
+        # Rows and columns that will actually be modified in the output bounds
+        rows_l = rows_mask_order[mask_L_out]
+        rows_u = rows_mask_order[mask_U_out]
+        cols_l = cols_mask_order[mask_L_out]
+        cols_u = cols_mask_order[mask_U_out]
+        # Values to update the bounds with
+        vals_l = lb[mask_L_out]
+        vals_u = ub[mask_U_out]
+
+        # The size of this mask matches with the number of bounds to modify: sum(mask_L) = sum(mask_U).  
+        mask_subs = cp.ones(2 * (dd + 1), dtype=bool) # (2*(dd+1),)
+        # The first box (not the center box) will be modified differently.
+        mask_subs[0] = False 
+        # Tile the mask to match the actual number of bounds: sum(mask_L_out) = sum(mask_U_out) = nt*2*(dd+1).
+        mask_subs_out = cp.tile(mask_subs, nt) # (nt*2*(dd+1),)
+
+        # Most of the bounds will be updated with the corresponding split point (L->lb or U->ub) 
+        # but some one of them (the upper box) will be updated with the opposite split point (L->ub or U->lb).
+        bounds_L_out[rows_l[mask_subs_out], cols_l[mask_subs_out]] = vals_l[mask_subs_out]
+        bounds_L_out[rows_l[~mask_subs_out], cols_l[~mask_subs_out]] = vals_u[~mask_subs_out]
+        bounds_U_out[rows_u[~mask_subs_out], cols_u[~mask_subs_out]] = vals_l[~mask_subs_out]
+        bounds_U_out[rows_u[mask_subs_out], cols_u[mask_subs_out]] = vals_u[mask_subs_out]
+
+    if inactive_bounds_L.shape[0] == 0:
+        return bounds_L_out, bounds_U_out
+
+    # Concatenate the split active boxes with the unchanged inactive boxes to form the final output.
+    bounds_L_out = cp.concatenate([bounds_L_out, inactive_bounds_L], axis=0)
+    bounds_U_out = cp.concatenate([bounds_U_out, inactive_bounds_U], axis=0)
+    return bounds_L_out, bounds_U_out
