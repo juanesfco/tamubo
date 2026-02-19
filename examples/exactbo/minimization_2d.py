@@ -94,7 +94,8 @@ def main():
         dtype=float,
     )
 
-    result = exactbo(
+    # DELETE _ BELOW
+    result, _ = exactbo(
         X0=X0,
         bounds=BOUNDS,
         epsilon_X=config["epsilon_X"],
