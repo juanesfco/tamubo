@@ -75,7 +75,7 @@ def split_boxes(
         return _split_boxes_numpy(bounds_L, bounds_U, active_boxes_mask, domain_width, n, d)
     else:
         # Vectorized computation for cupynumeric (more efficient for large n).
-        return _split_boxes_cupynumeric(bounds_L, bounds_U, active_boxes_mask, domain_width, d)
+        return _split_boxes_cupynumeric(bounds_L, bounds_U, active_boxes_mask, domain_width, n, d)
 
 
 def _split_boxes_numpy(bounds_L, bounds_U, active_boxes_mask, domain_width, n, d):
@@ -149,93 +149,92 @@ def _split_boxes_numpy(bounds_L, bounds_U, active_boxes_mask, domain_width, n, d
     return np.array(bounds_L_out), np.array(bounds_U_out)
 
 
-def _split_boxes_cupynumeric(bounds_L, bounds_U, active_boxes_mask, domain_width, d):
+def _split_boxes_cupynumeric(bounds_L, bounds_U, active_boxes_mask, domain_width, n, d):
     import cupynumeric as cp
 
-    # Split active boxes from inactive boxes.
+    # Get the bounds of the active boxes.
     active_bounds_L = bounds_L[active_boxes_mask] # (nt, d)
     active_bounds_U = bounds_U[active_boxes_mask] # (nt, d)
-    inactive_bounds_L = bounds_L[~active_boxes_mask] # ((n-nt), d)
-    inactive_bounds_U = bounds_U[~active_boxes_mask] # ((n-nt), d)
 
-    # Number of active boxes
+    # Number of active boxes.
     nt = active_bounds_L.shape[0]
-    # If there are no active boxes, return the original bounds unchanged.
+    # If there are no active boxes, return the original bounds.
     if nt == 0:
         return bounds_L, bounds_U
 
-    # Prepare the output arrays for the split boxes. Each active box will 
-    # generate 2*d new boxes plus 1 center box.
-    bounds_L_out = cp.repeat(active_bounds_L, repeats=2 * d + 1, axis=0) # (nt*(2*d+1), d)
-    bounds_U_out = cp.repeat(active_bounds_U, repeats=2 * d + 1, axis=0) # (nt*(2*d+1), d)
-    # Compute the width of each active box along each dimension and 
-    # the proportion of the width relative to the domain width.
-    boxes_width = cp.repeat(cp.subtract(active_bounds_U, active_bounds_L), repeats=2 * d + 1, axis=0) # (nt*(2*d+1), d)
-    boxes_width_prop = cp.divide(boxes_width, domain_width) # (nt*(2*d+1), d)
+    # Each active box is split into 2 * d + 1 boxes.
+    stride = 2 * d + 1
+    # Number of inactive boxes that will be appended to the output.
+    n_inactive = n - nt
+
+    # Allocate output buffers for the split active boxes.
+    bounds_L_out = cp.repeat(active_bounds_L, repeats=stride, axis=0) # (nt * stride, d)
+    bounds_U_out = cp.repeat(active_bounds_U, repeats=stride, axis=0) # (nt * stride, d)
+
+    # Compute widths and normalized widths using output buffers.
+    active_width = cp.empty_like(active_bounds_L) # (nt, d)
+    cp.subtract(active_bounds_U, active_bounds_L, out=active_width) # (nt, d)
+    active_width_prop = cp.empty_like(active_width) # (nt, d)
+    cp.divide(active_width, domain_width, out=active_width_prop) # (nt, d)
+
     # Determine the order of dimensions to split for each box based on width proportion. 
-    # DIRECT splits along the largest dimension first. In our implementation below we will follow this
-    # in the big picture but we will start by updating the bounds for the smallest dimensions first.
-    boxes_split_order = cp.argsort(boxes_width_prop, axis=1) # (nt*(2*d+1), d)
+    # DIRECT splits along the largest dimension first. In our implementation below we 
+    # will follow this in the big picture but we will start by updating the bounds 
+    # for the smallest dimensions first.
+    split_order = cp.argsort(active_width_prop, axis=1) # (nt, d)
 
-    # Perform the splitting for each active box according to the determined order.
+    # Create row indices and base row indices for the output boxes.
+    row_ids = cp.arange(nt) # (nt,)
+    row_base = cp.arange(nt, dtype=cp.int64) * stride # (nt,)
+
+    # Create buffers for the loop to avoid repeated allocations.
+    cols = cp.empty(nt, dtype=cp.int64) # (nt,)
+    w_sel = cp.empty(nt, dtype=active_width.dtype) # (nt,)
+    lb = cp.empty(nt, dtype=active_width.dtype) # (nt,)
+    ub = cp.empty(nt, dtype=active_width.dtype) # (nt,)
+    rows_tmp = cp.empty(nt, dtype=cp.int64) # (nt,)
+
+    # Loop over the dimensions.
     for dd in range(d):
-        # Column mask for dimension to split in the current iteration.
-        # We will modify bounds along smallest dimension first.
-        mask_order = boxes_split_order == dd # (nt*(2*d+1), d)
+        # For each box, determine the column to update based on the split order.
+        cols[...] = split_order[:, dd]
+        w_sel[...] = active_width[row_ids, cols]
 
-        # Row and column indices that correspond to the current dimension being split, 
-        # used for indexing the output bounds.
-        rows_mask_order, cols_mask_order = cp.where(mask_order) # (nt*(2*d+1),) both
+        # Divide width by 3
+        cp.divide(w_sel, 3.0, out=lb)
+        ub[...] = lb
+        # Center-box lower bound is the original lower bound plus the divided width.
+        cp.add(active_bounds_L[row_ids, cols], lb, out=lb)
+        # Center-box upper bound is the original upper bound minus the divided width.
+        cp.subtract(active_bounds_U[row_ids, cols], ub, out=ub)
 
-        # Extract the bounds and widths along the current dimension.
-        l = bounds_L_out[mask_order] # (nt*(2*d+1),)
-        u = bounds_U_out[mask_order] # (nt*(2*d+1),)
-        w = boxes_width[mask_order] # (nt*(2*d+1),)
+        # Position of the lower-box in this dimension within the rows stride.
+        pos = 2 * (d - dd - 1)
 
-        # Compute the split points (1/3 and 2/3) along the dimension to split.
-        lb = l + w/3 # (nt*(2*d+1),)
-        ub = u - w/3 # (nt*(2*d+1),)
+        # Position of the lower-box in this dimension for all strides.
+        cp.add(row_base, pos, out=rows_tmp)
+        # Lower-boxes upper bounds for this dimension are the center-box lower bounds.
+        bounds_U_out[rows_tmp, cols] = lb
+        
+        # Position of the upper-box in this dimension for all strides.
+        cp.add(row_base, pos + 1, out=rows_tmp)
+        # Upper-boxes lower bounds for this dimension are the center-box upper bounds.
+        bounds_L_out[rows_tmp, cols] = ub
 
-        # This masks identify which of the 2*d+1 boxes (per original active box) bounds we will modify.
-        mask_L = cp.ones(2 * d + 1, dtype=bool) # (2*d+1,)
-        mask_U = cp.ones(2 * d + 1, dtype=bool) # (2*d+1,)
-        # The smallest dimensions will have the smallest amount of bounds modified. And the opposite too.
-        # Center box bounds will always be modified.
-        mask_L[: 2 * (d - dd - 1)] = False
-        mask_L[2 * (d - dd - 1)] = False
-        mask_U[: 2 * (d - dd - 1)] = False
-        mask_U[2 * (d - dd - 1) + 1] = False
-        # Tile masks to match the shape of the output bounds for all active boxes.
-        mask_L_out = cp.tile(mask_L, nt) # (nt*(2*d+1),) -> sum(mask_L_out) = nt*2*(dd+1)
-        mask_U_out = cp.tile(mask_U, nt) # (nt*(2*d+1),) -> sum(mask_U_out) = nt*2*(dd+1)
+        # Rows of the each stride after the rows corresponding to the lower- 
+        # and upper-boxes get the center-box bounds in this dimension.
+        for local_pos in range(pos + 2, stride):
+            # Position of local_pos box for all strides.
+            cp.add(row_base, local_pos, out=rows_tmp)
+            # Center-box bounds
+            bounds_L_out[rows_tmp, cols] = lb
+            bounds_U_out[rows_tmp, cols] = ub
 
-        # Rows and columns that will actually be modified in the output bounds
-        rows_l = rows_mask_order[mask_L_out]
-        rows_u = rows_mask_order[mask_U_out]
-        cols_l = cols_mask_order[mask_L_out]
-        cols_u = cols_mask_order[mask_U_out]
-        # Values to update the bounds with
-        vals_l = lb[mask_L_out]
-        vals_u = ub[mask_U_out]
-
-        # The size of this mask matches with the number of bounds to modify: sum(mask_L) = sum(mask_U).  
-        mask_subs = cp.ones(2 * (dd + 1), dtype=bool) # (2*(dd+1),)
-        # The first box (not the center box) will be modified differently.
-        mask_subs[0] = False 
-        # Tile the mask to match the actual number of bounds: sum(mask_L_out) = sum(mask_U_out) = nt*2*(dd+1).
-        mask_subs_out = cp.tile(mask_subs, nt) # (nt*2*(dd+1),)
-
-        # Most of the bounds will be updated with the corresponding split point (L->lb or U->ub) 
-        # but some one of them (the upper box) will be updated with the opposite split point (L->ub or U->lb).
-        bounds_L_out[rows_l[mask_subs_out], cols_l[mask_subs_out]] = vals_l[mask_subs_out]
-        bounds_L_out[rows_l[~mask_subs_out], cols_l[~mask_subs_out]] = vals_u[~mask_subs_out]
-        bounds_U_out[rows_u[~mask_subs_out], cols_u[~mask_subs_out]] = vals_l[~mask_subs_out]
-        bounds_U_out[rows_u[mask_subs_out], cols_u[mask_subs_out]] = vals_u[mask_subs_out]
-
-    if inactive_bounds_L.shape[0] == 0:
+    if n_inactive == 0:
         return bounds_L_out, bounds_U_out
 
-    # Concatenate the split active boxes with the unchanged inactive boxes to form the final output.
+    inactive_bounds_L = bounds_L[~active_boxes_mask]
+    inactive_bounds_U = bounds_U[~active_boxes_mask]
     bounds_L_out = cp.concatenate([bounds_L_out, inactive_bounds_L], axis=0)
     bounds_U_out = cp.concatenate([bounds_U_out, inactive_bounds_U], axis=0)
     return bounds_L_out, bounds_U_out

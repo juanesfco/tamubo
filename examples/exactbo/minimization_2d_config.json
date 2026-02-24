@@ -1,7 +1,7 @@
 {
-  "epsilon_X": 0.05,
-  "epsilon_ei": 1.0,
-  "max_iters": 3,
-  "max_partition": 10,
-  "log_filename": "cupynumeric_short_trial.json"
+  "epsilon_X": 0.01,
+  "epsilon_ei": 0.1,
+  "max_iters": 6,
+  "max_partitions": 20,
+  "log_filename": "log_example_cupynumeric_new.json"
 }

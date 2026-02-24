@@ -122,7 +122,6 @@ def exactbo(
     if logMask:
         log = {}
 
-    ei_actives = [] #ELIMINATE
     for iteration in range(max_iters):
         if verbose:
             print(f"Iteration {iteration + 1}/{max_iters}")
@@ -139,8 +138,7 @@ def exactbo(
             print("GP fitted")
 
         # Run partitioning to find next point and evaluate it
-        partitioning_result, ei_active = exactbo_partitioning(X, bounds, epsilon_X, epsilon_ei, gp, max_partitions, backend=backend_info.selected, validation=validation, verbose=verbose, logMask=logMask) #ELIMINATE
-        #partitioning_result = exactbo_partitioning(X, bounds, epsilon_X, epsilon_ei, gp, max_partitions, backend=backend_info.selected, validation=validation, verbose=verbose, logMask=logMask)
+        partitioning_result = exactbo_partitioning(X, bounds, epsilon_X, epsilon_ei, gp, max_partitions, backend=backend_info.selected, validation=validation, verbose=verbose, logMask=logMask)
         Xn = np.asarray(partitioning_result.Xn, dtype=np.float64).ravel()  # (d,)
         yn = _evaluate_objective(f, Xn)  # (1,)
         if verbose:
@@ -152,11 +150,8 @@ def exactbo(
         # Update data
         X = np.vstack((X, Xn))  # (N+1,d)
         y = np.hstack((y, yn))  # (N+1,)
-
-        ei_actives.append(ei_active) #ELIMIATE
     
-    return ExactBOResult(X, y, backend_info, log if logMask else None), ei_actives #ELIMINATE
-    #return ExactBOResult(X, y, backend_info, log if logMask else None)
+    return ExactBOResult(X, y, backend_info, log if logMask else None)
 
 
 def exactbo_partitioning(
@@ -236,12 +231,13 @@ def exactbo_partitioning(
     w_max = w.copy()
     ei_max = 0
     active_boxes_mask = xp.ones((1,), dtype=bool)
+    ei_hi_larger_than_ei_max_plus_epsilon = 1
 
     # Initialize log
     if logMask:
         log = {}
     
-    while partition < max_partitions and xp.any(w_max > epsilon_X):
+    while partition < max_partitions and (xp.any(w_max > epsilon_X) or ei_hi_larger_than_ei_max_plus_epsilon > 0):
         # Total number of boxes
         n = bounds_L.shape[0]
 
@@ -261,28 +257,56 @@ def exactbo_partitioning(
 
         # Compute actual EI in the center of the hyperbox with highest upper EI bound
         idx_max_ei_hi = xp.argmax(ei_hi)
-        max_ei_hi_box_L = bounds_L[idx_max_ei_hi, :]  # (d,)
-        max_ei_hi_box_U = bounds_U[idx_max_ei_hi, :]  # (d,)
-        max_ei_hi_box_center = (max_ei_hi_box_L + max_ei_hi_box_U) / 2.0  # (d,)
-        mu_pred, sigma_pred = gp.predict(np.array(max_ei_hi_box_center).reshape(1, -1), return_std=True)
-        ei_center = expected_improvement(mu_pred[0], sigma_pred[0], y_min_unscaled, backend=backend)  # scalar
-        ei_max = max(ei_max, float(ei_center.ravel()[0]))
+        max_ei_hi = float(ei_hi[idx_max_ei_hi])
+        ei_hi_larger_than_max_ei_hi_minus_epsilon = ei_hi > (max_ei_hi - epsilon_ei)  # (n,) -> sum() = n'
+        ei_hi_analyze_bounds_L = bounds_L[ei_hi_larger_than_max_ei_hi_minus_epsilon]  # (n',d)
+        ei_hi_analyze_bounds_U = bounds_U[ei_hi_larger_than_max_ei_hi_minus_epsilon]  # (n',d)
+        ei_hi_analyze_centers = (ei_hi_analyze_bounds_L + ei_hi_analyze_bounds_U) / 2.0  # (n',d)
+        mu_analyze, sigma_analyze = gp.predict(np.asarray(ei_hi_analyze_centers), return_std=True)  # (n',) both
+        ei_analyze = expected_improvement(xp.asarray(mu_analyze), xp.asarray(sigma_analyze), y_min_unscaled, backend=backend)  # (n',)
+        idx_max_ei_analyze = xp.argmax(ei_analyze)
+        ei_max_new = float(ei_analyze[idx_max_ei_analyze])
+        if ei_max_new > ei_max:
+            ei_max = ei_max_new
+            best_x = ei_hi_analyze_centers[idx_max_ei_analyze]
 
-        # Active boxes are the ones where ei_hi is higher than ei_max
-        active_boxes_mask = ei_hi > ei_max  # (n,)
+        # Active boxes are the ones where ei_hi is higher than ei_max plus epsilon_ei
+        active_boxes_mask = ei_hi > (ei_max + epsilon_ei)  # (n,)
+        # If no active boxes, means we have met our purpose so we can return the best point found so far.
         if not bool(xp.any(active_boxes_mask)):
-            idx_max = xp.argmax(ei_hi)
-            active_boxes_mask = xp.zeros(n, dtype=bool)
-            active_boxes_mask[idx_max] = True
+            if verbose:
+                print(
+                    f"Partition {partition}/{max_partitions-1}, \n"
+                    f"  Boxes: {n}, Analyzed: {ei_hi_analyze_centers.shape[0]}, Active: 0,\n"
+                    f"  Max EI_hi: {max_ei_hi:.6f}, Max EI Analyzed: {ei_max:.6f}, No active boxes. Terminating partitioning."
+                )
+            if logMask:
+                log[f"p{partition}"] = {
+                    "bounds_L": np.asarray(bounds_L),
+                    "bounds_U": np.asarray(bounds_U),
+                    "active_boxes_mask": np.asarray(active_boxes_mask),
+                }
+            return ExactBOPartitioningResult(Xn=np.asarray(best_x), logIteration=log if logMask else None)
 
         # Update maximum width of active boxes
         w_max = xp.max(bounds_U[active_boxes_mask] - bounds_L[active_boxes_mask], axis=0)
 
-        # Print status
+        # Check EI in the center of the active boxes and return the best point
+        bound_U_active = bounds_U[active_boxes_mask]  # (m,d)
+        bound_L_active = bounds_L[active_boxes_mask]  # (m,d)
+        ei_hi_active = ei_hi[active_boxes_mask]  # (m,)
+        center_active = (bound_L_active + bound_U_active) / 2.0  # (m,d)
+        mu_active, sigma_active = gp.predict(np.array(center_active), return_std=True)  # (m,) both
+        ei_active = expected_improvement(xp.asarray(mu_active), xp.asarray(sigma_active), y_min_unscaled, backend=backend)  # (m,)
+        idx_best = xp.argmax(ei_active)
+        ei_active_max = float(ei_active[idx_best])
+        ei_hi_larger_than_ei_max_plus_epsilon = xp.sum(ei_hi_active > (ei_active_max + epsilon_ei))
         if verbose:
             print(
-                f" Partition {partition}/{max_partitions-1}, Boxes: {n}, "
-                f"Active: {xp.sum(active_boxes_mask)}, Max EI: {ei_max:.6f}, Max Width: {w_max}"
+                f"Partition {partition}/{max_partitions-1}, \n"
+                f"  Boxes: {n}, Analyzed: {ei_hi_analyze_centers.shape[0]}, Active: {xp.sum(active_boxes_mask)}, \n"
+                f"  Max EI_hi: {max_ei_hi:.6f}, Max EI Analyzed: {ei_max:.6f}, Max EI Active: {ei_active_max:.6f}, \n" 
+                f"  Max Width: {w_max}, EI_hi larger than best EI + epsilon_ei: {ei_hi_larger_than_ei_max_plus_epsilon}"
             )
 
         if logMask:
@@ -296,17 +320,10 @@ def exactbo_partitioning(
         partition += 1
 
         # Split active boxes (don't if its the last partition)
-        if partition < max_partitions and bool(xp.any(w_max > epsilon_X)):
+        if partition < max_partitions and (bool(xp.any(w_max > epsilon_X)) or ei_hi_larger_than_ei_max_plus_epsilon > 0):
             bounds_L, bounds_U = split_boxes(bounds_L, bounds_U, active_boxes_mask, w, n, d, backend=backend, validation=validation)
 
-    # Check EI in the center of the active boxes and return the best point
-    bound_U_active = bounds_U[active_boxes_mask]  # (m,d)
-    bound_L_active = bounds_L[active_boxes_mask]  # (m,d)
-    center_active = (bound_L_active + bound_U_active) / 2.0  # (m,d)
-    mu_active, sigma_active = gp.predict(np.array(center_active), return_std=True)  # (m,) both
-    ei_active = expected_improvement(xp.asarray(mu_active), xp.asarray(sigma_active), y_min_unscaled, backend=backend)  # (m,)
-    idx_best = xp.argmax(ei_active)
+    # After partitioning, select the center of the active box 
     best_x = center_active[idx_best]
 
-    return ExactBOPartitioningResult(Xn=np.asarray(best_x), logIteration=log if logMask else None), np.asarray(ei_active) #ELIMINATE
-    #return ExactBOPartitioningResult(Xn=np.asarray(best_x), logIteration=log if logMask else None)
+    return ExactBOPartitioningResult(Xn=np.asarray(best_x), logIteration=log if logMask else None)

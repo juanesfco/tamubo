@@ -94,8 +94,7 @@ def main():
         dtype=float,
     )
 
-    # DELETE _ BELOW
-    result, _ = exactbo(
+    result = exactbo(
         X0=X0,
         bounds=BOUNDS,
         epsilon_X=config["epsilon_X"],
@@ -103,9 +102,9 @@ def main():
         gp=gp,
         f=objective,
         max_iters=int(config["max_iters"]),
-        max_partitions=int(config["max_partition"]),
+        max_partitions=int(config["max_partitions"]),
         backend="auto",
-        validation=True,
+        validation=False,
         verbose=True,
         logMask=True if log_filename else False,
     )
