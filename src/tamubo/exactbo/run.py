@@ -247,7 +247,7 @@ def exactbo_partitioning(
         K_hi = xp.zeros((n, N), dtype=xp.float64)
         for i in range(N):
             xi = Xc[i]
-            K_lo[:, i], K_hi[:, i] = rbf_k_bounds(bounds_L.ravel(),bounds_U.ravel(),xi,n,d,sigma_f_2,length_scale,backend=backend,validation=validation)  # (n,) both
+            K_lo[:, i], K_hi[:, i] = rbf_k_bounds(bounds_L,bounds_U,xi,n,d,sigma_f_2,length_scale,backend=backend,validation=validation)  # (n,) both
         ## Mean
         mu_lo, mu_hi = mu_bounds(alpha, K_lo, K_hi, n, N, y_train_mean=y_train_mean, y_train_std=y_train_std, backend=backend, validation=validation)  # (n,) both
         ## Sigma

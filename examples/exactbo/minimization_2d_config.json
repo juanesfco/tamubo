@@ -3,5 +3,5 @@
   "epsilon_ei": 0.1,
   "max_iters": 6,
   "max_partitions": 20,
-  "log_filename": "log_example_cupynumeric_new.json"
+  "log_filename": ""
 }

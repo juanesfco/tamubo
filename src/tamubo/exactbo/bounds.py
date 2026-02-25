@@ -3,8 +3,13 @@ from __future__ import annotations
 from importlib import import_module
 
 import numpy as np
+import math
 
 from tamubo.utils import BackendName, resolve_backend
+
+# Constants reused across helper calls.
+_SQRT2 = math.sqrt(2.0)
+_INV_SQRT2PI = 1.0 / math.sqrt(2.0 * math.pi)
 
 def _array_module(backend: BackendName = "auto"):
     """Return the resolved array module (`numpy` or `cupynumeric`)."""
@@ -34,7 +39,7 @@ def rbf_k_bounds(
     Parameters
     ----------
     bounds_L, bounds_U : np.ndarray or cupynumeric.ndarray
-        Lower/upper bounds for n boxes. Accepts shape (n*d,),
+        Lower/upper bounds for n boxes. Accepts shape (n,d),
         with box coordinates stored consecutively by dimension.
     xi : np.ndarray or cupynumeric.ndarray
         Query points in R^d with shape (d,).
@@ -64,12 +69,8 @@ def rbf_k_bounds(
 
     # Validate input shapes if requested.
     if validation:
-        if bounds_L.ndim == 2:
-            bounds_L = bounds_L.ravel()
-        if bounds_U.ndim == 2:
-            bounds_U = bounds_U.ravel()
-        if bounds_L.size != n * d or bounds_U.size != n * d:
-            raise ValueError("bounds_L/R must have size n*d.")
+        if bounds_L.shape != (n,d) or bounds_U.shape != (n,d):
+            raise ValueError("bounds_L/R must have shape (n,d).")
         if xi.size != d:
             raise ValueError("xi must have size d.")
 
@@ -80,8 +81,8 @@ def rbf_k_bounds(
         # For each box, compute the kernel bounds to xi
         for i in range(n):
             # Extract the bounds for the i-th box
-            bounds_L_i = bounds_L[i * d : (i + 1) * d] # (d,) 
-            bounds_U_i = bounds_U[i * d : (i + 1) * d] # (d,)
+            bounds_L_i = bounds_L[i] # (d,) 
+            bounds_U_i = bounds_U[i] # (d,)
 
             # Minimum and maximum distance from xi to the box by dimension
             d_min = xp.maximum(xp.maximum(bounds_L_i - xi, xi - bounds_U_i), 0) # (d,)
@@ -99,16 +100,41 @@ def rbf_k_bounds(
     
     # Vectorized computation for cupynumeric (more efficient for large n).
     else:
-        xi_ext = xp.tile(xi, n)
+        # Create empty buffers for the intermediate distance calculations
+        diff_lo = xp.empty((n, d), dtype=xp.float64) # (n,d)
+        diff_hi = xp.empty((n, d), dtype=xp.float64) # (n,d)
+        d_min = xp.empty((n, d), dtype=xp.float64) # (n,d)
+        d_max = xp.empty((n, d), dtype=xp.float64) # (n,d)
 
-        d_min = xp.maximum(xp.maximum(bounds_L - xi_ext, xi_ext - bounds_U), 0)
-        d_max = xp.maximum(xp.abs(bounds_L - xi_ext), xp.abs(xi_ext - bounds_U))
+        # diff_lo = bounds_L - xi, diff_hi = xi - bounds_U
+        xp.subtract(bounds_L, xi, out=diff_lo) 
+        xp.subtract(xi, bounds_U, out=diff_hi)
 
-        D_min = xp.linalg.norm(d_min.reshape(n, d), axis=1)
-        D_max = xp.linalg.norm(d_max.reshape(n, d), axis=1)
+        # d_min = max(max(diff_lo, diff_hi), 0)
+        xp.maximum(diff_lo, diff_hi, out=d_min)
+        xp.maximum(d_min, 0.0, out=d_min)
 
-        K_lo = sigma_f_2 * xp.exp(-1 / (2 * length_scale ** 2) * xp.power(D_max, 2))
-        K_hi = sigma_f_2 * xp.exp(-1 / (2 * length_scale ** 2) * xp.power(D_min, 2))
+        # d_max = max(abs(diff_lo), abs(diff_hi))
+        xp.abs(diff_lo, out=diff_lo)
+        xp.abs(diff_hi, out=diff_hi)
+        xp.maximum(diff_lo, diff_hi, out=d_max)
+
+        # We only need squared norms for RBF exponent.
+        xp.multiply(d_min, d_min, out=d_min)
+        xp.multiply(d_max, d_max, out=d_max)
+        
+        # Maximum distance means lower kernel value, and vice versa.
+        K_lo = xp.sum(d_max, axis=1) # (n,)
+        K_hi = xp.sum(d_min, axis=1) # (n,)
+
+        # Compute kernel bounds using the RBF formula
+        coef = -0.5 / (length_scale ** 2)
+        xp.multiply(K_lo, coef, out=K_lo)
+        xp.multiply(K_hi, coef, out=K_hi)
+        xp.exp(K_lo, out=K_lo)
+        xp.exp(K_hi, out=K_hi)
+        xp.multiply(K_lo, sigma_f_2, out=K_lo)
+        xp.multiply(K_hi, sigma_f_2, out=K_hi)
 
         return (K_lo, K_hi)
 
@@ -198,26 +224,27 @@ def mu_bounds(
     
     # Vectorized computation for cupynumeric (more efficient for large n).
     else:
-        alphaK_lo = xp.zeros((n, N))
-        alphaK_hi = xp.zeros((n, N))
+        # Split alpha into positive/negative parts to avoid (n, N) intermediates.
+        alpha_pos = xp.empty_like(alpha)
+        alpha_neg = xp.empty_like(alpha)
+        xp.maximum(alpha, 0.0, out=alpha_pos)
+        xp.minimum(alpha, 0.0, out=alpha_neg)
 
-        alpha_mask_pos = alpha >= 0
+        # mu_lo = K_lo @ alpha_pos + K_hi @ alpha_neg
+        mu_lo = K_lo @ alpha_pos
+        tmp = K_hi @ alpha_neg
+        xp.add(mu_lo, tmp, out=mu_lo)
 
-        # when alpha >= 0: hi→hi, lo→lo
-        alphaK_hi[:, alpha_mask_pos] = K_hi[:, alpha_mask_pos] * alpha[alpha_mask_pos]
-        alphaK_lo[:, alpha_mask_pos] = K_lo[:, alpha_mask_pos] * alpha[alpha_mask_pos]
+        # mu_hi = K_hi @ alpha_pos + K_lo @ alpha_neg
+        mu_hi = K_hi @ alpha_pos
+        tmp = K_lo @ alpha_neg
+        xp.add(mu_hi, tmp, out=mu_hi)
 
-        # when alpha < 0: hi→lo, lo→hi
-        alphaK_lo[:, ~alpha_mask_pos] = K_hi[:, ~alpha_mask_pos] * alpha[~alpha_mask_pos]
-        alphaK_hi[:, ~alpha_mask_pos] = K_lo[:, ~alpha_mask_pos] * alpha[~alpha_mask_pos]
-
-        # sum each row (normalized scale)
-        mu_hi = alphaK_hi.sum(axis=1)  # shape (n,)
-        mu_lo = alphaK_lo.sum(axis=1)  # shape (n,)
-
-        # unnormalize to original target scale
-        mu_hi = y_train_mean + y_train_std * mu_hi
-        mu_lo = y_train_mean + y_train_std * mu_lo
+        # Rescale and shift back to original y space.
+        xp.multiply(mu_lo, y_train_std, out=mu_lo)
+        xp.add(mu_lo, y_train_mean, out=mu_lo)
+        xp.multiply(mu_hi, y_train_std, out=mu_hi)
+        xp.add(mu_hi, y_train_mean, out=mu_hi)
 
         return (mu_lo, mu_hi)
 
@@ -355,56 +382,80 @@ def _sigma_bounds_numpy(K_lo, K_hi, L, n, N, sigma_f_2, y_train_std):
 
 def _sigma_bounds_cupynumeric(K_lo, K_hi, L, n, N, sigma_f_2, y_train_std):
     import cupynumeric as cp
-    # Initialize v_lo and v_hi to store the forward solve results for all boxes at once.
-    v_lo = cp.zeros((n, N))
-    v_hi = cp.zeros((n, N))
+    # Create buffers for intermediate computations
+    v_lo = cp.empty((n, N), dtype=cp.float64)
+    v_hi = cp.empty((n, N), dtype=cp.float64)
 
-    # Transpose L for indexing purpose
-    LT = L.T
+    sig_lo = cp.zeros(n, dtype=cp.float64) # Q_hi accumulator, initialized to 0
+    sig_hi = cp.zeros(n, dtype=cp.float64) # Q_lo accumulator, initialized to 0
 
-    # Forward solve bounds: L v = k
+    S_lo = cp.empty(n, dtype=cp.float64)
+    S_hi = cp.empty(n, dtype=cp.float64)
+    tmp0 = cp.empty(n, dtype=cp.float64)
+    tmp1 = cp.empty(n, dtype=cp.float64)
+    mask_cross = cp.empty(n, dtype=bool)
+    mask_pos = cp.empty(n, dtype=bool)
+
+    # Forward substitution to compute v_lo and v_hi
     for j in range(N):
-        S_lo = 0
-        S_hi = 0
-        # S_j = Σ_{i<j} LT_{ij} v_i, with each term interval-bounded
+        # Initialize the sum S for the j-th column of L.
+        S_lo[...] = 0.0
+        S_hi[...] = 0.0
+        # S_j = sum_{i=0}^{j-1} L[j, i] * v[:, i]
         for i in range(j):
-            LTij = LT[i, j]
-            LTv_lo = LTij * v_lo[:, i]  # (n,)
-            LTV_hi = LTij * v_hi[:, i]  # (n,)
-            Si_lo = cp.minimum(LTv_lo, LTV_hi)  # (n,)
-            Si_hi = cp.maximum(LTv_lo, LTV_hi)  # (n,)
-            S_lo = S_lo + Si_lo  # (n,)
-            S_hi = S_hi + Si_hi  # (n,)
+            Lji = float(L[j, i])
+            # The sign of Lji determines whether to use v_lo or v_hi for the bounds of S.
+            if Lji >= 0.0:
+                # S_lo += Lji * v_lo[:, i]
+                cp.multiply(v_lo[:, i], Lji, out=tmp0)
+                cp.add(S_lo, tmp0, out=S_lo)
+                # S_hi += Lji * v_hi[:, i]
+                cp.multiply(v_hi[:, i], Lji, out=tmp0)
+                cp.add(S_hi, tmp0, out=S_hi)
+            else:
+                # S_lo += Lji * v_hi[:, i]
+                cp.multiply(v_hi[:, i], Lji, out=tmp0)
+                cp.add(S_lo, tmp0, out=S_lo)
+                # S_hi += Lji * v_lo[:, i]
+                cp.multiply(v_lo[:, i], Lji, out=tmp0)
+                cp.add(S_hi, tmp0, out=S_hi)
 
-        # N_j = k_j - S_j
-        N_lo = K_lo[:, j] - S_hi
-        N_hi = K_hi[:, j] - S_lo
+        # N_j = K_j - S_j
+        cp.subtract(K_lo[:, j], S_hi, out=tmp0)
+        cp.subtract(K_hi[:, j], S_lo, out=tmp1)
+        # v_j = N_j / L[j, j]
+        Ljj = float(L[j, j])
+        cp.divide(tmp0, Ljj, out=v_lo[:, j])
+        cp.divide(tmp1, Ljj, out=v_hi[:, j])
 
-        # v_j = N_j/LT{jj}
-        LTjj = LT[j, j]
-        v_lo[:, j] = N_lo / LTjj
-        v_hi[:, j] = N_hi / LTjj
+        # Q_hi += max(v_lo^2, v_hi^2)
+        cp.multiply(v_lo[:, j], v_lo[:, j], out=tmp0)
+        cp.multiply(v_hi[:, j], v_hi[:, j], out=tmp1)
+        cp.minimum(tmp0, tmp1, out=S_lo)  # staged for Q_lo
+        cp.maximum(tmp0, tmp1, out=tmp0)
+        cp.add(sig_lo, tmp0, out=sig_lo) # accumulate Q_hi
 
-    # Q = vTv
-    v2_lo = v_lo * v_lo  # (n, N)
-    v2_hi = v_hi * v_hi  # (n, N)
-    flag_v2_0 = (v_lo < 0) & (v_hi > 0)  # (n, N)
-    Q_lo = cp.sum(cp.where(flag_v2_0, 0, cp.minimum(v2_lo, v2_hi)), axis=1)  # (n,)
-    Q_hi = cp.sum(cp.maximum(v2_lo, v2_hi), axis=1)  # (n,)
+        # Q_lo += min(v_lo^2, v_hi^2), except 0 when interval crosses zero.
+        cp.less(v_lo[:, j], 0.0, out=mask_cross)
+        cp.greater(v_hi[:, j], 0.0, out=mask_pos)
+        cp.logical_and(mask_cross, mask_pos, out=mask_cross)
+        S_lo[mask_cross] = 0.0
+        cp.add(sig_hi, S_lo, out=sig_hi) # accumulate Q_lo
 
     # var = sigma_f_2 - Q
-    var_lo = cp.maximum(0, sigma_f_2 - Q_hi)
-    var_hi = cp.maximum(0, sigma_f_2 - Q_lo)
+    cp.subtract(sigma_f_2, sig_lo, out=sig_lo)
+    cp.subtract(sigma_f_2, sig_hi, out=sig_hi)
+    # var > 0
+    cp.maximum(sig_lo, 0.0, out=sig_lo)
+    cp.maximum(sig_hi, 0.0, out=sig_hi)
+    # sigma = sqrt(var)
+    cp.sqrt(sig_lo, out=sig_lo)
+    cp.sqrt(sig_hi, out=sig_hi)
+    # Scale by y_train_std to get unscaled sigma bounds.
+    cp.multiply(sig_lo, y_train_std, out=sig_lo)
+    cp.multiply(sig_hi, y_train_std, out=sig_hi)
 
-    # sig = sqrt(var)
-    sig_lo = cp.sqrt(var_lo)
-    sig_hi = cp.sqrt(var_hi)
-
-    # unnormalize to original target scale
-    sig_lo = sig_lo * y_train_std
-    sig_hi = sig_hi * y_train_std
-
-    return (sig_lo, sig_hi)
+    return sig_lo, sig_hi
 
 
 def ei_bounds(
@@ -417,6 +468,7 @@ def ei_bounds(
     *,
     backend: BackendName = "auto", 
     validation: bool = True,
+    pad: float = 1e-5,
 ) -> tuple:
     """
     IA bounds for EI across all boxes:
@@ -436,6 +488,8 @@ def ei_bounds(
         Backend used for array ops.
     validation : bool, optional
         If True, validate shapes/sizes.
+    pad : float, optional, default=1e-5
+        Small positive number to avoid division by zero.
 
     Returns
     -------
@@ -461,12 +515,12 @@ def ei_bounds(
     # Check if using numpy or cupynumeric for the computation.
     if xp is np:
         # Serial computation for numpy (more efficient for small n).
-        return _ei_bounds_numpy(mu_lo, mu_hi, sig_lo, sig_hi, n, y_min_unscaled)
+        return _ei_bounds_numpy(mu_lo, mu_hi, sig_lo, sig_hi, n, y_min_unscaled, pad=pad)
     else:
         # Vectorized computation for cupynumeric (more efficient for large n).
-        return _ei_bounds_cupynumeric(mu_lo, mu_hi, sig_lo, sig_hi, y_min_unscaled)
+        return _ei_bounds_cupynumeric(mu_lo, mu_hi, sig_lo, sig_hi, n, y_min_unscaled, pad=pad)
     
-def _ei_bounds_numpy(mu_lo, mu_hi, sig_lo, sig_hi, n, y_min_unscaled): #FIX
+def _ei_bounds_numpy(mu_lo, mu_hi, sig_lo, sig_hi, n, y_min_unscaled, pad):
     from scipy.stats import norm
     ei_lo = []
     ei_hi = []
@@ -486,7 +540,7 @@ def _ei_bounds_numpy(mu_lo, mu_hi, sig_lo, sig_hi, n, y_min_unscaled): #FIX
             continue
         elif sig_lo_i == 0:
             # If sig_lo_i == 0 but sig_hi_i > 0, we can still compute bounds using sig_hi_i for the upper bound and 0 for the lower bound.
-            sig_lo_i = 1e-5  # small positive number to avoid division by zero
+            sig_lo_i = pad  # small positive number to avoid division by zero
             flag_ei_lo_0 = True
         else:
             flag_ei_lo_0 = False
@@ -510,7 +564,7 @@ def _ei_bounds_numpy(mu_lo, mu_hi, sig_lo, sig_hi, n, y_min_unscaled): #FIX
         norm_pdf_Z_hi = norm.pdf(Z_hi)
         phi_lo = min(norm_pdf_Z_lo, norm_pdf_Z_hi)
         if Z_lo <= 0 <= Z_hi:
-            phi_hi = norm.pdf(0)
+            phi_hi = _INV_SQRT2PI
         else:
             phi_hi = max(norm_pdf_Z_lo, norm_pdf_Z_hi)
 
@@ -533,62 +587,106 @@ def _ei_bounds_numpy(mu_lo, mu_hi, sig_lo, sig_hi, n, y_min_unscaled): #FIX
 
     return np.array(ei_lo), np.array(ei_hi)
 
-def _ei_bounds_cupynumeric(mu_lo, mu_hi, sig_lo, sig_hi, y_min_unscaled):
+def _ei_bounds_cupynumeric(mu_lo, mu_hi, sig_lo, sig_hi, n, y_min_unscaled, pad):
     import cupynumeric as cp
-    # N bounds
-    N_lo = y_min_unscaled - mu_hi  # (n,)
-    N_hi = y_min_unscaled - mu_lo  # (n,)
+    inv_pad = 1.0 / pad
 
-    # Handle sigma == 0 cases
-    mask_sig_lo_0 = sig_lo == 0.0  # (n,)
-    mask_ei_0 = sig_hi == 0.0  # (n,)
-    mask_ei_lo_0 = mask_sig_lo_0 & ~mask_ei_0  # (n,)
+    # Create buffers for intermediate computations.
+    # N shares with V
+    N_lo = cp.empty(n, dtype=cp.float64)
+    N_hi = cp.empty(n, dtype=cp.float64)
+    # J shares with Phi
+    J_lo = cp.empty(n, dtype=cp.float64)
+    J_hi = cp.empty(n, dtype=cp.float64)
+    # Z shares with phi
+    Z_lo = cp.empty(n, dtype=cp.float64)
+    Z_hi = cp.empty(n, dtype=cp.float64)
+    tmp = cp.empty(n, dtype=cp.float64)
+    mask0 = cp.empty(n, dtype=bool)
+    mask1 = cp.empty(n, dtype=bool)
 
-    pad = 1e-5
-    sig_lo_safe = cp.where(mask_sig_lo_0, pad, sig_lo)  # (n,)
-    sig_hi_safe = cp.where(mask_ei_0, pad, sig_hi)  # (n,)
+    # N = y_min - mu
+    cp.subtract(y_min_unscaled, mu_hi, out=N_lo)
+    cp.subtract(y_min_unscaled, mu_lo, out=N_hi)
 
-    # J = 1/sigma bounds
-    J_lo = 1.0 / sig_hi_safe  # (n,)
-    J_hi = 1.0 / sig_lo_safe  # (n,)
+    # J bounds = 1/sigma without divide-by-zero warnings.
+    cp.equal(sig_hi, 0.0, out=mask0)
+    J_lo[...] = inv_pad
+    J_lo[~mask0] = 1.0 / sig_hi[~mask0]
+    cp.equal(sig_lo, 0.0, out=mask1)
+    J_hi[...] = inv_pad
+    J_hi[~mask1] = 1.0 / sig_lo[~mask1]
 
-    # Z = N * J
-    Z_lo = cp.minimum(cp.minimum(N_lo * J_lo, N_lo * J_hi), cp.minimum(N_hi * J_lo, N_hi * J_hi)) # (n,)
-    Z_hi = cp.maximum(cp.maximum(N_lo * J_lo, N_lo * J_hi), cp.maximum(N_hi * J_lo, N_hi * J_hi)) # (n,)
+    # Z = N * J.
+    _interval_product_bounds(N_lo, N_hi, J_lo, J_hi, cp, Z_lo, Z_hi, tmp)
 
-    # Phi bounds (monotone)
-    Phi_lo = _norm_cdf(Z_lo, cp)  # (n,)
-    Phi_hi = _norm_cdf(Z_hi, cp)  # (n,)
+    # Phi(Z), stored in J buffers.
+    _norm_cdf(Z_lo, cp, out=J_lo, tmp=tmp)
+    _norm_cdf(Z_hi, cp, out=J_hi, tmp=tmp)
 
-    # phi bounds (unimodal, symmetric)
-    norm_pdf_Z_lo = _norm_pdf(Z_lo, cp)  # (n,)
-    norm_pdf_Z_hi = _norm_pdf(Z_hi, cp)  # (n,)
-    phi_lo = cp.minimum(norm_pdf_Z_lo, norm_pdf_Z_hi)  # (n,)
-    mask_phi_hi = (Z_lo <= 0.0) & (Z_hi >= 0.0)  # (n,)
-    phi_hi = cp.where(mask_phi_hi, _norm_pdf(0, cp), cp.maximum(norm_pdf_Z_lo, norm_pdf_Z_hi))  # (n,)
+    # Track where [Z_lo, Z_hi] crosses zero (needed for phi upper bound).
+    cp.less_equal(Z_lo, 0.0, out=mask0)
+    cp.greater_equal(Z_hi, 0.0, out=mask1)
+    cp.logical_and(mask0, mask1, out=mask0)
 
-    # U = N * Phi, V = sigma * phi
-    U_lo = cp.minimum(cp.minimum(N_lo * Phi_lo, N_lo * Phi_hi), cp.minimum(N_hi * Phi_lo, N_hi * Phi_hi)) # (n,)
-    U_hi = cp.maximum(cp.maximum(N_lo * Phi_lo, N_lo * Phi_hi), cp.maximum(N_hi * Phi_lo, N_hi * Phi_hi)) # (n,)    
-    V_lo = cp.minimum(cp.minimum(sig_lo * phi_lo, sig_lo * phi_hi), cp.minimum(sig_hi * phi_lo, sig_hi * phi_hi))  # (n,)
-    V_hi = cp.maximum(cp.maximum(sig_lo * phi_lo, sig_lo * phi_hi), cp.maximum(sig_hi * phi_lo, sig_hi * phi_hi))  # (n,)
+    # phi(Z), stored in Z buffers.
+    _norm_pdf(Z_lo, cp, out=Z_lo)
+    _norm_pdf(Z_hi, cp, out=Z_hi)
+    cp.maximum(Z_lo, Z_hi, out=tmp)
+    cp.minimum(Z_lo, Z_hi, out=Z_lo)
+    Z_hi[...] = tmp
+    Z_hi[mask0] = _INV_SQRT2PI
+
+    # U = N * Phi, stored in EI buffers for now.
+    EI_lo = cp.empty(n, dtype=cp.float64)
+    EI_hi = cp.empty(n, dtype=cp.float64)
+    _interval_product_bounds(N_lo, N_hi, J_lo, J_hi, cp, EI_lo, EI_hi, tmp)
+
+    # V = sigma * phi, stored in N buffers.
+    _interval_product_bounds(sig_lo, sig_hi, Z_lo, Z_hi, cp, N_lo, N_hi, tmp)
 
     # EI = U + V
-    EI_lo = U_lo + V_lo  # (n,)
-    EI_hi = U_hi + V_hi  # (n,)
+    cp.add(EI_lo, N_lo, out=EI_lo)
+    cp.add(EI_hi, N_hi, out=EI_hi)
+    cp.maximum(EI_lo, 0.0, out=EI_lo)
+    cp.maximum(EI_hi, 0.0, out=EI_hi)
 
-    # If sigma was exactly zero, EI is zero
-    EI_lo = cp.where((mask_ei_lo_0 | mask_ei_0), 0.0, cp.maximum(EI_lo, 0))  # (n,)
-    EI_hi = cp.where(mask_ei_0, 0.0, cp.maximum(EI_hi, 0))  # (n,)
+    # If sigma interval hits zero exactly, enforce the same EI conventions as before.
+    cp.equal(sig_hi, 0.0, out=mask0)
+    EI_hi[mask0] = 0.0
+    cp.equal(sig_lo, 0.0, out=mask1)
+    cp.logical_or(mask0, mask1, out=mask1)
+    EI_lo[mask1] = 0.0
 
-    return (EI_lo, EI_hi)
+    return EI_lo, EI_hi
+
+def _interval_product_bounds(a_lo, a_hi, b_lo, b_hi, xp, out_lo, out_hi, tmp):
+    """Compute interval bounds for elementwise products [a_lo, a_hi] * [b_lo, b_hi]."""
+    xp.multiply(a_lo, b_lo, out=out_lo)
+    out_hi[...] = out_lo
+
+    xp.multiply(a_lo, b_hi, out=tmp)
+    xp.minimum(out_lo, tmp, out=out_lo)
+    xp.maximum(out_hi, tmp, out=out_hi)
+
+    xp.multiply(a_hi, b_lo, out=tmp)
+    xp.minimum(out_lo, tmp, out=out_lo)
+    xp.maximum(out_hi, tmp, out=out_hi)
+
+    xp.multiply(a_hi, b_hi, out=tmp)
+    xp.minimum(out_lo, tmp, out=out_lo)
+    xp.maximum(out_hi, tmp, out=out_hi)
 
 # Normal CDF/PDF using erf approximation for cupynumeric, since it doesn't have scipy.stats.norm.
-def _erf_approx(x,xp):
+def _erf_approx(x, xp, *, out=None):
     """
-    Approximate erf(x) using Abramowitz & Stegun 7.1.26.
-    Max error ~1.5e-7.
+    Approximate erf(x) using Abramowitz & Stegun 7.1.26, which has absolute error < 1.5e-7.
+    With module selection and output reuse.
     """
+    x = xp.asarray(x, dtype=xp.float64)
+    if out is None:
+        out = xp.empty_like(x)
+    
     # Coefficients
     p = 0.3275911
     a1 = 0.254829592
@@ -596,15 +694,64 @@ def _erf_approx(x,xp):
     a3 = 1.421413741
     a4 = -1.453152027
     a5 = 1.061405429
-
     sign = xp.sign(x)
-    ax = xp.abs(x)
-    t = 1.0 / (1.0 + p * ax)
-    y = 1.0 - (((((a5 * t + a4) * t + a3) * t + a2) * t + a1) * t) * xp.exp(-ax * ax)
-    return sign * y
-def _norm_cdf(z,xp):
-    sqrt2 = xp.sqrt(2.0)
-    return 0.5 * (1.0 + _erf_approx(z / sqrt2, xp))
-def _norm_pdf(z,xp):
-    inv_sqrt2pi = 1.0 / xp.sqrt(2.0 * xp.pi)
-    return inv_sqrt2pi * xp.exp(-0.5 * z * z)
+
+    # Buffers for intermediate computations
+    ax = xp.empty_like(x)
+    t = xp.empty_like(x)
+    poly = xp.empty_like(x)
+
+    # t = 1 / (1 + p * |x|)
+    xp.abs(x, out=ax)
+    xp.multiply(ax, p, out=t)
+    xp.add(t, 1.0, out=t)
+    xp.divide(1.0, t, out=t)
+
+    # poly = a5*t^5 + a4*t^4 + a3*t^3 + a2*t^2 + a1*t
+    xp.multiply(t, a5, out=poly)
+    xp.add(poly, a4, out=poly)
+    xp.multiply(poly, t, out=poly)
+    xp.add(poly, a3, out=poly)
+    xp.multiply(poly, t, out=poly)
+    xp.add(poly, a2, out=poly)
+    xp.multiply(poly, t, out=poly)
+    xp.add(poly, a1, out=poly)
+    xp.multiply(poly, t, out=poly)
+
+    # exp(-x^2) = exp(-ax), where ax = x^2
+    xp.multiply(ax, ax, out=ax)
+    xp.multiply(ax, -1.0, out=ax)
+    xp.exp(ax, out=ax)
+
+    # erf = sign * (1 - poly * exp(-x^2))
+    xp.multiply(poly, ax, out=poly)
+    xp.subtract(1.0, poly, out=out)
+    xp.multiply(out, sign, out=out)
+
+    return out
+
+def _norm_cdf(z,xp, *, out=None, tmp=None):
+    z = xp.asarray(z, dtype=xp.float64)
+    if out is None:
+        out = xp.empty_like(z)
+    if tmp is None:
+        tmp = xp.empty_like(z)
+
+    # CDF(z) = 0.5 * (1 + erf(z / sqrt(2)))
+    xp.divide(z, _SQRT2, out=tmp)
+    _erf_approx(tmp, xp, out=tmp)
+    xp.add(tmp, 1.0, out=tmp)
+    xp.multiply(tmp, 0.5, out=out)
+    return out
+
+def _norm_pdf(z,xp, *, out=None):
+    z = xp.asarray(z, dtype=xp.float64)
+    if out is None:
+        out = xp.empty_like(z)
+
+    # PDF(z) = (1 / sqrt(2*pi)) * exp(-0.5 * z^2)
+    xp.multiply(z, z, out=out)
+    xp.multiply(out, -0.5, out=out)
+    xp.exp(out, out=out)
+    xp.multiply(out, _INV_SQRT2PI, out=out)
+    return out

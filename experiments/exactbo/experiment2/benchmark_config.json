@@ -1,0 +1,44 @@
+{
+  "random_seed": 0,
+  "verbose": false,
+  "log_each_workflow": false,
+  "results_dir": "results",
+  "logs_dir": "logs",
+  "results_filename": "workflow_benchmark_results.json",
+  "errors_filename": "workflow_benchmark_errors.json",
+  "bounds": [
+    [0.0, 1.0],
+    [0.0, 1.0]
+  ],
+  "X0": [
+    [0.25, 0.25],
+    [0.25, 0.75],
+    [0.75, 0.25],
+    [0.75, 0.75]
+  ],
+  "max_iters": 6,
+  "exactbo": {
+    "epsilon_X": 0.01,
+    "epsilon_ei": 0.1,
+    "max_partitions": 20,
+    "backend": "auto",
+    "validation": false
+  },
+  "sklearn_grid": {
+    "grid_resolution": 50,
+    "validation": true
+  },
+  "botorch_grid": {
+    "grid_resolution": 50,
+    "validation": true,
+    "device": "cpu"
+  },
+  "botorch_optimize": {
+    "num_restarts": 10,
+    "raw_samples": 128,
+    "maxiter": 200,
+    "validation": true,
+    "device": "cpu"
+  }
+}
+
