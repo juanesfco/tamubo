@@ -1,0 +1,3 @@
+# User-installed Python packages inside the PyTorch container.
+# Update with: ./envs/pytorch/dev.sh freeze
+# Reinstall with: ./envs/pytorch/dev.sh install

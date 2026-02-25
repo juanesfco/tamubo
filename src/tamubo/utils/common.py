@@ -5,7 +5,7 @@ from typing import Callable
 
 import numpy as np
 
-from tamubo.utils import BackendInfo, resolve_backend
+from .backend import BackendInfo, resolve_backend
 
 
 @dataclass
@@ -13,8 +13,8 @@ class BOResult:
     """Unified BO result payload for benchmark workflows."""
 
     X: np.ndarray  # (N, d)
-    y: np.ndarray  # (N,)
-    backend: BackendInfo
+    y: np.ndarray | None = None  # (N,)
+    backend: BackendInfo | None = None
     log: dict | None = None
 
 
@@ -70,7 +70,7 @@ def _init_log(logMask: bool) -> dict | None:
     return {} if logMask else None
 
 
-def _as_result(X: np.ndarray, y: np.ndarray, log: dict | None) -> BOResult:
+def _as_result(X: np.ndarray, y: np.ndarray, log: dict | None = None) -> BOResult:
     return BOResult(
         X=np.asarray(X, dtype=np.float64),
         y=np.asarray(y, dtype=np.float64),

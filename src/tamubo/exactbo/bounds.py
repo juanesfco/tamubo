@@ -35,6 +35,7 @@ def rbf_k_bounds(
 ) -> tuple:
     """
     Compute lower/upper bounds of the RBF kernel between xi and each hyperbox.
+    ADD CAPABILITY FOR ANISOTROPIC LENGTH SCALES IN THE FUTURE.
 
     Parameters
     ----------

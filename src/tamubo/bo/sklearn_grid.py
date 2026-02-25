@@ -4,11 +4,11 @@ from typing import Callable
 
 import numpy as np
 from sklearn.gaussian_process import GaussianProcessRegressor
-from sklearn.gaussian_process.kernels import ConstantKernel, RBF
+from sklearn.gaussian_process.kernels import ConstantKernel, RBF, WhiteKernel
 
 from tamubo.acquisition_functions import expected_improvement
 
-from .common import (
+from tamubo.utils import (
     BOResult,
     _as_result,
     _build_cartesian_grid,
@@ -20,10 +20,11 @@ from .common import (
 __all__ = ["run_sklearn_grid_ei"]
 
 
-def _default_sklearn_gp(dim: int) -> GaussianProcessRegressor:
-    kernel = ConstantKernel(1.0, (1e-3, 1e3)) * RBF(
-        length_scale=np.full(dim, 0.2, dtype=np.float64),
-        length_scale_bounds=(1e-3, 1e3),
+def _default_sklearn_gp() -> GaussianProcessRegressor:
+    kernel = (
+        ConstantKernel(1.0, (1e-2, 1e3)) 
+        * RBF(length_scale=0.2,length_scale_bounds=(1e-2, 1e2))
+        + WhiteKernel(noise_level=1e-3, noise_level_bounds=(1e-10, 1e1))
     )
     return GaussianProcessRegressor(kernel=kernel, alpha=1e-10, normalize_y=True)
 
@@ -64,12 +65,12 @@ def run_sklearn_grid_ei(
     logMask : bool, default=False
         Enable logging of intermediate data.
     """
-    X, search_bounds, dim = _normalize_inputs(X0, bounds, validation=validation)
+    X, search_bounds, _ = _normalize_inputs(X0, bounds, validation=validation)
     iterations = int(max_iters)
     if validation and iterations < 0:
         raise ValueError(f"max_iters must be >= 0, got {iterations}")
 
-    gp_model = gp if gp is not None else _default_sklearn_gp(dim)
+    gp_model = gp if gp is not None else _default_sklearn_gp()
     grid = _build_cartesian_grid(search_bounds, grid_resolution, validation=validation)
     log = _init_log(logMask)
 

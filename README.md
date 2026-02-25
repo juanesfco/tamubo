@@ -5,8 +5,16 @@ TAMU Bayesian Optimization tools with multiple framework implementations.
 ## Frameworks
 
 - `tamubo.exactbo`: exact expected-improvement search with partition-based bounds.
+- `tamubo.bo`: Bayesian optimization workflows that depend on `torch`/BoTorch.
 - `tamubo.gpugp`: GPU-oriented GP components.
 - `tamubo.mobbo`: multi-objective BO utilities.
+
+## Environment Selection
+
+Use the environment that matches your workflow:
+
+1. `exactbo` usage: follow the `exactbo` environment instructions below.
+2. `bo` usage (torch-based files): use the Docker setup in `envs/pytorch/`.
 
 ## ExactBO Backends
 
@@ -82,11 +90,24 @@ pip install -r envs/exactbo_nocp.txt
 pip install -e .
 ```
 
+## How To Run Torch-Based BO Files (Docker)
+
+For BO scripts that depend on `torch`, use the NVIDIA PyTorch container setup:
+
+```bash
+./envs/pytorch/dev.sh shell
+```
+
+See [`envs/pytorch/README.md`](envs/pytorch/README.md) for full usage.
+
+This torch container does not include `cupynumeric`.
+
 ## Environment Strategy
 
-Use one environment per framework:
+Use one environment per usage:
 
-- `envs/exactbo.yml` (available)
+- `exactbo`: `envs/exactbo.yml`, `envs/exactbo.txt`, `envs/exactbo_nocp.txt`
+- `bo` (torch-based): `envs/pytorch/`
 - `envs/gpugp.yml` (planned)
 - `envs/mobbo.yml` (planned)
 
@@ -95,11 +116,13 @@ Use one environment per framework:
 ```text
 tamubo/
 ├── development/                  # branch-local exploration (scratch notebooks/scripts)
-├── envs/                         # conda environments per framework
+├── envs/                         # environments by usage/framework
 │   ├── exactbo.yml
 │   ├── exactbo.txt
-│   └── exactbo_nocp.txt
+│   ├── exactbo_nocp.txt
+│   └── pytorch/
 ├── examples/                     # lightweight runnable demos
+│   ├── bo/
 │   ├── exactbo/
 │   ├── gpugp/
 │   └── mobbo/
@@ -111,6 +134,7 @@ tamubo/
 │   └── mobbo/
 ├── src/
 │   └── tamubo/
+│       ├── bo/
 │       ├── exactbo/
 │       ├── gpugp/
 │       └── mobbo/

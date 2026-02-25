@@ -6,24 +6,10 @@ from typing import Callable
 
 import numpy as np
 
-from tamubo.utils import BackendInfo, BackendName, resolve_backend
+from tamubo.utils import BackendName, resolve_backend, BOResult, _evaluate_objective, _init_log
 from tamubo.acquisition_functions import expected_improvement
 from .bounds import rbf_k_bounds, mu_bounds, sigma_bounds, ei_bounds
 from .partition import split_boxes
-
-@dataclass
-class ExactBOResult:
-    """Unified result payload for numpy and cupynumeric backends."""
-    X: np.ndarray # (N,d)
-    y: np.ndarray # (N,)
-    backend: BackendInfo
-    log: dict | None = None
-
-@dataclass
-class ExactBOPartitioningResult:
-    """Unified result payload for the partitioning loop."""
-    Xn: np.ndarray # (d,)
-    logIteration: dict | None = None
 
 def _normalize_epsilon(epsilon: np.ndarray | float, dim: int) -> np.ndarray:
     """Normalize epsilon to a per-dimension array."""
@@ -33,12 +19,6 @@ def _normalize_epsilon(epsilon: np.ndarray | float, dim: int) -> np.ndarray:
     if eps.shape == (dim,):
         return eps
     raise ValueError(f"epsilon must be scalar or shape ({dim},), got {eps.shape}")
-
-def _evaluate_objective(f: Callable[[np.ndarray], np.ndarray], X: np.ndarray) -> np.ndarray:
-    """Evaluate objective and return a flattened array."""
-    X = np.asarray(X, dtype=float)
-    X_eval = X.reshape(1, -1) if X.ndim == 1 else X
-    return np.asarray(f(X_eval), dtype=float).ravel()
 
 def _array_module(backend: BackendName = "auto"):
     """Return the resolved array module (`numpy` or `cupynumeric`)."""
@@ -63,7 +43,7 @@ def exactbo(
     validation: bool = True,
     verbose: bool = False,
     logMask: bool = False,
-) -> ExactBOResult:
+) -> BOResult:
     """
     Run ExactBO with backend selection and CPU fallback.
 
@@ -96,7 +76,7 @@ def exactbo(
 
     Returns
     -------
-    ExactBORunResult
+    BOResult
         Final design points, objective values, backend resolution info and log.
     """
     
@@ -119,8 +99,7 @@ def exactbo(
     epsilon_X = _normalize_epsilon(epsilon_X, dim)
     backend_info = resolve_backend(backend)
 
-    if logMask:
-        log = {}
+    log = _init_log(logMask)
 
     for iteration in range(max_iters):
         if verbose:
@@ -139,19 +118,19 @@ def exactbo(
 
         # Run partitioning to find next point and evaluate it
         partitioning_result = exactbo_partitioning(X, bounds, epsilon_X, epsilon_ei, gp, max_partitions, backend=backend_info.selected, validation=validation, verbose=verbose, logMask=logMask)
-        Xn = np.asarray(partitioning_result.Xn, dtype=np.float64).ravel()  # (d,)
+        Xn = np.asarray(partitioning_result.X, dtype=np.float64).ravel()  # (d,)
         yn = _evaluate_objective(f, Xn)  # (1,)
         if verbose:
             print(f"Evaluated new point: {Xn} -> {yn}")
         if logMask:
-            log[f"i{iteration}"].update(partitioning_result.logIteration)
+            log[f"i{iteration}"].update(partitioning_result.log)
             log[f"i{iteration}"].update({"Xn": Xn.copy(), "yn": yn.copy()})
 
         # Update data
         X = np.vstack((X, Xn))  # (N+1,d)
         y = np.hstack((y, yn))  # (N+1,)
     
-    return ExactBOResult(X, y, backend_info, log if logMask else None)
+    return BOResult(X, y, backend_info, log)
 
 
 def exactbo_partitioning(
@@ -166,7 +145,7 @@ def exactbo_partitioning(
     validation: bool = True,
     verbose: bool = False,
     logMask: bool = False,
-) -> ExactBOPartitioningResult:
+) -> BOResult:
     """
     Run ExactBO Partitioning with backend selection.
 
@@ -192,12 +171,12 @@ def exactbo_partitioning(
         Run additional checks for validation purposes (not optimized).
     verbose : bool, default=False
         Print loop-level progress.
-    log : bool, default=False
+    logMask : bool, default=False
         Enable logging of intermediate results.
 
     Returns
     -------
-    ExactBOPartitioningResult
+    BOResult
         Next design point, backend resolution info and log.
     """
     xp = _array_module(backend)
@@ -234,8 +213,7 @@ def exactbo_partitioning(
     ei_hi_larger_than_ei_max_plus_epsilon = 1
 
     # Initialize log
-    if logMask:
-        log = {}
+    log = _init_log(logMask)
     
     while partition < max_partitions and (xp.any(w_max > epsilon_X) or ei_hi_larger_than_ei_max_plus_epsilon > 0):
         # Total number of boxes
@@ -286,7 +264,7 @@ def exactbo_partitioning(
                     "bounds_U": np.asarray(bounds_U),
                     "active_boxes_mask": np.asarray(active_boxes_mask),
                 }
-            return ExactBOPartitioningResult(Xn=np.asarray(best_x), logIteration=log if logMask else None)
+            return BOResult(X=np.asarray(best_x), log=log)
 
         # Update maximum width of active boxes
         w_max = xp.max(bounds_U[active_boxes_mask] - bounds_L[active_boxes_mask], axis=0)
@@ -326,4 +304,4 @@ def exactbo_partitioning(
     # After partitioning, select the center of the active box 
     best_x = center_active[idx_best]
 
-    return ExactBOPartitioningResult(Xn=np.asarray(best_x), logIteration=log if logMask else None)
+    return BOResult(X=np.asarray(best_x), log=log)

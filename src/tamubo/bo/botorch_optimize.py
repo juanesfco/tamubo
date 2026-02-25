@@ -3,8 +3,18 @@ from __future__ import annotations
 from typing import Callable
 
 import numpy as np
+import torch
+from botorch.acquisition import LogExpectedImprovement
+from botorch.fit import fit_gpytorch_mll
+from botorch.models import SingleTaskGP
+from botorch.models.transforms.outcome import Standardize
+from gpytorch.constraints import Interval
+from gpytorch.kernels import RBFKernel, ScaleKernel
+from gpytorch.likelihoods import GaussianLikelihood
+from gpytorch.mlls import ExactMarginalLogLikelihood
+from botorch.optim import optimize_acqf
 
-from .common import BOResult, _as_result, _evaluate_objective, _init_log, _normalize_inputs
+from tamubo.utils import BOResult, _as_result, _evaluate_objective, _init_log, _normalize_inputs
 
 __all__ = ["run_botorch_optimize_ei"]
 
@@ -21,7 +31,7 @@ def run_botorch_optimize_ei(
     validation: bool = True,
     verbose: bool = False,
     logMask: bool = False,
-    device: str = "cpu",
+    device: str = "cuda",
 ) -> BOResult:
     """
     BO workflow: BoTorch SingleTaskGP(RBF) + EI maximization via optimize_acqf.
@@ -48,27 +58,10 @@ def run_botorch_optimize_ei(
         Print per-iteration progress.
     logMask : bool, default=False
         Enable logging of intermediate data.
-    device : str, default="cpu"
+    device : str, default="cuda"
         Torch device passed to model/acquisition tensors.
     """
-    try:
-        import torch
-        from botorch.acquisition import ExpectedImprovement
-        try:
-            from botorch.fit import fit_gpytorch_mll
-        except ImportError:  # pragma: no cover - compatibility fallback
-            from botorch.fit import fit_gpytorch_model as fit_gpytorch_mll
-        from botorch.models import SingleTaskGP
-        from botorch.models.transforms.outcome import Standardize
-        from botorch.optim import optimize_acqf
-        from gpytorch.kernels import RBFKernel, ScaleKernel
-        from gpytorch.mlls import ExactMarginalLogLikelihood
-    except ImportError as exc:  # pragma: no cover - depends on optional deps
-        raise ImportError(
-            "BoTorch workflow requires 'torch', 'botorch', and 'gpytorch' to be installed."
-        ) from exc
-
-    X, search_bounds, dim = _normalize_inputs(X0, bounds, validation=validation)
+    X, search_bounds, _ = _normalize_inputs(X0, bounds, validation=validation)
     iterations = int(max_iters)
     if validation and iterations < 0:
         raise ValueError(f"max_iters must be >= 0, got {iterations}")
@@ -96,17 +89,30 @@ def run_botorch_optimize_ei(
         X_t = torch.as_tensor(X, dtype=torch.double, device=torch_device)
         y_t = torch.as_tensor(y.reshape(-1, 1), dtype=torch.double, device=torch_device)
 
+        covar_module = ScaleKernel(
+            RBFKernel(
+                lengthscale_constraint=Interval(1e-2, 1e2),
+            ),
+            outputscale_constraint=Interval(1e-2, 1e3),
+        )
+        likelihood = GaussianLikelihood(noise_constraint=Interval(1e-10, 1e1))
+        
         model = SingleTaskGP(
             train_X=X_t,
             train_Y=y_t,
-            covar_module=ScaleKernel(RBFKernel(ard_num_dims=dim)),
+            covar_module=covar_module,
+            likelihood=likelihood,
             outcome_transform=Standardize(m=1),
         )
+        model.covar_module.outputscale = 1.0
+        model.covar_module.base_kernel.lengthscale = 0.2
+        model.likelihood.noise = 1e-3
+
         mll = ExactMarginalLogLikelihood(model.likelihood, model)
         fit_gpytorch_mll(mll)
         model.eval()
 
-        acqf = ExpectedImprovement(model=model, best_f=float(np.min(y)), maximize=False)
+        acqf = LogExpectedImprovement(model=model, best_f=float(np.min(y)), maximize=False)
         candidate, acq_value = optimize_acqf(
             acq_function=acqf,
             bounds=bounds_t,
@@ -118,7 +124,7 @@ def run_botorch_optimize_ei(
 
         Xn = candidate.detach().cpu().numpy().reshape(-1)
         yn = _evaluate_objective(f, Xn)
-        ei_best = float(acq_value.detach().cpu().item())
+        ei_best = np.exp(float(acq_value.detach().cpu().item()))
 
         if verbose:
             print(f"Evaluated new point: {Xn} -> {yn}")

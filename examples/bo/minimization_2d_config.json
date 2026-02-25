@@ -1,0 +1,12 @@
+{
+  "framework": "botorch_optimize_ei",
+  "max_iters": 5,
+  "grid_resolution": 101,
+  "num_restarts": 10,
+  "raw_samples": 128,
+  "maxiter": 200,
+  "device": "cuda",
+  "validation": true,
+  "verbose": true,
+  "log_filename": ""
+}
