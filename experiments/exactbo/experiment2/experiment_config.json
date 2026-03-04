@@ -1,0 +1,38 @@
+{
+  "random_seed": 0,
+  "framework": "gradbo",
+  "problem": "problem2d",
+  "verbose": true,
+  "append_results": true,
+  "results_dir": "results",
+  "results_filename": "experiment_results.csv",
+  "bounds": [
+    [0.0, 1.0],
+    [0.0, 1.0]
+  ],
+  "X0": [
+    [0.25, 0.25],
+    [0.25, 0.75],
+    [0.75, 0.25],
+    [0.75, 0.75]
+  ],
+  "max_iters": 10,
+  "epsilon_X": 0.01,
+  "exactbo": {
+    "epsilon_ei": 0.01,
+    "max_partitions": 20,
+    "backend": "auto",
+    "validation": false
+  },
+  "botorch_grid": {
+    "validation": false,
+    "device": "cuda"
+  },
+  "botorch_optimize": {
+    "num_restarts": 10,
+    "raw_samples": 512,
+    "maxiter": 1000,
+    "validation": false,
+    "device": "cuda"
+  }
+}

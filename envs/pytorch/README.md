@@ -12,14 +12,6 @@ UID/GID so files created in the container are owned by your local user.
 - `dev.sh`: helper script for build/run/freeze/install.
 - `requirements.user.txt`: reproducible snapshot of `pip --user` packages.
 
-## One-time: login to NGC
-
-```bash
-docker login nvcr.io
-```
-
-Use username `$oauthtoken` and your NGC API key as password.
-
 ## Build and open shell
 
 ```bash

@@ -1,11 +1,12 @@
 {
-  "framework": "botorch_optimize_ei",
+  "framework": "botorch_grid_ei",
   "max_iters": 5,
   "grid_resolution": 101,
   "num_restarts": 10,
   "raw_samples": 128,
+  "gp_sk": true,
   "maxiter": 200,
-  "device": "cuda",
+  "device": "cpu",
   "validation": true,
   "verbose": true,
   "log_filename": ""

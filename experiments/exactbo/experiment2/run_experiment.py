@@ -1,0 +1,361 @@
+"""Run one BO framework and write per-iteration rows to CSV."""
+
+from __future__ import annotations
+
+import argparse
+import csv
+import json
+import sys
+import time
+from copy import deepcopy
+from pathlib import Path
+from typing import Any, Callable
+
+import numpy as np
+
+# Allow running this script directly from the repository without installing the package.
+REPO_ROOT = Path(__file__).resolve().parents[3]
+SRC_DIR = REPO_ROOT / "src"
+if SRC_DIR.exists():
+    sys.path.insert(0, str(SRC_DIR))
+
+from sklearn.gaussian_process import GaussianProcessRegressor
+from sklearn.gaussian_process.kernels import ConstantKernel, RBF, WhiteKernel
+
+try:
+    from tamubo.bo import run_botorch_grid_ei, run_botorch_optimize_ei
+except ImportError:
+    run_botorch_grid_ei = None
+    run_botorch_optimize_ei = None
+try:
+    from tamubo.exactbo import exactbo
+except ModuleNotFoundError:
+    exactbo = None
+
+from problems import list_problem_names, load_problem
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+DEFAULT_CONFIG_PATH = SCRIPT_DIR / "experiment_config.json"
+
+CSV_COLUMNS = [
+    "Method",
+    "d",
+    "epsilonX",
+    "epsilonEI",
+    "i",
+    "EI",
+    "y",
+    "y*",
+    "R",
+    "t (s)",
+    "m (MB)",
+]
+
+FRAMEWORK_ALIASES = {
+    "exactbo": "exactbo",
+    "exactBO": "exactbo",
+    "gridbo": "botorch_grid",
+    "gridBO": "botorch_grid",
+    "botorch_grid": "botorch_grid",
+    "gradbo": "botorch_optimize",
+    "gradBO": "botorch_optimize",
+    "botorch_optimize": "botorch_optimize",
+}
+
+METHOD_LABELS = {
+    "exactbo": "exactBO",
+    "botorch_grid": "gridBO",
+    "botorch_optimize": "gradBO",
+}
+
+
+def load_config(path: Path) -> dict:
+    with path.open("r", encoding="utf-8") as f:
+        config = json.load(f)
+    if not isinstance(config, dict):
+        raise ValueError(f"Config in {path} must be a JSON object.")
+    return config
+
+
+def _set_seed(seed: int) -> None:
+    np.random.seed(seed)
+    try:
+        import torch
+
+        torch.manual_seed(seed)
+    except ModuleNotFoundError:
+        pass
+
+
+def _build_default_gp(d) -> GaussianProcessRegressor:
+    kernel = (
+        ConstantKernel(1.0, (1e-2, 1e3))
+        * RBF(length_scale=np.full(d, 0.2), length_scale_bounds=(1e-2, 10.0))
+        + WhiteKernel(noise_level=1e-3, noise_level_bounds=(1e-10, 1e1))
+    )
+    return GaussianProcessRegressor(kernel=kernel, alpha=0, normalize_y=True)
+
+
+def _to_scalar(value: Any) -> float:
+    arr = np.asarray(value, dtype=float).ravel()
+    if arr.size == 0:
+        raise ValueError("Cannot convert empty value to scalar.")
+    return float(arr[0])
+
+
+def _iteration_entries(log: dict[str, Any] | None) -> list[dict[str, Any]]:
+    if log is None:
+        return []
+    indexed_entries: list[tuple[int, dict[str, Any]]] = []
+    for key, value in log.items():
+        if key.startswith("i") and key[1:].isdigit() and isinstance(value, dict):
+            indexed_entries.append((int(key[1:]), value))
+    indexed_entries.sort(key=lambda item: item[0])
+    return [entry for _, entry in indexed_entries]
+
+
+def _normalize_framework(raw_name: str) -> str:
+    framework = FRAMEWORK_ALIASES.get(raw_name, raw_name)
+    if framework not in METHOD_LABELS:
+        choices = ", ".join(sorted(METHOD_LABELS.keys()))
+        raise ValueError(
+            f"Unknown framework '{raw_name}'. Use one of: {choices} "
+            "(or aliases exactBO/gridBO/gradBO)."
+        )
+    return framework
+
+
+def _ensure_problem_dim(bounds: np.ndarray, X0: np.ndarray, problem_dim: int) -> None:
+    if bounds.ndim != 2 or bounds.shape[1] != 2:
+        raise ValueError(f"bounds must have shape (d, 2), got {bounds.shape}")
+    if X0.ndim != 2:
+        raise ValueError(f"X0 must have shape (N0, d), got {X0.shape}")
+    if bounds.shape[0] != problem_dim:
+        raise ValueError(
+            f"bounds dimension ({bounds.shape[0]}) must match problem d ({problem_dim})."
+        )
+    if X0.shape[1] != problem_dim:
+        raise ValueError(
+            f"X0 dimension ({X0.shape[1]}) must match problem d ({problem_dim})."
+        )
+
+
+def _epsilon_x_to_resolution(framework: str, epsilon_X) -> int:
+    if framework == "botorch_grid":
+        return int(1.0 / epsilon_X + 1.0)
+
+    return float("nan")
+
+
+def _epsilon_ei_for_framework(framework: str, config: dict[str, Any]) -> float:
+    if framework == "exactbo":
+        exact_cfg = config.get("exactbo", {})
+        return float(exact_cfg.get("epsilon_ei", float("nan")))
+    return float("nan")
+
+
+def _run_framework(
+    framework: str,
+    *,
+    X0: np.ndarray,
+    bounds: np.ndarray,
+    objective: Callable[[np.ndarray], np.ndarray],
+    max_iters: int,
+    epsilon_X: float,
+    verbose: bool,
+    config: dict[str, Any],
+):
+    exactbo_cfg = deepcopy(config.get("exactbo", {}))
+    botorch_grid_cfg = deepcopy(config.get("botorch_grid", {}))
+    botorch_opt_cfg = deepcopy(config.get("botorch_optimize", {}))
+
+    if framework == "exactbo":
+        return exactbo(
+            X0=X0.copy(),
+            bounds=bounds.copy(),
+            epsilon_X=epsilon_X,
+            epsilon_ei=float(exactbo_cfg["epsilon_ei"]),
+            gp=_build_default_gp(X0.shape[1]),
+            f=objective,
+            max_iters=max_iters,
+            max_partitions=int(exactbo_cfg["max_partitions"]),
+            backend=str(exactbo_cfg.get("backend", "auto")),
+            validation=bool(exactbo_cfg.get("validation", True)),
+            verbose=verbose,
+            logMask=True,
+        )
+
+    if framework == "botorch_grid":
+        return run_botorch_grid_ei(
+            X0=X0.copy(),
+            bounds=bounds.copy(),
+            f=objective,
+            max_iters=max_iters,
+            gp_sk=_build_default_gp(X0.shape[1]),
+            grid_resolution=int(_epsilon_x_to_resolution(framework, epsilon_X)),
+            validation=bool(botorch_grid_cfg.get("validation", True)),
+            verbose=verbose,
+            logMask=True,
+            device=str(botorch_grid_cfg.get("device", "cuda")),
+        )
+
+    if framework == "botorch_optimize":
+        return run_botorch_optimize_ei(
+            X0=X0.copy(),
+            bounds=bounds.copy(),
+            f=objective,
+            max_iters=max_iters,
+            gp_sk=_build_default_gp(X0.shape[1]),
+            num_restarts=int(botorch_opt_cfg.get("num_restarts", 10)),
+            raw_samples=int(botorch_opt_cfg.get("raw_samples", 128)),
+            maxiter=int(botorch_opt_cfg.get("maxiter", 200)),
+            validation=bool(botorch_opt_cfg.get("validation", True)),
+            verbose=verbose,
+            logMask=True,
+            device=str(botorch_opt_cfg.get("device", "cuda")),
+        )
+
+    raise ValueError(f"Unsupported framework '{framework}'.")
+
+
+def _build_rows(
+    framework: str,
+    *,
+    problem_d: int,
+    y_star: float,
+    epsilon_X: float,
+    log: dict[str, Any] | None,
+    config: dict[str, Any],
+) -> list[dict[str, Any]]:
+    entries = _iteration_entries(log)
+    method = METHOD_LABELS[framework]
+    epsilon_ei = _epsilon_ei_for_framework(framework, config)
+
+    rows: list[dict[str, Any]] = []
+    cum_error = 0.0
+    for idx, entry in enumerate(entries, start=1):
+        y_value = _to_scalar(entry["yn"])
+        ei_value = _to_scalar(entry["ei_max"])
+
+        error = abs(y_value - y_star)
+        min_error = error if idx == 1 else min(min_error, error)
+        cum_error += error
+        regret = cum_error - idx*min_error
+
+        rows.append(
+            {
+                "Method": method,
+                "d": int(problem_d),
+                "epsilonX": epsilon_X,
+                "epsilonEI": epsilon_ei,
+                "i": idx,
+                "EI": ei_value,
+                "y": y_value,
+                "y*": float(y_star),
+                "R": regret,
+                "t (s)": float("nan"),
+                "m (MB)": float("nan"),
+            }
+        )
+    return rows
+
+
+def _write_rows_to_csv(rows: list[dict[str, Any]], output_path: Path, append: bool) -> None:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    if append and output_path.exists() and output_path.stat().st_size > 0:
+        mode = "a"
+        write_header = False
+    else:
+        mode = "w"
+        write_header = True
+
+    with output_path.open(mode, newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=CSV_COLUMNS)
+        if write_header:
+            writer.writeheader()
+        writer.writerows(rows)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="Run one framework for experiment 2 and write iteration rows to CSV."
+    )
+    parser.add_argument(
+        "--config",
+        type=Path,
+        default=DEFAULT_CONFIG_PATH,
+        help=f"Path to config JSON (default: {DEFAULT_CONFIG_PATH}).",
+    )
+    args = parser.parse_args()
+
+    config_path = args.config.resolve()
+    config = load_config(config_path)
+
+    seed = int(config.get("random_seed", 0))
+    _set_seed(seed)
+
+    framework_raw = str(config.get("framework", "exactbo"))
+    framework = _normalize_framework(framework_raw)
+
+    problem_name = str(config.get("problem", "problem2d"))
+    problem = load_problem(problem_name)
+
+    bounds = np.asarray(config.get("bounds", problem.bounds), dtype=float)
+    X0 = np.asarray(config.get("X0", problem.X0), dtype=float)
+    _ensure_problem_dim(bounds, X0, problem.d)
+
+    max_iters = int(config.get("max_iters", 0))
+    if max_iters < 0:
+        raise ValueError(f"max_iters must be >= 0, got {max_iters}")
+    
+    if framework == "botorch_optimize":
+        epsilon_X = 1e-5
+    else:
+        epsilon_X = float(config.get("epsilon_X", 0.01))
+
+
+    verbose = bool(config.get("verbose", False))
+    append_results = bool(config.get("append_results", True))
+    results_dir = (SCRIPT_DIR / config.get("results_dir", "results")).resolve()
+    results_filename = str(config.get("results_filename", "experiment_results.csv"))
+    results_path = results_dir / results_filename
+
+    start = time.perf_counter()
+    result = _run_framework(
+        framework,
+        X0=X0,
+        bounds=bounds,
+        objective=problem.objective,
+        max_iters=max_iters,
+        epsilon_X=epsilon_X,
+        verbose=verbose,
+        config=config,
+    )
+    wall_time_sec = time.perf_counter() - start
+
+    rows = _build_rows(
+        framework,
+        problem_d=problem.d,
+        y_star=problem.y_star,
+        epsilon_X=epsilon_X,
+        log=result.log,
+        config=config,
+    )
+    _write_rows_to_csv(rows, results_path, append=append_results)
+
+    print(f"framework={framework}")
+    print(f"problem={problem_name}")
+    print(f"iterations={len(rows)}")
+    print(f"wall_time_sec={wall_time_sec:.6f}")
+    print(f"results_saved={results_path}")
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception as exc:
+        available = ", ".join(list_problem_names())
+        print(f"error={type(exc).__name__}: {exc}")
+        print(f"available_problems={available}")
+        raise

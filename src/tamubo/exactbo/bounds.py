@@ -28,14 +28,13 @@ def rbf_k_bounds(
     n: int, 
     d: int, 
     sigma_f_2: float, 
-    length_scale: float, 
+    length_scale, 
     *,
     backend: BackendName = "auto",
     validation: bool = True,
 ) -> tuple:
     """
     Compute lower/upper bounds of the RBF kernel between xi and each hyperbox.
-    ADD CAPABILITY FOR ANISOTROPIC LENGTH SCALES IN THE FUTURE.
 
     Parameters
     ----------
@@ -50,7 +49,7 @@ def rbf_k_bounds(
         Dimension of the design space.
     sigma_f_2 : float
         Kernel variance from the trained GP.
-    length_scale : float
+    length_scale : float or array-like of shape (d,)
         RBF length scale from the trained GP.
     backend : {"auto", "numpy", "cupynumeric"}, default="auto"
         Backend used for array ops.
@@ -67,6 +66,8 @@ def rbf_k_bounds(
     bounds_L = xp.asarray(bounds_L)
     bounds_U = xp.asarray(bounds_U)
     xi = xp.asarray(xi)
+    if not isinstance(length_scale, (float, int)):
+        length_scale = xp.asarray(length_scale)
 
     # Validate input shapes if requested.
     if validation:
@@ -85,17 +86,22 @@ def rbf_k_bounds(
             bounds_L_i = bounds_L[i] # (d,) 
             bounds_U_i = bounds_U[i] # (d,)
 
+            # Scale with lengthscale
+            bounds_L_i_scaled = bounds_L_i / length_scale
+            bounds_U_i_scaled = bounds_U_i / length_scale
+            xi_scaled = xi / length_scale
+
             # Minimum and maximum distance from xi to the box by dimension
-            d_min = xp.maximum(xp.maximum(bounds_L_i - xi, xi - bounds_U_i), 0) # (d,)
-            d_max = xp.maximum(xp.abs(bounds_L_i - xi), xp.abs(xi - bounds_U_i)) # (d,)
+            d_min = xp.maximum(xp.maximum(bounds_L_i_scaled - xi_scaled, xi_scaled - bounds_U_i_scaled), 0) # (d,)
+            d_max = xp.maximum(xp.abs(bounds_L_i_scaled - xi_scaled), xp.abs(xi_scaled - bounds_U_i_scaled)) # (d,)
 
             # Minumum and maximum distance from xi to the box
             D_min = xp.linalg.norm(d_min)
             D_max = xp.linalg.norm(d_max)
 
             # Compute kernel bounds using the RBF formula
-            K_lo.append(sigma_f_2 * xp.exp(-1 / (2 * length_scale ** 2) * D_max ** 2))
-            K_hi.append(sigma_f_2 * xp.exp(-1 / (2 * length_scale ** 2) * D_min ** 2))
+            K_lo.append(sigma_f_2 * xp.exp(-0.5 * D_max ** 2))
+            K_hi.append(sigma_f_2 * xp.exp(-0.5 * D_min ** 2))
 
         return xp.array(K_lo), xp.array(K_hi)
     
@@ -110,6 +116,10 @@ def rbf_k_bounds(
         # diff_lo = bounds_L - xi, diff_hi = xi - bounds_U
         xp.subtract(bounds_L, xi, out=diff_lo) 
         xp.subtract(xi, bounds_U, out=diff_hi)
+
+        # Scale diff_lo and diff_hi by lengthscale
+        xp.divide(diff_lo, length_scale, out=diff_lo)
+        xp.divide(diff_hi, length_scale, out=diff_hi)
 
         # d_min = max(max(diff_lo, diff_hi), 0)
         xp.maximum(diff_lo, diff_hi, out=d_min)
@@ -129,7 +139,7 @@ def rbf_k_bounds(
         K_hi = xp.sum(d_min, axis=1) # (n,)
 
         # Compute kernel bounds using the RBF formula
-        coef = -0.5 / (length_scale ** 2)
+        coef = -0.5
         xp.multiply(K_lo, coef, out=K_lo)
         xp.multiply(K_hi, coef, out=K_hi)
         xp.exp(K_lo, out=K_lo)
@@ -368,8 +378,8 @@ def _sigma_bounds_numpy(K_lo, K_hi, L, n, N, sigma_f_2, y_train_std):
                 Q_hi += max(v2_lo, v2_hi)
 
         # var = sigma_f_2 - Q, ensuring non-negativity
-        var_lo = max(0, sigma_f_2 - Q_hi)
-        var_hi = max(0, sigma_f_2 - Q_lo)
+        var_lo = max(1e-12, sigma_f_2 - Q_hi)
+        var_hi = max(1e-12, sigma_f_2 - Q_lo)
 
         # sig = sqrt(var)
         sig_lo_i = np.sqrt(var_lo)
@@ -447,8 +457,8 @@ def _sigma_bounds_cupynumeric(K_lo, K_hi, L, n, N, sigma_f_2, y_train_std):
     cp.subtract(sigma_f_2, sig_lo, out=sig_lo)
     cp.subtract(sigma_f_2, sig_hi, out=sig_hi)
     # var > 0
-    cp.maximum(sig_lo, 0.0, out=sig_lo)
-    cp.maximum(sig_hi, 0.0, out=sig_hi)
+    cp.maximum(sig_lo, 1e-12, out=sig_lo)
+    cp.maximum(sig_hi, 1e-12, out=sig_hi)
     # sigma = sqrt(var)
     cp.sqrt(sig_lo, out=sig_lo)
     cp.sqrt(sig_hi, out=sig_hi)
@@ -469,7 +479,7 @@ def ei_bounds(
     *,
     backend: BackendName = "auto", 
     validation: bool = True,
-    pad: float = 1e-5,
+    pad: float = 1e-12,
 ) -> tuple:
     """
     IA bounds for EI across all boxes:
@@ -489,7 +499,7 @@ def ei_bounds(
         Backend used for array ops.
     validation : bool, optional
         If True, validate shapes/sizes.
-    pad : float, optional, default=1e-5
+    pad : float, optional, default=1e-12
         Small positive number to avoid division by zero.
 
     Returns

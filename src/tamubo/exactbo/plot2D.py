@@ -129,7 +129,7 @@ def _draw_partition(
     ax,
     bounds_L: Any,
     bounds_U: Any,
-    active_boxes_mask: Any,
+    target_boxes_mask: Any,
     *,
     sampled: Any | None = None,
     next_point: Any | None = None,
@@ -137,12 +137,12 @@ def _draw_partition(
 ) -> None:
     box_l = _as_points(bounds_L, "bounds_L")
     box_u = _as_points(bounds_U, "bounds_U")
-    active = np.asarray(active_boxes_mask, dtype=bool).ravel()
+    active = np.asarray(target_boxes_mask, dtype=bool).ravel()
 
     if box_l.shape != box_u.shape:
         raise ValueError("bounds_L and bounds_U must have the same shape.")
     if active.size != box_l.shape[0]:
-        raise ValueError("active_boxes_mask length must match number of boxes.")
+        raise ValueError("target_boxes_mask length must match number of boxes.")
 
     shown_active = False
     shown_inactive = False
@@ -295,7 +295,7 @@ def plot_log(
         ax,
         part_data["bounds_L"],
         part_data["bounds_U"],
-        part_data["active_boxes_mask"],
+        part_data["target_boxes_mask"],
         sampled=X,
         next_point=Xn,
         bounds=bounds_arr,

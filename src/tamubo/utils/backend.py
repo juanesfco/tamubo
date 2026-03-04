@@ -4,8 +4,8 @@ from dataclasses import dataclass
 from importlib.util import find_spec
 from typing import Literal
 
-BackendName = Literal["auto", "numpy", "cupynumeric"]
-SelectedBackend = Literal["numpy", "cupynumeric"]
+BackendName = Literal["auto", "numpy", "cupynumeric", "cuda", "cpu"]
+SelectedBackend = Literal["numpy", "cupynumeric", "cuda", "cpu"]
 __all__ = ["BackendName", "SelectedBackend", "BackendInfo", "has_cupynumeric", "resolve_backend"]
 
 @dataclass(frozen=True)
@@ -25,7 +25,7 @@ def resolve_backend(backend: BackendName = "auto") -> BackendInfo:
 
     Parameters
     ----------
-    backend : {"auto", "numpy", "cupynumeric"}
+    backend : {"auto", "numpy", "cupynumeric", "cuda", "cpu"}, default="auto"
         Requested backend.
 
     Returns
@@ -34,9 +34,9 @@ def resolve_backend(backend: BackendName = "auto") -> BackendInfo:
         Final backend selection plus availability information.
     """
     cupynumeric_available = has_cupynumeric()
-    if backend not in ("auto", "numpy", "cupynumeric"):
+    if backend not in ("auto", "numpy", "cupynumeric", "cuda", "cpu"):
         raise ValueError(
-            f"Unsupported backend '{backend}'. Choose from 'auto', 'numpy', 'cupynumeric'."
+            f"Unsupported backend '{backend}'. Choose from 'auto', 'numpy', 'cupynumeric', 'cuda', 'cpu'."
         )
     if backend == "numpy":
         return BackendInfo(
@@ -54,6 +54,18 @@ def resolve_backend(backend: BackendName = "auto") -> BackendInfo:
             requested="cupynumeric",
             selected="cupynumeric",
             cupynumeric_available=True,
+        )
+    if backend == "cuda":
+        return BackendInfo(
+            requested="cuda",
+            selected="cuda",
+            cupynumeric_available=cupynumeric_available,
+        )
+    if backend == "cpu":
+        return BackendInfo(
+            requested="cpu",
+            selected="cpu",
+            cupynumeric_available=cupynumeric_available,
         )
     selected: SelectedBackend = "cupynumeric" if cupynumeric_available else "numpy"
     return BackendInfo(

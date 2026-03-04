@@ -79,10 +79,10 @@ def main():
 
     kernel = (
         ConstantKernel(1.0, (1e-2, 1e3))
-        * RBF(length_scale=0.2, length_scale_bounds=(1e-2, 10.0))
+        * RBF(length_scale=np.full(2, 0.2), length_scale_bounds=(1e-2, 10.0))
         + WhiteKernel(noise_level=1e-3, noise_level_bounds=(1e-10, 1e1))
     )
-    gp = GaussianProcessRegressor(kernel=kernel, alpha=1e-10, normalize_y=True)
+    gp = GaussianProcessRegressor(kernel=kernel, alpha=0, normalize_y=True)
 
     X0 = np.array(
         [

@@ -1,37 +1,39 @@
-# Experiment 2: ExactBO vs BO Workflow Baselines
+# Experiment 2: ExactBO vs BoTorch Baselines
 
-This experiment runs the same minimization problem across:
+This experiment runs one framework per execution (selected in `experiment_config.json`):
 
 - `tamubo.exactbo.exactbo`
-- `tamubo.bo.run_sklearn_grid_ei`
 - `tamubo.bo.run_botorch_grid_ei`
 - `tamubo.bo.run_botorch_optimize_ei`
 
-The goal is to compare responses from each workflow under shared `X0`, `bounds`, objective, and BO iteration budget.
+The output table is written to `results/experiment_results.csv` with one row per BO iteration.
 
 ## Files
 
-- `run_benchmark.py`: benchmark driver
-- `benchmark_config.json`: configuration for bounds, initial design, and workflow-specific params
-- `results/`: generated benchmark summary and error reports
-- `logs/`: optional per-workflow logs (enabled by config)
+- `run_experiment.py`: experiment driver
+- `experiment_config.json`: framework, problem, and optimizer settings
+- `problems.py`: problem registry (`d`, objective, `y*`, defaults for `bounds` and `X0`)
+- `results/`: generated CSV table
 
 ## Run
 
 From repository root:
 
 ```bash
-python3 experiments/exactbo/experiment2/run_benchmark.py
+python3 experiments/exactbo/experiment2/run_experiment.py
 ```
 
 Or with explicit config:
 
 ```bash
-python3 experiments/exactbo/experiment2/run_benchmark.py \
-  --config experiments/exactbo/experiment2/benchmark_config.json
+python3 experiments/exactbo/experiment2/run_experiment.py \
+  --config experiments/exactbo/experiment2/experiment_config.json
 ```
 
 ## Notes
 
 - BoTorch workflows require `torch`, `botorch`, and `gpytorch`.
-- If BoTorch dependencies are unavailable, the driver still runs and records those workflows as `status=error` in the results JSON.
+- Use `framework` in `experiment_config.json` with values:
+  - `exactbo` (table label `exactBO`)
+  - `botorch_grid` (table label `gridBO`)
+  - `botorch_optimize` (table label `gradBO`)

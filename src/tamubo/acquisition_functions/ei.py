@@ -60,7 +60,7 @@ def expected_improvement(
     mu : array-like
         Predictive mean values.
     sigma : array-like
-        Predictive standard deviations.
+        Predictive standard deviations (non-zero).
     y_min : float
         Best observed objective value (broadcastable to mu/sigma).
     backend : {"auto", "numpy", "cupynumeric"}, default="auto"
@@ -71,7 +71,6 @@ def expected_improvement(
     mu = xp.asarray(mu, dtype=xp.float64)
     sigma = xp.asarray(sigma, dtype=xp.float64)
 
-    safe_sigma = xp.where(sigma == 0.0, 1.0, sigma)
-    z = (y_min - mu) / safe_sigma
-    ei = (y_min - mu) * _norm_cdf(z, xp) + safe_sigma * _norm_pdf(z, xp)
-    return xp.where(sigma == 0.0, 0.0, ei)
+    z = (y_min - mu) / sigma
+    ei = (y_min - mu) * _norm_cdf(z, xp) + sigma * _norm_pdf(z, xp)
+    return ei

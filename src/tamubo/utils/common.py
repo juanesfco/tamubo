@@ -70,11 +70,11 @@ def _init_log(logMask: bool) -> dict | None:
     return {} if logMask else None
 
 
-def _as_result(X: np.ndarray, y: np.ndarray, log: dict | None = None) -> BOResult:
+def _as_result(X: np.ndarray, y: np.ndarray, *, backend: str = "numpy", log: dict | None = None) -> BOResult:
     return BOResult(
         X=np.asarray(X, dtype=np.float64),
         y=np.asarray(y, dtype=np.float64),
-        backend=resolve_backend("numpy"),
+        backend=resolve_backend(backend),
         log=log,
     )
 

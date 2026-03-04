@@ -20,13 +20,13 @@ from tamubo.utils import (
 __all__ = ["run_sklearn_grid_ei"]
 
 
-def _default_sklearn_gp() -> GaussianProcessRegressor:
+def _default_sklearn_gp(d) -> GaussianProcessRegressor:
     kernel = (
         ConstantKernel(1.0, (1e-2, 1e3)) 
-        * RBF(length_scale=0.2,length_scale_bounds=(1e-2, 1e2))
+        * RBF(length_scale=np.full(d, 0.2),length_scale_bounds=(1e-2, 1e2))
         + WhiteKernel(noise_level=1e-3, noise_level_bounds=(1e-10, 1e1))
     )
-    return GaussianProcessRegressor(kernel=kernel, alpha=1e-10, normalize_y=True)
+    return GaussianProcessRegressor(kernel=kernel, alpha=0, normalize_y=True)
 
 
 def run_sklearn_grid_ei(
@@ -65,12 +65,12 @@ def run_sklearn_grid_ei(
     logMask : bool, default=False
         Enable logging of intermediate data.
     """
-    X, search_bounds, _ = _normalize_inputs(X0, bounds, validation=validation)
+    X, search_bounds, d = _normalize_inputs(X0, bounds, validation=validation)
     iterations = int(max_iters)
     if validation and iterations < 0:
         raise ValueError(f"max_iters must be >= 0, got {iterations}")
 
-    gp_model = gp if gp is not None else _default_sklearn_gp()
+    gp_model = gp if gp is not None else _default_sklearn_gp(d)
     grid = _build_cartesian_grid(search_bounds, grid_resolution, validation=validation)
     log = _init_log(logMask)
 
@@ -84,8 +84,16 @@ def run_sklearn_grid_ei(
             log[f"i{iteration}"] = {"X": X.copy(), "y": y.copy()}
 
         gp_model.fit(X, y)
+
         mu_grid, sigma_grid = gp_model.predict(grid, return_std=True)
-        ei_grid = expected_improvement(mu_grid, sigma_grid, np.min(y), backend="numpy")
+        
+        # Transform to latent sigma
+        y_train_std = gp_model._y_train_std
+        sigma_n2_raw = gp_model.kernel_.k2.noise_level * y_train_std**2
+        sigma_grid_lat = np.sqrt(np.clip(sigma_grid**2 - sigma_n2_raw, a_min=1e-12, a_max=None))
+
+        # Compute EI on the grid
+        ei_grid = expected_improvement(mu_grid, sigma_grid_lat, np.min(y), backend="numpy")
         idx_best = int(np.argmax(ei_grid))
         Xn = grid[idx_best]
         yn = _evaluate_objective(f, Xn)
@@ -107,5 +115,5 @@ def run_sklearn_grid_ei(
         X = np.vstack((X, Xn))
         y = np.hstack((y, yn))
 
-    return _as_result(X, y, log)
+    return _as_result(X, y, log=log)
 

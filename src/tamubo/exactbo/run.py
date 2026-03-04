@@ -114,7 +114,7 @@ def exactbo(
         # Fit Gaussian Process
         gp.fit(X, y)
         if verbose:
-            print("GP fitted")
+            print(f"GP kernel after fitting: {gp.kernel_}")
 
         # Run partitioning to find next point and evaluate it
         partitioning_result = exactbo_partitioning(X, bounds, epsilon_X, epsilon_ei, gp, max_partitions, backend=backend_info.selected, validation=validation, verbose=verbose, logMask=logMask)
@@ -193,7 +193,8 @@ def exactbo_partitioning(
     # GP hyperparameters
     gp_kernel_params = gp.kernel_.get_params()
     sigma_f_2 = gp_kernel_params["k1__k1__constant_value"]
-    length_scale = gp_kernel_params["k1__k2__length_scale"]
+    sigma_n_2 = gp_kernel_params["k2__noise_level"]
+    length_scale = xp.asarray(gp_kernel_params["k1__k2__length_scale"], dtype=xp.float64)
     alpha = xp.asarray(gp.alpha_, dtype=xp.float64)
     y_train_std = gp._y_train_std
     y_train_mean = gp._y_train_mean
@@ -209,39 +210,49 @@ def exactbo_partitioning(
     partition = 0
     w_max = w.copy()
     ei_max = 0
-    active_boxes_mask = xp.ones((1,), dtype=bool)
-    ei_hi_larger_than_ei_max_plus_epsilon = 1
+    target_boxes_mask = xp.ones((1,), dtype=bool)
+    n_target = 1
 
     # Initialize log
     log = _init_log(logMask)
     
-    while partition < max_partitions and (xp.any(w_max > epsilon_X) or ei_hi_larger_than_ei_max_plus_epsilon > 0):
+    while partition < max_partitions and (xp.any(w_max > epsilon_X) or n_target > 0):
         # Total number of boxes
         n = bounds_L.shape[0]
+        
+        # For the first partition, we analyze all boxes (1). For subsequent partitions, 
+        # we only analyze the new target boxes resulting from the previous partition.
+        if partition > 0:
+            # Starting target box count
+            n_target = n_target*(2*d+1)
+            # Starting target box mask (only analyze the new target boxes from the previous partition)
+            target_boxes_mask = xp.zeros((n,), dtype=bool)
+            target_boxes_mask[:n_target] = True
 
         # Bounds
         ## Kernel
-        K_lo = xp.zeros((n, N), dtype=xp.float64)
-        K_hi = xp.zeros((n, N), dtype=xp.float64)
+        K_lo = xp.zeros((n_target, N), dtype=xp.float64)
+        K_hi = xp.zeros((n_target, N), dtype=xp.float64)
         for i in range(N):
             xi = Xc[i]
-            K_lo[:, i], K_hi[:, i] = rbf_k_bounds(bounds_L,bounds_U,xi,n,d,sigma_f_2,length_scale,backend=backend,validation=validation)  # (n,) both
+            K_lo[:, i], K_hi[:, i] = rbf_k_bounds(bounds_L[target_boxes_mask],bounds_U[target_boxes_mask],xi,n_target,d,sigma_f_2,length_scale,backend=backend,validation=validation)  # (n_target,) both
         ## Mean
-        mu_lo, mu_hi = mu_bounds(alpha, K_lo, K_hi, n, N, y_train_mean=y_train_mean, y_train_std=y_train_std, backend=backend, validation=validation)  # (n,) both
+        mu_lo, mu_hi = mu_bounds(alpha, K_lo, K_hi, n_target, N, y_train_mean=y_train_mean, y_train_std=y_train_std, backend=backend, validation=validation)  # (n_target,) both
         ## Sigma
-        sig_lo, sig_hi = sigma_bounds(K_lo, K_hi, L, n, N, sigma_f_2, y_train_std=y_train_std, backend=backend, validation=validation)  # (n,) both
+        sig_lo, sig_hi = sigma_bounds(K_lo, K_hi, L, n_target, N, sigma_f_2, y_train_std=y_train_std, backend=backend, validation=validation)  # (n_target,) both
         ## EI
-        ei_lo, ei_hi = ei_bounds(mu_lo, mu_hi, sig_lo, sig_hi, n, y_min_unscaled, backend=backend, validation=validation)  # (n,) both
+        _, ei_hi = ei_bounds(mu_lo, mu_hi, sig_lo, sig_hi, n_target, y_min_unscaled, backend=backend, validation=validation)  # (n_target,) both
 
         # Compute actual EI in the center of the hyperbox with highest upper EI bound
         idx_max_ei_hi = xp.argmax(ei_hi)
         max_ei_hi = float(ei_hi[idx_max_ei_hi])
-        ei_hi_larger_than_max_ei_hi_minus_epsilon = ei_hi > (max_ei_hi - epsilon_ei)  # (n,) -> sum() = n'
-        ei_hi_analyze_bounds_L = bounds_L[ei_hi_larger_than_max_ei_hi_minus_epsilon]  # (n',d)
-        ei_hi_analyze_bounds_U = bounds_U[ei_hi_larger_than_max_ei_hi_minus_epsilon]  # (n',d)
-        ei_hi_analyze_centers = (ei_hi_analyze_bounds_L + ei_hi_analyze_bounds_U) / 2.0  # (n',d)
-        mu_analyze, sigma_analyze = gp.predict(np.asarray(ei_hi_analyze_centers), return_std=True)  # (n',) both
-        ei_analyze = expected_improvement(xp.asarray(mu_analyze), xp.asarray(sigma_analyze), y_min_unscaled, backend=backend)  # (n',)
+        ei_hi_larger_than_max_ei_hi_minus_epsilon = ei_hi > (max_ei_hi - epsilon_ei)  # (n_target,) -> sum() = n_analyze
+        ei_hi_analyze_bounds_L = bounds_L[target_boxes_mask][ei_hi_larger_than_max_ei_hi_minus_epsilon]  # (n_analyze,d)
+        ei_hi_analyze_bounds_U = bounds_U[target_boxes_mask][ei_hi_larger_than_max_ei_hi_minus_epsilon]  # (n_analyze,d)
+        ei_hi_analyze_centers = (ei_hi_analyze_bounds_L + ei_hi_analyze_bounds_U) / 2.0  # (n_analyze,d)
+        mu_analyze, sigma_analyze = gp.predict(np.asarray(ei_hi_analyze_centers), return_std=True)  # (n_analyze,) both
+        sigma_analyze_lat = np.sqrt(np.clip(sigma_analyze**2 - sigma_n_2*y_train_std**2, 1e-12, None))  # Avoid zero std for EI calculation
+        ei_analyze = expected_improvement(xp.asarray(mu_analyze), xp.asarray(sigma_analyze_lat), y_min_unscaled, backend=backend)  # (n_analyze,)
         idx_max_ei_analyze = xp.argmax(ei_analyze)
         ei_max_new = float(ei_analyze[idx_max_ei_analyze])
         if ei_max_new > ei_max:
@@ -249,7 +260,7 @@ def exactbo_partitioning(
             best_x = ei_hi_analyze_centers[idx_max_ei_analyze]
 
         # Active boxes are the ones where ei_hi is higher than ei_max plus epsilon_ei
-        active_boxes_mask = ei_hi > (ei_max + epsilon_ei)  # (n,)
+        active_boxes_mask = ei_hi > (ei_max + epsilon_ei)  # (n_target,) -> sum() = n_active
         # If no active boxes, means we have met our purpose so we can return the best point found so far.
         if not bool(xp.any(active_boxes_mask)):
             if verbose:
@@ -258,50 +269,58 @@ def exactbo_partitioning(
                     f"  Boxes: {n}, Analyzed: {ei_hi_analyze_centers.shape[0]}, Active: 0,\n"
                     f"  Max EI_hi: {max_ei_hi:.6f}, Max EI Analyzed: {ei_max:.6f}, No active boxes. Terminating partitioning."
                 )
+            # Uncomment this for 2D animations
             if logMask:
                 log[f"p{partition}"] = {
                     "bounds_L": np.asarray(bounds_L),
                     "bounds_U": np.asarray(bounds_U),
-                    "active_boxes_mask": np.asarray(active_boxes_mask),
+                    "target_boxes_mask": np.zeros((n,), dtype=bool),
                 }
+            if logMask:
+                log['ei_max'] = float(ei_max)
             return BOResult(X=np.asarray(best_x), log=log)
 
-        # Update maximum width of active boxes
-        w_max = xp.max(bounds_U[active_boxes_mask] - bounds_L[active_boxes_mask], axis=0)
-
         # Check EI in the center of the active boxes and return the best point
-        bound_U_active = bounds_U[active_boxes_mask]  # (m,d)
-        bound_L_active = bounds_L[active_boxes_mask]  # (m,d)
-        ei_hi_active = ei_hi[active_boxes_mask]  # (m,)
-        center_active = (bound_L_active + bound_U_active) / 2.0  # (m,d)
-        mu_active, sigma_active = gp.predict(np.array(center_active), return_std=True)  # (m,) both
-        ei_active = expected_improvement(xp.asarray(mu_active), xp.asarray(sigma_active), y_min_unscaled, backend=backend)  # (m,)
+        bound_U_active = bounds_U[target_boxes_mask][active_boxes_mask]  # (n_active,d)
+        bound_L_active = bounds_L[target_boxes_mask][active_boxes_mask]  # (n_active,d)
+        center_active = (bound_L_active + bound_U_active) / 2.0  # (n_active,d)
+        mu_active, sigma_active = gp.predict(np.array(center_active), return_std=True)  # (n_active,) both
+        sigma_active_lat = np.sqrt(np.clip(sigma_active**2 - sigma_n_2*y_train_std**2, 1e-12, None))  # Avoid zero std for EI calculation
+        ei_active = expected_improvement(xp.asarray(mu_active), xp.asarray(sigma_active_lat), y_min_unscaled, backend=backend)  # (n_active,)
         idx_best = xp.argmax(ei_active)
         ei_active_max = float(ei_active[idx_best])
-        ei_hi_larger_than_ei_max_plus_epsilon = xp.sum(ei_hi_active > (ei_active_max + epsilon_ei))
+        target_boxes_mask[:n_target] = ei_hi > (ei_active_max + epsilon_ei)  # (n_target,) -> sum() = n_target'
+        n_target = xp.sum(target_boxes_mask)
+
+        # Update maximum width of active boxes
+        w_max = xp.max(bounds_U[target_boxes_mask] - bounds_L[target_boxes_mask], axis=0)
+
         if verbose:
             print(
                 f"Partition {partition}/{max_partitions-1}, \n"
-                f"  Boxes: {n}, Analyzed: {ei_hi_analyze_centers.shape[0]}, Active: {xp.sum(active_boxes_mask)}, \n"
+                f"  Boxes: {n}, Analyzed: {ei_hi_analyze_centers.shape[0]}, Active: {xp.sum(active_boxes_mask)},\n"
                 f"  Max EI_hi: {max_ei_hi:.6f}, Max EI Analyzed: {ei_max:.6f}, Max EI Active: {ei_active_max:.6f}, \n" 
-                f"  Max Width: {w_max}, EI_hi larger than best EI + epsilon_ei: {ei_hi_larger_than_ei_max_plus_epsilon}"
+                f"  Max Width: {w_max}, Target Boxes: {n_target}"
             )
 
+        # Uncomment this for 2D animations
         if logMask:
             log[f"p{partition}"] = {
                 "bounds_L": np.asarray(bounds_L),
                 "bounds_U": np.asarray(bounds_U),
-                "active_boxes_mask": np.asarray(active_boxes_mask),
+                "target_boxes_mask": np.asarray(target_boxes_mask),
             }
         
         # Update partition count
         partition += 1
 
         # Split active boxes (don't if its the last partition)
-        if partition < max_partitions and (bool(xp.any(w_max > epsilon_X)) or ei_hi_larger_than_ei_max_plus_epsilon > 0):
-            bounds_L, bounds_U = split_boxes(bounds_L, bounds_U, active_boxes_mask, w, n, d, backend=backend, validation=validation)
+        if partition < max_partitions and (bool(xp.any(w_max > epsilon_X)) or n_target > 0):
+            bounds_L, bounds_U = split_boxes(bounds_L, bounds_U, target_boxes_mask, w, n, d, backend=backend, validation=validation)
 
     # After partitioning, select the center of the active box 
     best_x = center_active[idx_best]
+    if logMask:
+        log['ei_max'] = float(ei_active_max)
 
     return BOResult(X=np.asarray(best_x), log=log)
