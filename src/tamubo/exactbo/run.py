@@ -209,65 +209,84 @@ def exactbo_partitioning(
     epsilon_X = xp.asarray(epsilon_X, dtype=xp.float64)
     partition = 0
     w_max = w.copy()
-    ei_max = 0
     target_boxes_mask = xp.ones((1,), dtype=bool)
-    n_target = 1
+    n_target_start = 1
+    idx_best_global = 0
 
     # Initialize log
     log = _init_log(logMask)
     
-    while partition < max_partitions and (xp.any(w_max > epsilon_X) or n_target > 0):
+    while partition < max_partitions:
         # Total number of boxes
         n = bounds_L.shape[0]
         
-        # For the first partition, we analyze all boxes (1). For subsequent partitions, 
-        # we only analyze the new target boxes resulting from the previous partition.
+        # For the first partition, we analyze just the original box. For subsequent partitions, 
+        # we only focus on the new target boxes resulting from the previous partition.
         if partition > 0:
-            # Starting target box count
-            n_target = n_target*(2*d+1)
+            # Starting target box count (new 2d+1 boxes per each of the n_targets boxes from the previous partition)
+            n_target_start = n_target*(2*d+1)
             # Starting target box mask (only analyze the new target boxes from the previous partition)
             target_boxes_mask = xp.zeros((n,), dtype=bool)
-            target_boxes_mask[:n_target] = True
+            target_boxes_mask[:n_target_start] = True
+            # Calculate where is the best global box in the new partition (it should be among the new target boxes)
+            idx_best_global = int(idx_best_global_next*(2*d+1)+2*d)
+        
+        # Get bounds of the target boxes for this partition
+        target_idx = xp.where(target_boxes_mask)[0] # (n_target_start,)
+        bounds_L_target = bounds_L[target_idx]
+        bounds_U_target = bounds_U[target_idx]
 
         # Bounds
         ## Kernel
-        K_lo = xp.zeros((n_target, N), dtype=xp.float64)
-        K_hi = xp.zeros((n_target, N), dtype=xp.float64)
+        K_lo = xp.zeros((n_target_start, N), dtype=xp.float64)
+        K_hi = xp.zeros((n_target_start, N), dtype=xp.float64)
         for i in range(N):
             xi = Xc[i]
-            K_lo[:, i], K_hi[:, i] = rbf_k_bounds(bounds_L[target_boxes_mask],bounds_U[target_boxes_mask],xi,n_target,d,sigma_f_2,length_scale,backend=backend,validation=validation)  # (n_target,) both
+            K_lo[:, i], K_hi[:, i] = rbf_k_bounds(bounds_L_target,bounds_U_target,xi,n_target_start,d,sigma_f_2,length_scale,backend=backend,validation=validation)  # (n_target_start,) both
         ## Mean
-        mu_lo, mu_hi = mu_bounds(alpha, K_lo, K_hi, n_target, N, y_train_mean=y_train_mean, y_train_std=y_train_std, backend=backend, validation=validation)  # (n_target,) both
+        mu_lo, mu_hi = mu_bounds(alpha, K_lo, K_hi, n_target_start, N, y_train_mean=y_train_mean, y_train_std=y_train_std, backend=backend, validation=validation)  # (n_target_start,) both
         ## Sigma
-        sig_lo, sig_hi = sigma_bounds(K_lo, K_hi, L, n_target, N, sigma_f_2, y_train_std=y_train_std, backend=backend, validation=validation)  # (n_target,) both
+        sig_lo, sig_hi = sigma_bounds(K_lo, K_hi, L, n_target_start, N, sigma_f_2, y_train_std=y_train_std, backend=backend, validation=validation)  # (n_target_start,) both
         ## EI
-        _, ei_hi = ei_bounds(mu_lo, mu_hi, sig_lo, sig_hi, n_target, y_min_unscaled, backend=backend, validation=validation)  # (n_target,) both
+        _, ei_hi = ei_bounds(mu_lo, mu_hi, sig_lo, sig_hi, n_target_start, y_min_unscaled, backend=backend, validation=validation)  # (n_target_start,) both
 
-        # Compute actual EI in the center of the hyperbox with highest upper EI bound
-        idx_max_ei_hi = xp.argmax(ei_hi)
+        # Find the box with the highest upper EI bound
+        idx_max_ei_hi = int(xp.argmax(ei_hi))
         max_ei_hi = float(ei_hi[idx_max_ei_hi])
-        ei_hi_larger_than_max_ei_hi_minus_epsilon = ei_hi > (max_ei_hi - epsilon_ei)  # (n_target,) -> sum() = n_analyze
-        ei_hi_analyze_bounds_L = bounds_L[target_boxes_mask][ei_hi_larger_than_max_ei_hi_minus_epsilon]  # (n_analyze,d)
-        ei_hi_analyze_bounds_U = bounds_U[target_boxes_mask][ei_hi_larger_than_max_ei_hi_minus_epsilon]  # (n_analyze,d)
+
+        # Analyze boxes where the upper EI bound is within epsilon_ei of the maximum upper EI bound
+        analyze_box_mask = ei_hi >= (max_ei_hi - epsilon_ei)  # (n_target_start,)
+        # Make sure to analyze at least the box with highest EI from past partition
+        analyze_box_mask[idx_best_global] = True
+        analyze_local_idx = xp.where(analyze_box_mask)[0]  # (n_analyze,)
+        n_analyze = int(analyze_local_idx.shape[0])
+        ei_hi_analyze_bounds_L = bounds_L_target[analyze_local_idx]  # (n_analyze,d)
+        ei_hi_analyze_bounds_U = bounds_U_target[analyze_local_idx]  # (n_analyze,d)
+        # Calculate EI at the center of the boxes (use latent sigma for EI calculation)
         ei_hi_analyze_centers = (ei_hi_analyze_bounds_L + ei_hi_analyze_bounds_U) / 2.0  # (n_analyze,d)
         mu_analyze, sigma_analyze = gp.predict(np.asarray(ei_hi_analyze_centers), return_std=True)  # (n_analyze,) both
         sigma_analyze_lat = np.sqrt(np.clip(sigma_analyze**2 - sigma_n_2*y_train_std**2, 1e-12, None))  # Avoid zero std for EI calculation
         ei_analyze = expected_improvement(xp.asarray(mu_analyze), xp.asarray(sigma_analyze_lat), y_min_unscaled, backend=backend)  # (n_analyze,)
-        idx_max_ei_analyze = xp.argmax(ei_analyze)
-        ei_max_new = float(ei_analyze[idx_max_ei_analyze])
-        if ei_max_new > ei_max:
-            ei_max = ei_max_new
-            best_x = ei_hi_analyze_centers[idx_max_ei_analyze]
+        # Find the box with the highest analyzed EI
+        idx_ei_max_analyze = int(xp.argmax(ei_analyze))
+        ei_max_analyze = float(ei_analyze[idx_ei_max_analyze])
+        idx_ei_max_analyze_local = int(analyze_local_idx[idx_ei_max_analyze])
+        # Find best point among the analyzed boxes and the width of the box with the highest analyzed EI
+        best_x_analyze = ei_hi_analyze_centers[idx_ei_max_analyze]
+        w_max_ei_analyzed = ei_hi_analyze_bounds_U[idx_ei_max_analyze] - ei_hi_analyze_bounds_L[idx_ei_max_analyze]  # (d,)
 
-        # Active boxes are the ones where ei_hi is higher than ei_max plus epsilon_ei
-        active_boxes_mask = ei_hi > (ei_max + epsilon_ei)  # (n_target,) -> sum() = n_active
-        # If no active boxes, means we have met our purpose so we can return the best point found so far.
-        if not bool(xp.any(active_boxes_mask)):
+        # Active boxes are the ones where ei_hi is higher than ei_max_analyze plus epsilon_ei,
+        active_boxes_mask = ei_hi > (ei_max_analyze + epsilon_ei)  # (n_target_start,)
+        n_active = int(xp.sum(active_boxes_mask))
+        
+        # No active boxes and max EI box is smaller than epsilon_X, return the best point found
+        if n_active == 0 and xp.all(w_max_ei_analyzed < epsilon_X):
             if verbose:
                 print(
-                    f"Partition {partition}/{max_partitions-1}, \n"
-                    f"  Boxes: {n}, Analyzed: {ei_hi_analyze_centers.shape[0]}, Active: 0,\n"
-                    f"  Max EI_hi: {max_ei_hi:.6f}, Max EI Analyzed: {ei_max:.6f}, No active boxes. Terminating partitioning."
+                    f"Partition {partition}/{max_partitions-1},\n"
+                    f"  Boxes: {n}, Analyzed: {n_analyze}, Active: 0,\n"
+                    f"  Max EI_hi: {max_ei_hi:.6f}, Max EI Analyzed: {ei_max_analyze:.6f},\n"
+                    f"  Max EI Analyzed Box Width: {w_max_ei_analyzed}, Terminating partitioning."
                 )
             # Uncomment this for 2D animations
             if logMask:
@@ -277,30 +296,71 @@ def exactbo_partitioning(
                     "target_boxes_mask": np.zeros((n,), dtype=bool),
                 }
             if logMask:
-                log['ei_max'] = float(ei_max)
-            return BOResult(X=np.asarray(best_x), log=log)
+                log['ei_max'] = float(ei_max_analyze)
+            return BOResult(X=np.asarray(best_x_analyze), log=log)
+        else:
+            # Ensure the box with the highest analyzed EI is also active.
+            active_boxes_mask[idx_ei_max_analyze_local] = True
+            n_active = int(xp.sum(active_boxes_mask))
 
-        # Check EI in the center of the active boxes and return the best point
-        bound_U_active = bounds_U[target_boxes_mask][active_boxes_mask]  # (n_active,d)
-        bound_L_active = bounds_L[target_boxes_mask][active_boxes_mask]  # (n_active,d)
+        # Check the active boxes.
+        active_local_idx = xp.where(active_boxes_mask)[0] # (n_active,)
+        bound_U_active = bounds_U_target[active_local_idx]  # (n_active,d)
+        bound_L_active = bounds_L_target[active_local_idx]  # (n_active,d)
+        # Calculate EI at the center of the boxes (use latent sigma for EI calculation)
         center_active = (bound_L_active + bound_U_active) / 2.0  # (n_active,d)
         mu_active, sigma_active = gp.predict(np.array(center_active), return_std=True)  # (n_active,) both
         sigma_active_lat = np.sqrt(np.clip(sigma_active**2 - sigma_n_2*y_train_std**2, 1e-12, None))  # Avoid zero std for EI calculation
         ei_active = expected_improvement(xp.asarray(mu_active), xp.asarray(sigma_active_lat), y_min_unscaled, backend=backend)  # (n_active,)
-        idx_best = xp.argmax(ei_active)
-        ei_active_max = float(ei_active[idx_best])
-        target_boxes_mask[:n_target] = ei_hi > (ei_active_max + epsilon_ei)  # (n_target,) -> sum() = n_target'
-        n_target = xp.sum(target_boxes_mask)
+        # Find the box with the highest EI among the active boxes
+        idx_best = int(xp.argmax(ei_active))
+        ei_max_active = float(ei_active[idx_best])
+        idx_best_local = int(active_local_idx[idx_best])
+        # Find best point among the active boxes and the width of the box with the highest active EI
+        best_x_active = center_active[idx_best]
+        w_max_ei_active = bound_U_active[idx_best] - bound_L_active[idx_best]  # (d,)
 
+        # Target boxes are the ones where ei_hi is more than epsilon_ei plus ei_max.
+        target_boxes_mask[target_idx] = ei_hi > (ei_max_active + epsilon_ei)  
+        n_target = int(xp.sum(target_boxes_mask))
+
+        # No target boxes and max EI box is smaller than epsilon_X, return the best point found
+        if n_target == 0 and xp.all(w_max_ei_active < epsilon_X):
+            if verbose:
+                print(
+                    f"Partition {partition}/{max_partitions-1}, \n"
+                    f"  Boxes: {n}, Analyzed: {n_analyze}, Active: {n_active}, Target: 0,\n"
+                    f"  Max EI_hi: {max_ei_hi:.6f}, Max EI Analyzed: {ei_max_analyze:.6f}, Max EI Active: {ei_max_active:.6f},\n"
+                    f"  Max EI Active Box Width: {w_max_ei_active}, Terminating partitioning."
+                )
+            # Uncomment this for 2D animations
+            if logMask:
+                log[f"p{partition}"] = {
+                    "bounds_L": np.asarray(bounds_L),
+                    "bounds_U": np.asarray(bounds_U),
+                    "target_boxes_mask": np.zeros((n,), dtype=bool),
+                }
+            if logMask:
+                log['ei_max'] = float(ei_max_active)
+            return BOResult(X=np.asarray(best_x_active), log=log)
+        else:
+            # Ensure the box with the highest active EI is also a target box.
+            idx_best_global = int(target_idx[idx_best_local])
+            target_boxes_mask[idx_best_global] = True
+            n_target = int(xp.sum(target_boxes_mask))
+
+        # Calculate position of the best point in next partition
+        idx_best_global_next = int(xp.sum(target_boxes_mask[:idx_best_global]))
+        
         # Update maximum width of active boxes
         w_max = xp.max(bounds_U[target_boxes_mask] - bounds_L[target_boxes_mask], axis=0)
 
         if verbose:
             print(
                 f"Partition {partition}/{max_partitions-1}, \n"
-                f"  Boxes: {n}, Analyzed: {ei_hi_analyze_centers.shape[0]}, Active: {xp.sum(active_boxes_mask)},\n"
-                f"  Max EI_hi: {max_ei_hi:.6f}, Max EI Analyzed: {ei_max:.6f}, Max EI Active: {ei_active_max:.6f}, \n" 
-                f"  Max Width: {w_max}, Target Boxes: {n_target}"
+                f"  Boxes: {n}, Analyzed: {n_analyze}, Active: {n_active}, Target: {n_target},\n"
+                f"  Max EI_hi: {max_ei_hi:.6f}, Max EI Analyzed: {ei_max_analyze:.6f}, Max EI Active: {ei_max_active:.6f},\n" 
+                f"  Max Width: {w_max}."
             )
 
         # Uncomment this for 2D animations
@@ -315,12 +375,11 @@ def exactbo_partitioning(
         partition += 1
 
         # Split active boxes (don't if its the last partition)
-        if partition < max_partitions and (bool(xp.any(w_max > epsilon_X)) or n_target > 0):
+        if partition < max_partitions:
             bounds_L, bounds_U = split_boxes(bounds_L, bounds_U, target_boxes_mask, w, n, d, backend=backend, validation=validation)
 
-    # After partitioning, select the center of the active box 
-    best_x = center_active[idx_best]
+    # Store final log info
     if logMask:
-        log['ei_max'] = float(ei_active_max)
+        log['ei_max'] = float(ei_max_active)
 
-    return BOResult(X=np.asarray(best_x), log=log)
+    return BOResult(X=np.asarray(best_x_active), log=log)
