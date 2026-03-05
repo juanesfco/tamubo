@@ -3,5 +3,5 @@
   "epsilon_ei": 0.01,
   "max_iters": 10,
   "max_partitions": 20,
-  "log_filename": ""
+  "log_filename": "minimization_2d.json"
 }
