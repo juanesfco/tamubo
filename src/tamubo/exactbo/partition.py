@@ -24,6 +24,7 @@ def split_boxes(
     n: int, 
     d: int,
     *,
+    keep_inactive: bool = True,
     backend: BackendName = "auto", 
     validation: bool = True,
 ) -> tuple:
@@ -44,6 +45,9 @@ def split_boxes(
         Number of input hyperboxes.
     d : int
         Dimension of the hyperboxes.
+    keep_inactive : bool, default=True
+        If True, inactive boxes are appended unchanged to the output.
+        If False, only split active boxes are returned.
     backend : {"auto", "numpy", "cupynumeric"}, default="auto"
         Backend used for array ops.
     validation : bool, default=True
@@ -72,13 +76,13 @@ def split_boxes(
     # Check if using numpy or cupynumeric
     if xp is np:
         # Serial computation for numpy (more efficient for small n).
-        return _split_boxes_numpy(bounds_L, bounds_U, active_boxes_mask, domain_width, n, d)
+        return _split_boxes_numpy(bounds_L, bounds_U, active_boxes_mask, domain_width, n, d, keep_inactive=keep_inactive)
     else:
         # Vectorized computation for cupynumeric (more efficient for large n).
-        return _split_boxes_cupynumeric(bounds_L, bounds_U, active_boxes_mask, domain_width, n, d)
+        return _split_boxes_cupynumeric(bounds_L, bounds_U, active_boxes_mask, domain_width, n, d, keep_inactive=keep_inactive)
 
 
-def _split_boxes_numpy(bounds_L, bounds_U, active_boxes_mask, domain_width, n, d):
+def _split_boxes_numpy(bounds_L, bounds_U, active_boxes_mask, domain_width, n, d, *, keep_inactive=True):
     bounds_L_out = []
     bounds_U_out = []
     # Iterate over each box and split if active, otherwise keep unchanged.
@@ -142,14 +146,15 @@ def _split_boxes_numpy(bounds_L, bounds_U, active_boxes_mask, domain_width, n, d
         
         # If the box is inactive, keep it unchanged.
         else:
-            bounds_L_out.append(bounds_L[i])
-            bounds_U_out.append(bounds_U[i])
+            if keep_inactive:
+                bounds_L_out.append(bounds_L[i])
+                bounds_U_out.append(bounds_U[i])
 
     # Convert the output lists to arrays and return
     return np.array(bounds_L_out), np.array(bounds_U_out)
 
 
-def _split_boxes_cupynumeric(bounds_L, bounds_U, active_boxes_mask, domain_width, n, d):
+def _split_boxes_cupynumeric(bounds_L, bounds_U, active_boxes_mask, domain_width, n, d, *, keep_inactive=True):
     import cupynumeric as cp
 
     # Get the bounds of the active boxes.
@@ -218,14 +223,19 @@ def _split_boxes_cupynumeric(bounds_L, bounds_U, active_boxes_mask, domain_width
                 bounds_U_out[:, pos + 2 :, :],
             )
 
-    bounds_L_out = bounds_L_out.reshape((nt * stride, d))
-    bounds_U_out = bounds_U_out.reshape((nt * stride, d))
+    active_flat_L = bounds_L_out.reshape((nt * stride, d))
+    active_flat_U = bounds_U_out.reshape((nt * stride, d))
 
-    if n_inactive == 0:
-        return bounds_L_out, bounds_U_out
+    if n_inactive == 0 or not keep_inactive:
+        return active_flat_L, active_flat_U
 
-    inactive_bounds_L = bounds_L[~active_boxes_mask]
-    inactive_bounds_U = bounds_U[~active_boxes_mask]
-    bounds_L_out = cp.concatenate([bounds_L_out, inactive_bounds_L], axis=0)
-    bounds_U_out = cp.concatenate([bounds_U_out, inactive_bounds_U], axis=0)
-    return bounds_L_out, bounds_U_out
+    # Avoid concatenate() to reduce peak memory (concatenate creates a second
+    # full output copy before references are released).
+    total = nt * stride + n_inactive
+    out_L = cp.empty((total, d), dtype=cp.float64)
+    out_U = cp.empty((total, d), dtype=cp.float64)
+    out_L[: nt * stride] = active_flat_L
+    out_U[: nt * stride] = active_flat_U
+    out_L[nt * stride :] = bounds_L[~active_boxes_mask]
+    out_U[nt * stride :] = bounds_U[~active_boxes_mask]
+    return out_L, out_U

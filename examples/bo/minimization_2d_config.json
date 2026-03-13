@@ -1,13 +1,13 @@
 {
-  "framework": "botorch_grid_ei",
+  "framework": "botorch_optimize_ei",
   "max_iters": 5,
-  "grid_resolution": 101,
+  "grid_resolution": 5001,
   "num_restarts": 10,
   "raw_samples": 128,
   "gp_sk": true,
   "maxiter": 200,
-  "device": "cpu",
-  "validation": true,
+  "device": "cuda",
+  "validation": false,
   "verbose": true,
-  "log_filename": ""
+  "log_filename": "minimization_2d_gradBO.json"
 }

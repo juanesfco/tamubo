@@ -393,9 +393,10 @@ def _sigma_bounds_numpy(K_lo, K_hi, L, n, N, sigma_f_2, y_train_std):
 
 def _sigma_bounds_cupynumeric(K_lo, K_hi, L, n, N, sigma_f_2, y_train_std):
     import cupynumeric as cp
-    # Create buffers for intermediate computations
-    v_lo = cp.empty((n, N), dtype=cp.float64)
-    v_hi = cp.empty((n, N), dtype=cp.float64)
+    # Reuse K_lo/K_hi buffers in-place as v_lo/v_hi to avoid an additional
+    # pair of (n, N) allocations on GPU.
+    v_lo = K_lo
+    v_hi = K_hi
 
     sig_lo = cp.zeros(n, dtype=cp.float64) # Q_hi accumulator, initialized to 0
     sig_hi = cp.zeros(n, dtype=cp.float64) # Q_lo accumulator, initialized to 0

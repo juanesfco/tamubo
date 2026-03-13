@@ -2,10 +2,10 @@
 
 # Author: Juan E Florez-Coronel
 
-import kernels
 import torch
-import utils
 from copy import deepcopy
+
+from . import kernels, utils
 
 class gpr:
     """"Gaussian process regression (GPR).

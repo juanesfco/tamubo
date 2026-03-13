@@ -5,6 +5,7 @@ from typing import Callable
 import numpy as np
 from sklearn.gaussian_process import GaussianProcessRegressor
 from sklearn.gaussian_process.kernels import ConstantKernel, RBF, WhiteKernel
+import time
 
 try:
     import torch
@@ -34,6 +35,15 @@ def _default_sklearn_gp(d) -> GaussianProcessRegressor:
         + WhiteKernel(noise_level=1e-3, noise_level_bounds=(1e-10, 1e1))
     )
     return GaussianProcessRegressor(kernel=kernel, alpha=0, normalize_y=True)
+
+def _gpu_warmup(device: torch.device) -> None:
+    if device.type == "cuda":
+        # A small, non-essential matrix multiplication for warm-up
+        dummy_tensor = torch.randn(10, 10).to(device)
+        _ = torch.matmul(dummy_tensor, dummy_tensor)
+        # Synchronize to ensure the operation completes
+        torch.cuda.synchronize()
+    
 
 def run_botorch_optimize_ei(
     X0: np.ndarray,
@@ -84,6 +94,7 @@ def run_botorch_optimize_ei(
     device : str, default="cuda"
         Torch device passed to model/acquisition tensors.
     """
+
     X, search_bounds, d = _normalize_inputs(X0, bounds, validation=validation)
     iterations = int(max_iters)
     if validation and iterations < 0:
@@ -97,6 +108,7 @@ def run_botorch_optimize_ei(
             raise ValueError(f"maxiter must be > 0, got {maxiter}")
 
     torch_device = torch.device(device) if torch.cuda.is_available() else torch.device("cpu")
+    _gpu_warmup(torch_device)
     bounds_t = torch.as_tensor(search_bounds.T, dtype=torch.double, device=torch_device)
     log = _init_log(logMask)
 
@@ -167,6 +179,10 @@ def run_botorch_optimize_ei(
 
         model.eval()
 
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+        t0 = time.perf_counter()
+
         acqf = LogExpectedImprovement(model=model, best_f=float(np.min(y)), maximize=False)
         candidate, acq_value = optimize_acqf(
             acq_function=acqf,
@@ -176,6 +192,10 @@ def run_botorch_optimize_ei(
             raw_samples=int(raw_samples),
             options={"maxiter": int(maxiter)},
         )
+
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+        dt = time.perf_counter() - t0
 
         Xn = candidate.detach().cpu().numpy().reshape(-1)
         yn = _evaluate_objective(f, Xn)
@@ -190,6 +210,7 @@ def run_botorch_optimize_ei(
                     "Xn": Xn.copy(),
                     "yn": yn.copy(),
                     "ei_max": ei_best,
+                    "time": dt,
                 }
             )
 

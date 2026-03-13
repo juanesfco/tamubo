@@ -1,7 +1,7 @@
 {
   "epsilon_X": 0.01,
   "epsilon_ei": 0.01,
-  "max_iters": 10,
+  "max_iters": 3,
   "max_partitions": 20,
-  "log_filename": "minimization_2d.json"
+  "log_filename": "minimization_2d_withtime.json"
 }

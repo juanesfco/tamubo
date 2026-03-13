@@ -5,6 +5,7 @@ from typing import Callable
 import numpy as np
 from sklearn.gaussian_process import GaussianProcessRegressor
 from sklearn.gaussian_process.kernels import ConstantKernel, RBF, WhiteKernel
+import time
 
 try:
     import torch
@@ -25,7 +26,6 @@ except ModuleNotFoundError:
 from tamubo.utils import (
     BOResult,
     _as_result,
-    _build_cartesian_grid,
     _evaluate_objective,
     _init_log,
     _normalize_inputs,
@@ -40,6 +40,34 @@ def _default_sklearn_gp(d) -> GaussianProcessRegressor:
         + WhiteKernel(noise_level=1e-3, noise_level_bounds=(1e-10, 1e1))
     )
     return GaussianProcessRegressor(kernel=kernel, alpha=0, normalize_y=True)
+
+
+def _build_cartesian_grid_torch(
+    bounds: np.ndarray,
+    grid_resolution: int,
+    *,
+    device: torch.device,
+    validation: bool = True,
+) -> torch.Tensor:
+    resolution = int(grid_resolution)
+    if validation and resolution < 2:
+        raise ValueError(f"grid_resolution must be >= 2, got {resolution}")
+
+    axes = [
+        torch.linspace(float(lower), float(upper), resolution, dtype=torch.double, device=device)
+        for lower, upper in np.asarray(bounds, dtype=np.float64)
+    ]
+    mesh = torch.meshgrid(*axes, indexing="ij")
+    return torch.stack([axis.reshape(-1) for axis in mesh], dim=1)
+
+def _gpu_warmup(device: torch.device) -> None:
+    if device.type == "cuda":
+        # A small, non-essential matrix multiplication for warm-up
+        dummy_tensor = torch.randn(10, 10).to(device)
+        _ = torch.matmul(dummy_tensor, dummy_tensor)
+        # Synchronize to ensure the operation completes
+        torch.cuda.synchronize()
+
 
 def run_botorch_grid_ei(
     X0: np.ndarray,
@@ -89,9 +117,11 @@ def run_botorch_grid_ei(
     if validation and iterations < 0:
         raise ValueError(f"max_iters must be >= 0, got {iterations}")
 
-    grid = _build_cartesian_grid(search_bounds, grid_resolution, validation=validation)
     torch_device = torch.device(device) if torch.cuda.is_available() else torch.device("cpu")
-    grid_t = torch.as_tensor(grid, dtype=torch.double, device=torch_device)
+    _gpu_warmup(torch_device)
+    grid_t = _build_cartesian_grid_torch(
+        search_bounds, grid_resolution, device=torch_device, validation=validation
+    )
     log = _init_log(logMask)
 
     y = _evaluate_objective(f, X)
@@ -161,13 +191,24 @@ def run_botorch_grid_ei(
  
         model.eval()
 
+        if torch_device.type == "cuda":
+            torch.cuda.synchronize()
+
+        t0 = time.perf_counter()
+
         acqf = LogExpectedImprovement(model=model, best_f=float(np.min(y)), maximize=False)
         with torch.no_grad():
             ei_grid = acqf(grid_t.unsqueeze(-2))
             idx_best = int(torch.argmax(ei_grid).item())
             ei_best = np.exp(float(ei_grid[idx_best].item()))
 
-        Xn = grid[idx_best]
+        Xn = grid_t[idx_best].detach().cpu().numpy()
+
+        if torch_device.type == "cuda":
+            torch.cuda.synchronize()
+
+        dt = time.perf_counter() - t0
+
         yn = _evaluate_objective(f, Xn)
 
         if verbose:
@@ -179,6 +220,7 @@ def run_botorch_grid_ei(
                     "Xn": Xn.copy(),
                     "yn": yn.copy(),
                     "ei_max": ei_best,
+                    "time": dt,
                 }
             )
 

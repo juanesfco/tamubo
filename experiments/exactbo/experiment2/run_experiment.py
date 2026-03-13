@@ -39,6 +39,7 @@ DEFAULT_CONFIG_PATH = SCRIPT_DIR / "experiment_config.json"
 
 CSV_COLUMNS = [
     "Method",
+    "random_seed",
     "d",
     "epsilonX",
     "epsilonEI",
@@ -140,6 +141,35 @@ def _ensure_problem_dim(bounds: np.ndarray, X0: np.ndarray, problem_dim: int) ->
         )
 
 
+def _latin_hypercube_unit(n_points: int, dim: int) -> np.ndarray:
+    """Generate Latin Hypercube points in [0, 1]^dim."""
+    if n_points <= 0:
+        raise ValueError(f"X0 must be > 0 when given as an integer, got {n_points}.")
+
+    lhs = np.empty((n_points, dim), dtype=float)
+    for j in range(dim):
+        perm = np.random.permutation(n_points)
+        lhs[:, j] = (perm + np.random.rand(n_points)) / float(n_points)
+    return lhs
+
+
+def _resolve_initial_design(X0_raw: Any, *, default_X0: np.ndarray, dim: int) -> np.ndarray:
+    """Return initial design from config: explicit array or integer LHS size."""
+    if X0_raw is None:
+        return np.asarray(default_X0, dtype=float)
+
+    if isinstance(X0_raw, (int, np.integer)) and not isinstance(X0_raw, bool):
+        return _latin_hypercube_unit(int(X0_raw), dim)
+
+    X0 = np.asarray(X0_raw, dtype=float)
+    if X0.ndim == 0:
+        scalar = float(X0.item())
+        if float(scalar).is_integer():
+            return _latin_hypercube_unit(int(scalar), dim)
+        raise ValueError("X0 scalar must be an integer count or an array of points.")
+    return X0
+
+
 def _epsilon_x_to_resolution(framework: str, epsilon_X) -> int:
     if framework == "botorch_grid":
         return int(1.0 / epsilon_X + 1.0)
@@ -180,6 +210,9 @@ def _run_framework(
             max_iters=max_iters,
             max_partitions=int(exactbo_cfg["max_partitions"]),
             backend=str(exactbo_cfg.get("backend", "auto")),
+            predict_batch_size=exactbo_cfg.get("predict_batch_size"),
+            bounds_batch_size=exactbo_cfg.get("bounds_batch_size"),
+            max_target_boxes=exactbo_cfg.get("max_target_boxes"),
             validation=bool(exactbo_cfg.get("validation", True)),
             verbose=verbose,
             logMask=True,
@@ -226,6 +259,7 @@ def _build_rows(
     epsilon_X: float,
     log: dict[str, Any] | None,
     config: dict[str, Any],
+    random_seed: int,
 ) -> list[dict[str, Any]]:
     entries = _iteration_entries(log)
     method = METHOD_LABELS[framework]
@@ -236,6 +270,7 @@ def _build_rows(
     for idx, entry in enumerate(entries, start=1):
         y_value = _to_scalar(entry["yn"])
         ei_value = _to_scalar(entry["ei_max"])
+        time = _to_scalar(entry["time"])
 
         error = abs(y_value - y_star)
         min_error = error if idx == 1 else min(min_error, error)
@@ -245,6 +280,7 @@ def _build_rows(
         rows.append(
             {
                 "Method": method,
+                "random_seed": random_seed,
                 "d": int(problem_d),
                 "epsilonX": epsilon_X,
                 "epsilonEI": epsilon_ei,
@@ -253,7 +289,7 @@ def _build_rows(
                 "y": y_value,
                 "y*": float(y_star),
                 "R": regret,
-                "t (s)": float("nan"),
+                "t (s)": time,
                 "m (MB)": float("nan"),
             }
         )
@@ -302,7 +338,11 @@ def main() -> None:
     problem = load_problem(problem_name)
 
     bounds = np.asarray(config.get("bounds", problem.bounds), dtype=float)
-    X0 = np.asarray(config.get("X0", problem.X0), dtype=float)
+    X0 = _resolve_initial_design(
+        config.get("X0", None),
+        default_X0=problem.X0,
+        dim=problem.d,
+    )
     _ensure_problem_dim(bounds, X0, problem.d)
 
     max_iters = int(config.get("max_iters", 0))
@@ -341,6 +381,7 @@ def main() -> None:
         epsilon_X=epsilon_X,
         log=result.log,
         config=config,
+        random_seed=seed,
     )
     _write_rows_to_csv(rows, results_path, append=append_results)
 
