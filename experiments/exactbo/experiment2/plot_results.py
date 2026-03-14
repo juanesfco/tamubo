@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Sequence
 
 import matplotlib as mpl
+mpl.use("Agg")
 import matplotlib.pyplot as plt
 import pandas as pd
 from matplotlib.ticker import MaxNLocator
@@ -67,20 +68,17 @@ def parse_args() -> argparse.Namespace:
 def configure_matplotlib() -> None:
     mpl.rcParams.update(
         {
-            "font.family": "sans-serif",
-            "font.sans-serif": [
-                "TeX Gyre Heros",
-                "Helvetica",
-                "Arial",
-                "Nimbus Sans",
-                "DejaVu Sans",
-            ],
-            "font.size": 9,
-            "axes.labelsize": 9,
+            # Match the asmeconf class more closely by letting LaTeX typeset figure text.
+            "text.usetex": True,
+            "text.latex.preamble": r"\usepackage[helvratio=.91]{newtxtext}\usepackage{newtxmath}",
+            "font.family": "serif",
+            "font.size": 8,
+            "axes.titlesize": 8,
+            "axes.labelsize": 8,
             "axes.labelweight": "regular",
-            "xtick.labelsize": 8,
-            "ytick.labelsize": 8,
-            "legend.fontsize": 9,
+            "xtick.labelsize": 7,
+            "ytick.labelsize": 7,
+            "legend.fontsize": 8,
             "axes.linewidth": 0.8,
             "lines.linewidth": 1.2,
             "lines.markersize": 4.0,
@@ -88,7 +86,6 @@ def configure_matplotlib() -> None:
             "ytick.major.width": 0.8,
             "xtick.major.size": 3.0,
             "ytick.major.size": 3.0,
-            "mathtext.fontset": "dejavusans",
             "pdf.fonttype": 42,
             "ps.fonttype": 42,
         }
