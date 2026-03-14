@@ -24,7 +24,15 @@ except ModuleNotFoundError:
         "Please install BoTorch and try again."
     )
 
-from tamubo.utils import BOResult, _as_result, _evaluate_objective, _init_log, _normalize_inputs
+from tamubo.utils import (
+    BOResult,
+    _as_result,
+    _evaluate_objective,
+    _from_unit_cube,
+    _init_log,
+    _normalize_inputs,
+    _normalize_problem_to_unit_cube,
+)
 
 __all__ = ["run_botorch_optimize_ei"]
 
@@ -59,6 +67,7 @@ def run_botorch_optimize_ei(
     verbose: bool = False,
     logMask: bool = False,
     device: str = "cuda",
+    normalize_to_unit_cube: bool = False,
 ) -> BOResult:
     """
     BO workflow: BoTorch SingleTaskGP(RBF) + EI maximization via optimize_acqf.
@@ -93,9 +102,21 @@ def run_botorch_optimize_ei(
         Enable logging of intermediate data.
     device : str, default="cuda"
         Torch device passed to model/acquisition tensors.
+    normalize_to_unit_cube : bool, default=False
+        If True, optimize internally on [0, 1]^d and evaluate the objective after
+        mapping candidates back to the original finite bounds.
     """
 
     X, search_bounds, d = _normalize_inputs(X0, bounds, validation=validation)
+    objective = f
+    physical_bounds = None
+    if normalize_to_unit_cube:
+        X, search_bounds, objective, physical_bounds = _normalize_problem_to_unit_cube(
+            X,
+            search_bounds,
+            f,
+            validation=validation,
+        )
     iterations = int(max_iters)
     if validation and iterations < 0:
         raise ValueError(f"max_iters must be >= 0, got {iterations}")
@@ -112,14 +133,19 @@ def run_botorch_optimize_ei(
     bounds_t = torch.as_tensor(search_bounds.T, dtype=torch.double, device=torch_device)
     log = _init_log(logMask)
 
-    y = _evaluate_objective(f, X)
+    y = _evaluate_objective(objective, X)
     for iteration in range(iterations):
+        X_display = (
+            _from_unit_cube(X, physical_bounds, validation=False)
+            if physical_bounds is not None
+            else X
+        )
         if verbose:
             print(f"Iteration {iteration + 1}/{iterations}")
-            print(f"Current training data: \nX: {X}, \ny: {y}")
+            print(f"Current training data: \nX: {X_display}, \ny: {y}")
 
         if logMask:
-            log[f"i{iteration}"] = {"X": X.copy(), "y": y.copy()}
+            log[f"i{iteration}"] = {"X": X_display.copy(), "y": y.copy()}
 
         if gp_sk is True:
             # Create default sklearn GP and fit to current data to extract kernel parameters
@@ -143,12 +169,12 @@ def run_botorch_optimize_ei(
         X_t = torch.as_tensor(X, dtype=torch.double, device=torch_device)
         y_t = torch.as_tensor(y.reshape(-1, 1), dtype=torch.double, device=torch_device)
         n = X.shape[0]
-        ddof_correction = (n-1)/n
+        ddof_correction = (n - 1) / n if n > 1 else 1.0
 
         covar_module = ScaleKernel(
             RBFKernel(
                 ard_num_dims=d,
-                lengthscale_constraint=Interval(1e-2, 1e2),
+                lengthscale_constraint=Interval(1e-3, 1e3),
             ),
             outputscale_constraint=Interval(1e-2*ddof_correction, 1e3*ddof_correction),
         )
@@ -198,16 +224,21 @@ def run_botorch_optimize_ei(
         dt = time.perf_counter() - t0
 
         Xn = candidate.detach().cpu().numpy().reshape(-1)
-        yn = _evaluate_objective(f, Xn)
+        yn = _evaluate_objective(objective, Xn)
+        Xn_display = (
+            _from_unit_cube(Xn, physical_bounds, validation=False)
+            if physical_bounds is not None
+            else Xn
+        )
         ei_best = np.exp(float(acq_value.detach().cpu().item()))
 
         if verbose:
-            print(f"Evaluated new point: {Xn} -> {yn}")
+            print(f"Evaluated new point: {Xn_display} -> {yn}")
 
         if logMask:
             log[f"i{iteration}"].update(
                 {
-                    "Xn": Xn.copy(),
+                    "Xn": Xn_display.copy(),
                     "yn": yn.copy(),
                     "ei_max": ei_best,
                     "time": dt,
@@ -217,5 +248,9 @@ def run_botorch_optimize_ei(
         X = np.vstack((X, Xn))
         y = np.hstack((y, yn))
 
-    return _as_result(X, y, backend=torch_device.type, log=log)
-
+    X_result = (
+        _from_unit_cube(X, physical_bounds, validation=False)
+        if physical_bounds is not None
+        else X
+    )
+    return _as_result(X_result, y, backend=torch_device.type, log=log)

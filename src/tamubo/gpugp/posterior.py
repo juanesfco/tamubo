@@ -54,6 +54,7 @@ def gp_posterior(
     sigma_n_squared: float = 0.0,
     y_train_mean=0.0,
     y_train_std=1.0,
+    scaled_output: bool = False,
     return_std: bool = False,
     return_cov: bool = False,
     include_noise: bool = True,
@@ -86,6 +87,9 @@ def gp_posterior(
         Target normalization mean from training.
     y_train_std : float or array-like, default=1.0
         Target normalization std from training.
+    scaled_output : bool, default=False
+        If True, return posterior moments in the GP's standardized target
+        space. If False, return them in the original target scale.
     return_std : bool, default=False
         Return posterior standard deviation.
     return_cov : bool, default=False
@@ -152,7 +156,8 @@ def gp_posterior(
     K_trans = _rbf_kernel(X, X_train, length_scale, sigma_f_squared, xp)
 
     y_mean = K_trans @ alpha
-    y_mean = y_mean * y_train_std + y_train_mean
+    if not scaled_output:
+        y_mean = y_mean * y_train_std + y_train_mean
 
     if single_target:
         y_mean = y_mean.ravel()
@@ -182,12 +187,13 @@ def gp_posterior(
             diag_idx = xp.arange(y_cov.shape[0])
             y_cov[diag_idx, diag_idx] = xp.maximum(diag, 0.0)
 
-        y_scale_sq = y_train_std * y_train_std
-        if getattr(y_scale_sq, "ndim", 0) == 0:
-            y_cov = y_cov * y_scale_sq
-            return y_mean, y_cov
+        if not scaled_output:
+            y_scale_sq = y_train_std * y_train_std
+            if getattr(y_scale_sq, "ndim", 0) == 0:
+                y_cov = y_cov * y_scale_sq
+                return y_mean, y_cov
 
-        y_cov = y_cov[:, :, None] * y_scale_sq
+            y_cov = y_cov[:, :, None] * y_scale_sq
         return y_mean, y_cov
 
     base_var = sigma_f_squared + (sigma_n_squared if include_noise else 0.0)
@@ -200,6 +206,10 @@ def gp_posterior(
             RuntimeWarning,
         )
         y_var = xp.maximum(y_var, 0.0)
+
+    if scaled_output:
+        y_std = xp.sqrt(y_var)
+        return y_mean, y_std
 
     y_scale_sq = y_train_std * y_train_std
     if getattr(y_scale_sq, "ndim", 0) == 0:

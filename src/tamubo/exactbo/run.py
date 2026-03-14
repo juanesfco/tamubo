@@ -3,11 +3,20 @@ from __future__ import annotations
 from importlib import import_module
 from dataclasses import dataclass
 from typing import Callable
+import math
 import time as pytime
 
 import numpy as np
 
-from tamubo.utils import BackendName, resolve_backend, BOResult, _evaluate_objective, _init_log
+from tamubo.utils import (
+    BOResult,
+    BackendName,
+    _evaluate_objective,
+    _from_unit_cube,
+    _init_log,
+    _normalize_problem_to_unit_cube,
+    resolve_backend,
+)
 from tamubo.acquisition_functions import expected_improvement
 from tamubo.gpugp.posterior import gp_posterior
 from .bounds import rbf_k_bounds, mu_bounds, sigma_bounds, ei_bounds
@@ -56,6 +65,31 @@ def _force_materialization(backend: BackendName) -> None:
     runtime.issue_execution_fence(block=True)
 
 
+def _centered_latin_hypercube_unit(n_points: int, dim: int) -> np.ndarray:
+    """
+    Return a deterministic centered Latin hypercube in ``[0, 1]^dim``.
+
+    The construction is deterministic so ExactBO remains reproducible while
+    still spreading the ``2**d`` intra-box probes across each box interior.
+    """
+    if n_points <= 0:
+        raise ValueError(f"n_points must be positive, got {n_points}")
+    if dim <= 0:
+        raise ValueError(f"dim must be positive, got {dim}")
+
+    centers = (np.arange(n_points, dtype=np.float64) + 0.5) / float(n_points)
+    perm_ids = np.arange(n_points, dtype=np.int64)
+    lhs = np.empty((n_points, dim), dtype=np.float64)
+
+    for j in range(dim):
+        step = 2 * j + 1
+        while math.gcd(step, n_points) != 1:
+            step += 2
+        lhs[:, j] = centers[(perm_ids * step + j) % n_points]
+
+    return lhs
+
+
 def exactbo(
     X0: np.ndarray,
     bounds: np.ndarray,
@@ -73,6 +107,7 @@ def exactbo(
     validation: bool = True,
     verbose: bool = False,
     logMask: bool = False,
+    normalize_to_unit_cube: bool = False,
 ) -> BOResult:
     """
     Run ExactBO with backend selection and CPU fallback.
@@ -86,7 +121,8 @@ def exactbo(
     epsilon_X : float or ndarray, shape (d,)
         Partition termination threshold(s) for the input space.
     epsilon_ei : float
-        Threshold for the expected improvement values.
+        Threshold for the expected improvement values in the GP's
+        standardized target space.
     gp : sklearn-like regressor
         Surrogate model with .fit/.predict plus sklearn GP attributes.
     f : callable
@@ -112,6 +148,9 @@ def exactbo(
         Print loop-level progress.
     logMask : bool, default=False
         Enable logging of intermediate results.
+    normalize_to_unit_cube : bool, default=False
+        If True, optimize internally on [0, 1]^d and evaluate the objective after
+        mapping candidates back to the original finite bounds.
 
     Returns
     -------
@@ -135,20 +174,35 @@ def exactbo(
                 f"X0 second dimension ({X.shape[1]}) must match bounds dimension ({dim})"
             )
 
+    objective = f
+    physical_bounds = None
+    if normalize_to_unit_cube:
+        X, bounds, objective, physical_bounds = _normalize_problem_to_unit_cube(
+            X,
+            bounds,
+            f,
+            validation=validation,
+        )
+
     epsilon_X = _normalize_epsilon(epsilon_X, dim)
     backend_info = resolve_backend(backend)
 
     log = _init_log(logMask)
 
     for iteration in range(max_iters):
+        X_display = (
+            _from_unit_cube(X, physical_bounds, validation=False)
+            if physical_bounds is not None
+            else X
+        )
         if verbose:
             print(f"Iteration {iteration + 1}/{max_iters}")
         # Evaluate function at current data points
-        y = _evaluate_objective(f, X)  # (N,)
+        y = _evaluate_objective(objective, X)  # (N,)
         if verbose:
-            print(f"Current training data: \nX: {X}, \ny: {y}")
+            print(f"Current training data: \nX: {X_display}, \ny: {y}")
         if logMask:
-            log[f"i{iteration}"] = {"X": X.copy(), "y": y.copy()}
+            log[f"i{iteration}"] = {"X": X_display.copy(), "y": y.copy()}
 
         # Fit Gaussian Process
         gp.fit(X, y)
@@ -172,12 +226,17 @@ def exactbo(
             logMask=logMask,
         )
         Xn = np.asarray(partitioning_result.X, dtype=np.float64).ravel()  # (d,)
-        yn = _evaluate_objective(f, Xn)  # (1,)
+        yn = _evaluate_objective(objective, Xn)  # (1,)
+        Xn_display = (
+            _from_unit_cube(Xn, physical_bounds, validation=False)
+            if physical_bounds is not None
+            else Xn
+        )
         if verbose:
-            print(f"Evaluated new point: {Xn} -> {yn}")
+            print(f"Evaluated new point: {Xn_display} -> {yn}")
         if logMask:
             log[f"i{iteration}"].update(partitioning_result.log)
-            log[f"i{iteration}"].update({"Xn": Xn.copy(), "yn": yn.copy()})
+            log[f"i{iteration}"].update({"Xn": Xn_display.copy(), "yn": yn.copy()})
 
         # Update data
         X = np.vstack((X, Xn))  # (N+1,d)
@@ -185,7 +244,12 @@ def exactbo(
         _force_materialization(backend)
         
     
-    return BOResult(X, y, backend_info, log)
+    X_result = (
+        _from_unit_cube(X, physical_bounds, validation=False)
+        if physical_bounds is not None
+        else X
+    )
+    return BOResult(X_result, y, backend_info, log)
 
 
 def exactbo_partitioning(
@@ -216,7 +280,8 @@ def exactbo_partitioning(
     epsilon_X : float or ndarray, shape (d,)
         Partition termination threshold(s) for the input space.
     epsilon_ei : float
-        Threshold for the expected improvement values.
+        Threshold for the expected improvement values in the GP's
+        standardized target space.
     gp : sklearn-like regressor
         Surrogate model with .fit/.predict plus sklearn GP attributes.
     iteration : int
@@ -266,8 +331,7 @@ def exactbo_partitioning(
     y_train_std = float(np.asarray(gp._y_train_std, dtype=np.float64).ravel()[0])
     y_train_mean = float(np.asarray(gp._y_train_mean, dtype=np.float64).ravel()[0])
     L = xp.asarray(gp.L_, dtype=xp.float64)  # (N,N)
-    y_min = xp.min(gp.y_train_)
-    y_min_unscaled = y_min * y_train_std + y_train_mean
+    y_min_scaled = xp.min(gp.y_train_)
 
     # Partition parameters
     N = Xc.shape[0]  # Number of data points
@@ -288,6 +352,12 @@ def exactbo_partitioning(
         max_target_boxes = int(max_target_boxes)
         if max_target_boxes <= 0:
             raise ValueError("max_target_boxes must be a positive integer.")
+    stride = 2 * d + 1
+    lhs_points_per_box = int(2**d)
+    lhs_unit_design = xp.asarray(
+        _centered_latin_hypercube_unit(lhs_points_per_box, d),
+        dtype=xp.float64,
+    )
     w = bounds_U[0] - bounds_L[0]  # Bounds with per dimension (d,)
     epsilon_X = xp.asarray(epsilon_X, dtype=xp.float64)
     partition = 0
@@ -306,6 +376,8 @@ def exactbo_partitioning(
         if n_points <= predict_batch_size:
             if xp.__name__ == "numpy":
                 mu_chunk, sigma_chunk = gp.predict(np.asarray(points), return_std=True)
+                mu_chunk = (mu_chunk - y_train_mean) / y_train_std
+                sigma_chunk = sigma_chunk / y_train_std
             else:
                 mu_chunk, sigma_chunk = gp_posterior(
                     points,
@@ -317,6 +389,7 @@ def exactbo_partitioning(
                     sigma_n_squared=sigma_n_2,
                     y_train_mean=y_train_mean,
                     y_train_std=y_train_std,
+                    scaled_output=True,
                     return_std=True,
                     backend=backend,
                     validation=False,
@@ -333,6 +406,8 @@ def exactbo_partitioning(
             chunk = points[start:end]
             if xp.__name__ == "numpy":
                 mu_chunk, sigma_chunk = gp.predict(np.asarray(chunk), return_std=True)
+                mu_chunk = (mu_chunk - y_train_mean) / y_train_std
+                sigma_chunk = sigma_chunk / y_train_std
             else:
                 mu_chunk, sigma_chunk = gp_posterior(
                     chunk,
@@ -344,6 +419,7 @@ def exactbo_partitioning(
                     sigma_n_squared=sigma_n_2,
                     y_train_mean=y_train_mean,
                     y_train_std=y_train_std,
+                    scaled_output=True,
                     return_std=True,
                     backend=backend,
                     validation=False,
@@ -386,6 +462,7 @@ def exactbo_partitioning(
                 N,
                 y_train_mean=y_train_mean,
                 y_train_std=y_train_std,
+                scaled_output=True,
                 backend=backend,
                 validation=validation,
             )
@@ -397,6 +474,7 @@ def exactbo_partitioning(
                 N,
                 sigma_f_2,
                 y_train_std=y_train_std,
+                scaled_output=True,
                 backend=backend,
                 validation=validation,
             )
@@ -406,7 +484,7 @@ def exactbo_partitioning(
                 sig_lo,
                 sig_hi,
                 chunk_n,
-                y_min_unscaled,
+                y_min_scaled,
                 backend=backend,
                 validation=validation,
             )
@@ -417,6 +495,81 @@ def exactbo_partitioning(
             # of chunks before the next reduction/mask operation forces it.
             _force_materialization(backend)
         return ei_hi
+
+    def _sampled_box_best_ei(boxes_L, boxes_U):
+        n_boxes = int(boxes_L.shape[0])
+        if n_boxes == 0:
+            return (
+                xp.empty((0, d), dtype=xp.float64),
+                xp.empty((0,), dtype=xp.float64),
+            )
+
+        best_points = xp.empty((n_boxes, d), dtype=xp.float64)
+        best_ei = xp.empty((n_boxes,), dtype=xp.float64)
+        boxes_per_chunk = max(1, predict_batch_size // lhs_points_per_box)
+
+        for start in range(0, n_boxes, boxes_per_chunk):
+            end = min(start + boxes_per_chunk, n_boxes)
+            chunk_n = end - start
+            chunk_L = boxes_L[start:end]
+            chunk_U = boxes_U[start:end]
+            chunk_width = chunk_U - chunk_L
+
+            sampled_points = (
+                chunk_L[:, xp.newaxis, :]
+                + lhs_unit_design[xp.newaxis, :, :] * chunk_width[:, xp.newaxis, :]
+            )  # (chunk_n, 2**d, d)
+            flat_points = sampled_points.reshape((chunk_n * lhs_points_per_box, d))
+
+            mu_chunk, sigma_chunk = _predict_with_std(flat_points)
+            mu_chunk = xp.asarray(mu_chunk, dtype=xp.float64).reshape(
+                (chunk_n, lhs_points_per_box)
+            )
+            sigma_chunk = xp.asarray(sigma_chunk, dtype=xp.float64).reshape(
+                (chunk_n, lhs_points_per_box)
+            )
+            sigma_chunk_lat = xp.sqrt(
+                xp.clip(sigma_chunk**2 - sigma_n_2, 1e-12, None)
+            )
+            ei_chunk = expected_improvement(
+                mu_chunk,
+                sigma_chunk_lat,
+                y_min_scaled,
+                backend=backend,
+            )  # (chunk_n, 2**d)
+
+            best_idx = xp.argmax(ei_chunk, axis=1).reshape((chunk_n, 1))
+            best_ei[start:end] = xp.take_along_axis(
+                ei_chunk,
+                best_idx,
+                axis=1,
+            ).reshape((chunk_n,))
+            gather_idx = xp.broadcast_to(
+                best_idx[:, :, xp.newaxis],
+                (chunk_n, 1, d),
+            )
+            best_points[start:end] = xp.take_along_axis(
+                sampled_points,
+                gather_idx,
+                axis=1,
+            ).reshape((chunk_n, d))
+
+            del (
+                chunk_L,
+                chunk_U,
+                chunk_width,
+                sampled_points,
+                flat_points,
+                mu_chunk,
+                sigma_chunk,
+                sigma_chunk_lat,
+                ei_chunk,
+                best_idx,
+                gather_idx,
+            )
+            _force_materialization(backend)
+
+        return best_points, best_ei
 
     def _topk_primary_secondary(primary, secondary, k: int):
         """
@@ -467,12 +620,20 @@ def exactbo_partitioning(
         # we only focus on the new target boxes resulting from the previous partition.
         if partition > 0:
             # Starting target box count (new 2d+1 boxes per each of the n_targets boxes from the previous partition)
-            n_target_start = n_target*(2*d+1)
+            n_target_start = n_target * stride
             # Starting target box mask (only analyze the new target boxes from the previous partition)
             target_boxes_mask = xp.zeros((n,), dtype=bool)
             target_boxes_mask[:n_target_start] = True
-            # Calculate where is the best global box in the new partition (it should be among the new target boxes)
-            idx_best_global = int(idx_best_global_next*(2*d+1)+2*d)
+            # All children of the previously best target box are contiguous in the
+            # split output, so preserve that whole child block for analysis.
+            idx_best_global_start = int(idx_best_global_next * stride)
+            preserved_analyze_idx = xp.arange(
+                idx_best_global_start,
+                idx_best_global_start + stride,
+                dtype=xp.int64,
+            )
+        else:
+            preserved_analyze_idx = xp.asarray([0], dtype=xp.int64)
         
         # Target boxes are always at the start of the arrays after each split.
         # Use slicing (views) to avoid advanced-index copies of large arrays.
@@ -494,35 +655,26 @@ def exactbo_partitioning(
 
         # Analyze boxes where the upper EI bound is within epsilon_ei of the maximum upper EI bound
         analyze_box_mask = ei_hi >= (max_ei_hi - epsilon_ei)  # (n_target_start,)
-        # Make sure to analyze at least the box with highest EI from past partition
-        analyze_box_mask[idx_best_global] = True
+        # Also analyze the full child block of the previously best target box.
+        analyze_box_mask[preserved_analyze_idx] = True
         analyze_local_idx = xp.where(analyze_box_mask)[0]  # (n_analyze,)
         n_analyze = int(analyze_local_idx.shape[0])
-        # Calculate EI at the center of the boxes (use latent sigma for EI calculation)
-        ei_hi_analyze_centers = (
-            bounds_L_target[analyze_local_idx] + bounds_U_target[analyze_local_idx]
-        ) / 2.0  # (n_analyze,d)
-        #if verbose:
-        #    print(f"  Computing GP predictions for {ei_hi_analyze_centers.shape[0]} analyzed boxes.")
-        mu_analyze, sigma_analyze = _predict_with_std(ei_hi_analyze_centers)  # (n_analyze,) both
-        #if verbose:
-        #    print(f"  Computed GP predictions for {mu_analyze.shape[0]} analyzed boxes.")
-        mu_analyze = xp.asarray(mu_analyze, dtype=xp.float64)
-        sigma_analyze = xp.asarray(sigma_analyze, dtype=xp.float64)
-        sigma_analyze_lat = xp.sqrt(xp.clip(sigma_analyze**2 - sigma_n_2 * y_train_std**2, 1e-12, None))  # Avoid zero std for EI calculation
-        ei_analyze = expected_improvement(mu_analyze, sigma_analyze_lat, y_min_unscaled, backend=backend)  # (n_analyze,)
-        #if verbose:
-        #    print(f"  Computed EI for {ei_analyze.shape[0]} analyzed boxes.")
+        # Sample 2**d Latin-hypercube points within each analyzed box and retain
+        # the best sampled EI per box in standardized target space.
+        analyze_best_points, ei_analyze = _sampled_box_best_ei(
+            bounds_L_target[analyze_local_idx],
+            bounds_U_target[analyze_local_idx],
+        )  # ((n_analyze, d), (n_analyze,))
         # Find the box with the highest analyzed EI
         idx_ei_max_analyze = int(xp.argmax(ei_analyze))
         ei_max_analyze = float(ei_analyze[idx_ei_max_analyze])
         idx_ei_max_analyze_local = int(analyze_local_idx[idx_ei_max_analyze])
         # Find best point among the analyzed boxes and the width of the box with the highest analyzed EI
-        best_x_analyze = ei_hi_analyze_centers[idx_ei_max_analyze]
+        best_x_analyze = analyze_best_points[idx_ei_max_analyze]
         w_max_ei_analyzed = (
             bounds_U_target[idx_ei_max_analyze_local] - bounds_L_target[idx_ei_max_analyze_local]
         )  # (d,)
-        del mu_analyze, sigma_analyze, sigma_analyze_lat, ei_analyze, ei_hi_analyze_centers
+        del analyze_best_points, ei_analyze
 
         # Active boxes are the ones where ei_hi is higher than ei_max_analyze plus epsilon_ei,
         active_boxes_mask = ei_hi > (ei_max_analyze + epsilon_ei)  # (n_target_start,)
@@ -549,7 +701,8 @@ def exactbo_partitioning(
                     log['time'] = t1 - t0
                 else:
                     log['time'] = (t1 - t0) / 1e6  # Convert microseconds to seconds for Legate
-                log['ei_max'] = float(ei_max_analyze)
+                log['ei_max'] = float(ei_max_analyze * y_train_std)
+                log['ei_max_scaled'] = float(ei_max_analyze)
             return BOResult(X=np.asarray(best_x_analyze), log=log)
         else:
             # Ensure the box with the highest analyzed EI is also active.
@@ -558,28 +711,20 @@ def exactbo_partitioning(
 
         # Check the active boxes.
         active_local_idx = xp.where(active_boxes_mask)[0] # (n_active,)
-        # Calculate EI at the center of the boxes (use latent sigma for EI calculation)
-        center_active = (
-            bounds_L_target[active_local_idx] + bounds_U_target[active_local_idx]
-        ) / 2.0  # (n_active,d)
-        mu_active, sigma_active = _predict_with_std(center_active)  # (n_active,) both
-        
-        mu_active = xp.asarray(mu_active, dtype=xp.float64)
-        sigma_active = xp.asarray(sigma_active, dtype=xp.float64)
-        #if verbose:
-        #    print(f"  Computed GP predictions for {mu_active.shape[0]} active boxes.")
-        sigma_active_lat = xp.sqrt(xp.clip(sigma_active**2 - sigma_n_2 * y_train_std**2, 1e-12, None))  # Avoid zero std for EI calculation
-        ei_active = expected_improvement(mu_active, sigma_active_lat, y_min_unscaled, backend=backend)  # (n_active,)
-        #if verbose:
-        #    print(f"  Computed EI for {ei_active.shape[0]} active boxes.")
+        # Sample 2**d Latin-hypercube points within each active box and retain
+        # the best sampled EI per box.
+        active_best_points, ei_active = _sampled_box_best_ei(
+            bounds_L_target[active_local_idx],
+            bounds_U_target[active_local_idx],
+        )  # ((n_active, d), (n_active,))
         # Find the box with the highest EI among the active boxes
         idx_best = int(xp.argmax(ei_active))
         ei_max_active = float(ei_active[idx_best])
         idx_best_local = int(active_local_idx[idx_best])
         # Find best point among the active boxes and the width of the box with the highest active EI
-        best_x_active = center_active[idx_best]
+        best_x_active = active_best_points[idx_best]
         w_max_ei_active = bounds_U_target[idx_best_local] - bounds_L_target[idx_best_local]  # (d,)
-        del mu_active, sigma_active, sigma_active_lat, center_active
+        del active_best_points
 
         # Target boxes are the ones where ei_hi is more than epsilon_ei plus ei_max.
         target_boxes_mask[:n_target_start] = ei_hi > (ei_max_active + epsilon_ei)
@@ -606,7 +751,8 @@ def exactbo_partitioning(
                     log['time'] = t1 - t0
                 else:
                     log['time'] = (t1 - t0) / 1e6  # Convert microseconds to seconds for Legate
-                log['ei_max'] = float(ei_max_active)
+                log['ei_max'] = float(ei_max_active * y_train_std)
+                log['ei_max_scaled'] = float(ei_max_active)
             return BOResult(X=np.asarray(best_x_active), log=log)
         else:
             # Ensure the box with the highest active EI is also a target box.
@@ -694,6 +840,7 @@ def exactbo_partitioning(
             log['time'] = t1 - t0
         else:
             log['time'] = (t1 - t0) / 1e6  # Convert microseconds to seconds for Legate
-        log['ei_max'] = float(ei_max_active)
+        log['ei_max'] = float(ei_max_active * y_train_std)
+        log['ei_max_scaled'] = float(ei_max_active)
 
     return BOResult(X=np.asarray(best_x_active), log=log)

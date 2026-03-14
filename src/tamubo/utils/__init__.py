@@ -3,7 +3,9 @@ tamubo.utils public API.
 
 Exports:
 - BackendName, SelectedBackend, BackendInfo, has_cupynumeric, resolve_backend
-- BOResult, _as_result, _build_cartesian_grid, _evaluate_objective, _init_log, _normalize_inputs
+- BOResult, _as_result, _build_cartesian_grid, _evaluate_objective, _from_unit_cube,
+- _init_log, _normalize_inputs, _normalize_problem_to_unit_cube, _to_unit_cube,
+- _unit_cube_bounds
 """
 from .backend import (
     BackendInfo,
@@ -13,7 +15,18 @@ from .backend import (
     resolve_backend,
 )
 
-from .common import BOResult, _as_result, _build_cartesian_grid, _evaluate_objective, _init_log, _normalize_inputs
+from .common import (
+    BOResult,
+    _as_result,
+    _build_cartesian_grid,
+    _evaluate_objective,
+    _from_unit_cube,
+    _init_log,
+    _normalize_inputs,
+    _normalize_problem_to_unit_cube,
+    _to_unit_cube,
+    _unit_cube_bounds,
+)
 
 __all__ = [
     "BackendName",
@@ -25,6 +38,10 @@ __all__ = [
     "_as_result",
     "_build_cartesian_grid",
     "_evaluate_objective",
+    "_from_unit_cube",
     "_init_log",
     "_normalize_inputs",
+    "_normalize_problem_to_unit_cube",
+    "_to_unit_cube",
+    "_unit_cube_bounds",
 ]

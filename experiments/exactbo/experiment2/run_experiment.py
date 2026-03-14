@@ -38,9 +38,9 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 DEFAULT_CONFIG_PATH = SCRIPT_DIR / "experiment_config.json"
 
 CSV_COLUMNS = [
+    "d",
     "Method",
     "random_seed",
-    "d",
     "epsilonX",
     "epsilonEI",
     "i",
@@ -91,7 +91,7 @@ def _set_seed(seed: int) -> None:
 def _build_default_gp(d) -> GaussianProcessRegressor:
     kernel = (
         ConstantKernel(1.0, (1e-2, 1e3))
-        * RBF(length_scale=np.full(d, 0.2), length_scale_bounds=(1e-2, 10.0))
+        * RBF(length_scale=np.full(d, 0.2), length_scale_bounds=(1e-2, 1e2))
         + WhiteKernel(noise_level=1e-3, noise_level_bounds=(1e-10, 1e1))
     )
     return GaussianProcessRegressor(kernel=kernel, alpha=0, normalize_y=True)
@@ -153,19 +153,27 @@ def _latin_hypercube_unit(n_points: int, dim: int) -> np.ndarray:
     return lhs
 
 
-def _resolve_initial_design(X0_raw: Any, *, default_X0: np.ndarray, dim: int) -> np.ndarray:
+def _scale_unit_design_to_bounds(X_unit: np.ndarray, bounds: np.ndarray) -> np.ndarray:
+    bounds = np.asarray(bounds, dtype=float)
+    lower = bounds[:, 0]
+    upper = bounds[:, 1]
+    return lower + np.asarray(X_unit, dtype=float) * (upper - lower)
+
+
+def _resolve_initial_design(X0_raw: Any, *, default_X0: np.ndarray, bounds: np.ndarray) -> np.ndarray:
     """Return initial design from config: explicit array or integer LHS size."""
+    dim = int(np.asarray(bounds, dtype=float).shape[0])
     if X0_raw is None:
         return np.asarray(default_X0, dtype=float)
 
     if isinstance(X0_raw, (int, np.integer)) and not isinstance(X0_raw, bool):
-        return _latin_hypercube_unit(int(X0_raw), dim)
+        return _scale_unit_design_to_bounds(_latin_hypercube_unit(int(X0_raw), dim), bounds)
 
     X0 = np.asarray(X0_raw, dtype=float)
     if X0.ndim == 0:
         scalar = float(X0.item())
         if float(scalar).is_integer():
-            return _latin_hypercube_unit(int(scalar), dim)
+            return _scale_unit_design_to_bounds(_latin_hypercube_unit(int(scalar), dim), bounds)
         raise ValueError("X0 scalar must be an integer count or an array of points.")
     return X0
 
@@ -192,6 +200,7 @@ def _run_framework(
     objective: Callable[[np.ndarray], np.ndarray],
     max_iters: int,
     epsilon_X: float,
+    normalize_to_unit_cube: bool,
     verbose: bool,
     config: dict[str, Any],
 ):
@@ -216,6 +225,7 @@ def _run_framework(
             validation=bool(exactbo_cfg.get("validation", True)),
             verbose=verbose,
             logMask=True,
+            normalize_to_unit_cube=normalize_to_unit_cube,
         )
 
     if framework == "botorch_grid":
@@ -230,6 +240,7 @@ def _run_framework(
             verbose=verbose,
             logMask=True,
             device=str(botorch_grid_cfg.get("device", "cuda")),
+            normalize_to_unit_cube=normalize_to_unit_cube,
         )
 
     if framework == "botorch_optimize":
@@ -246,6 +257,7 @@ def _run_framework(
             verbose=verbose,
             logMask=True,
             device=str(botorch_opt_cfg.get("device", "cuda")),
+            normalize_to_unit_cube=normalize_to_unit_cube,
         )
 
     raise ValueError(f"Unsupported framework '{framework}'.")
@@ -279,9 +291,9 @@ def _build_rows(
 
         rows.append(
             {
+                "d": int(problem_d),
                 "Method": method,
                 "random_seed": random_seed,
-                "d": int(problem_d),
                 "epsilonX": epsilon_X,
                 "epsilonEI": epsilon_ei,
                 "i": idx,
@@ -341,9 +353,10 @@ def main() -> None:
     X0 = _resolve_initial_design(
         config.get("X0", None),
         default_X0=problem.X0,
-        dim=problem.d,
+        bounds=bounds,
     )
     _ensure_problem_dim(bounds, X0, problem.d)
+    normalize_to_unit_cube = bool(config.get("normalize_to_unit_cube", True))
 
     max_iters = int(config.get("max_iters", 0))
     if max_iters < 0:
@@ -369,6 +382,7 @@ def main() -> None:
         objective=problem.objective,
         max_iters=max_iters,
         epsilon_X=epsilon_X,
+        normalize_to_unit_cube=normalize_to_unit_cube,
         verbose=verbose,
         config=config,
     )

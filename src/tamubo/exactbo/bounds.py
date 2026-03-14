@@ -160,11 +160,12 @@ def mu_bounds(
     *,
     y_train_mean: float = 0.0, 
     y_train_std: float = 1.0,
+    scaled_output: bool = False,
     backend: BackendName = "auto", 
     validation: bool = True,
 ) -> tuple:
     """
-    Compute lower/upper bounds on the GP posterior mean per box, in original scale.
+    Compute lower/upper bounds on the GP posterior mean per box.
     Using: μ(x)=k(x)^T α, α = L^{-T} \\ (L \\ y).
 
     Parameters
@@ -182,6 +183,9 @@ def mu_bounds(
         Training target mean used by the GP (normalize_y=True).
     y_train_std : float, default=1.0
         Training target std used by the GP (normalize_y=True).
+    scaled_output : bool, default=False
+        If True, return bounds in the GP's standardized target space.
+        If False, return bounds in the original target scale.
     backend : {"auto", "numpy", "cupynumeric"}, default="auto"
         Backend used for array ops.
     validation : bool, default=True
@@ -227,9 +231,12 @@ def mu_bounds(
                     mu_lo_i += K_hi_i[j] * alpha[j]
                     mu_hi_i += K_lo_i[j] * alpha[j]
 
-            # unnormalize to original target scale
-            mu_lo.append(y_train_mean + y_train_std * mu_lo_i)
-            mu_hi.append(y_train_mean + y_train_std * mu_hi_i)
+            if scaled_output:
+                mu_lo.append(mu_lo_i)
+                mu_hi.append(mu_hi_i)
+            else:
+                mu_lo.append(y_train_mean + y_train_std * mu_lo_i)
+                mu_hi.append(y_train_mean + y_train_std * mu_hi_i)
         
         return xp.array(mu_lo), xp.array(mu_hi)
     
@@ -251,11 +258,11 @@ def mu_bounds(
         tmp = K_lo @ alpha_neg
         xp.add(mu_hi, tmp, out=mu_hi)
 
-        # Rescale and shift back to original y space.
-        xp.multiply(mu_lo, y_train_std, out=mu_lo)
-        xp.add(mu_lo, y_train_mean, out=mu_lo)
-        xp.multiply(mu_hi, y_train_std, out=mu_hi)
-        xp.add(mu_hi, y_train_mean, out=mu_hi)
+        if not scaled_output:
+            xp.multiply(mu_lo, y_train_std, out=mu_lo)
+            xp.add(mu_lo, y_train_mean, out=mu_lo)
+            xp.multiply(mu_hi, y_train_std, out=mu_hi)
+            xp.add(mu_hi, y_train_mean, out=mu_hi)
 
         return (mu_lo, mu_hi)
 
@@ -270,11 +277,12 @@ def sigma_bounds(
     sigma_f_2: float, 
     *,
     y_train_std: float = 1.0,
+    scaled_output: bool = False,
     backend: BackendName = "auto", 
     validation: bool = True,
 ) -> tuple:
     """
-    Compute lower/upper bounds on the GP posterior std per box, in original scale.
+    Compute lower/upper bounds on the GP posterior std per box.
     Given L = cholesky(K + σ_n^2 I) and per-component kernel intervals K_lo, K_hi (nonnegative), 
     bound v for the solution of L v = k, and then bound Q = ||v||^2, then σ^2 = σ_f^2 - Q, 
     and finally bound σ = sqrt(σ^2).
@@ -296,6 +304,9 @@ def sigma_bounds(
         Kernel variance σ_f^2.
     y_train_std : float, default=1.0
         Training target std used by the GP (normalize_y=True).
+    scaled_output : bool, default=False
+        If True, return bounds in the GP's standardized target space.
+        If False, return bounds in the original target scale.
     backend : {"auto", "numpy", "cupynumeric"}, default="auto"
         Backend used for array ops.
     validation : bool, default=True
@@ -324,12 +335,30 @@ def sigma_bounds(
     # Check if using numpy or cupynumeric for the computation.
     if xp is np:
         # Serial computation for numpy (more efficient for small n).
-        return _sigma_bounds_numpy(K_lo, K_hi, L, n, N, sigma_f_2, y_train_std)
+        return _sigma_bounds_numpy(
+            K_lo,
+            K_hi,
+            L,
+            n,
+            N,
+            sigma_f_2,
+            y_train_std,
+            scaled_output,
+        )
     else:
         # Vectorized computation for cupynumeric (more efficient for large n).
-        return _sigma_bounds_cupynumeric(K_lo, K_hi, L, n, N, sigma_f_2, y_train_std)
+        return _sigma_bounds_cupynumeric(
+            K_lo,
+            K_hi,
+            L,
+            n,
+            N,
+            sigma_f_2,
+            y_train_std,
+            scaled_output,
+        )
     
-def _sigma_bounds_numpy(K_lo, K_hi, L, n, N, sigma_f_2, y_train_std):
+def _sigma_bounds_numpy(K_lo, K_hi, L, n, N, sigma_f_2, y_train_std, scaled_output):
     sig_lo = []
     sig_hi = []
     # For each box, compute the lower and upper sigma bounds
@@ -385,13 +414,16 @@ def _sigma_bounds_numpy(K_lo, K_hi, L, n, N, sigma_f_2, y_train_std):
         sig_lo_i = np.sqrt(var_lo)
         sig_hi_i = np.sqrt(var_hi)
 
-        # Ensure non-negativity and unnormalize to original target scale
-        sig_lo.append(y_train_std * sig_lo_i)
-        sig_hi.append(y_train_std * sig_hi_i)
+        if scaled_output:
+            sig_lo.append(sig_lo_i)
+            sig_hi.append(sig_hi_i)
+        else:
+            sig_lo.append(y_train_std * sig_lo_i)
+            sig_hi.append(y_train_std * sig_hi_i)
 
     return np.array(sig_lo), np.array(sig_hi)
 
-def _sigma_bounds_cupynumeric(K_lo, K_hi, L, n, N, sigma_f_2, y_train_std):
+def _sigma_bounds_cupynumeric(K_lo, K_hi, L, n, N, sigma_f_2, y_train_std, scaled_output):
     import cupynumeric as cp
     # Reuse K_lo/K_hi buffers in-place as v_lo/v_hi to avoid an additional
     # pair of (n, N) allocations on GPU.
@@ -463,9 +495,9 @@ def _sigma_bounds_cupynumeric(K_lo, K_hi, L, n, N, sigma_f_2, y_train_std):
     # sigma = sqrt(var)
     cp.sqrt(sig_lo, out=sig_lo)
     cp.sqrt(sig_hi, out=sig_hi)
-    # Scale by y_train_std to get unscaled sigma bounds.
-    cp.multiply(sig_lo, y_train_std, out=sig_lo)
-    cp.multiply(sig_hi, y_train_std, out=sig_hi)
+    if not scaled_output:
+        cp.multiply(sig_lo, y_train_std, out=sig_lo)
+        cp.multiply(sig_hi, y_train_std, out=sig_hi)
 
     return sig_lo, sig_hi
 
@@ -476,7 +508,7 @@ def ei_bounds(
     sig_lo, 
     sig_hi,
     n: int, 
-    y_min_unscaled: float, 
+    y_min: float, 
     *,
     backend: BackendName = "auto", 
     validation: bool = True,
@@ -494,8 +526,8 @@ def ei_bounds(
         Sigma bounds per box, shape (n,), sig_lo >= 0.
     n : int
         Number of boxes.
-    y_min_unscaled : float
-        Minimum of training targets.
+    y_min : float
+        Minimum of training targets in the same scale as ``mu_*`` and ``sig_*``.
     backend : {"auto", "numpy", "cupynumeric"}, default="auto"
         Backend used for array ops.
     validation : bool, optional
@@ -527,12 +559,12 @@ def ei_bounds(
     # Check if using numpy or cupynumeric for the computation.
     if xp is np:
         # Serial computation for numpy (more efficient for small n).
-        return _ei_bounds_numpy(mu_lo, mu_hi, sig_lo, sig_hi, n, y_min_unscaled, pad=pad)
+        return _ei_bounds_numpy(mu_lo, mu_hi, sig_lo, sig_hi, n, y_min, pad=pad)
     else:
         # Vectorized computation for cupynumeric (more efficient for large n).
-        return _ei_bounds_cupynumeric(mu_lo, mu_hi, sig_lo, sig_hi, n, y_min_unscaled, pad=pad)
+        return _ei_bounds_cupynumeric(mu_lo, mu_hi, sig_lo, sig_hi, n, y_min, pad=pad)
     
-def _ei_bounds_numpy(mu_lo, mu_hi, sig_lo, sig_hi, n, y_min_unscaled, pad):
+def _ei_bounds_numpy(mu_lo, mu_hi, sig_lo, sig_hi, n, y_min, pad):
     from scipy.stats import norm
     ei_lo = []
     ei_hi = []
@@ -542,8 +574,8 @@ def _ei_bounds_numpy(mu_lo, mu_hi, sig_lo, sig_hi, n, y_min_unscaled, pad):
         sig_lo_i, sig_hi_i = sig_lo[i], sig_hi[i]
 
         # N bounds
-        N_lo = y_min_unscaled - mu_hi_i
-        N_hi = y_min_unscaled - mu_lo_i
+        N_lo = y_min - mu_hi_i
+        N_hi = y_min - mu_lo_i
 
         # Handle sigma == 0 cases
         if sig_hi_i == 0:
@@ -599,7 +631,7 @@ def _ei_bounds_numpy(mu_lo, mu_hi, sig_lo, sig_hi, n, y_min_unscaled, pad):
 
     return np.array(ei_lo), np.array(ei_hi)
 
-def _ei_bounds_cupynumeric(mu_lo, mu_hi, sig_lo, sig_hi, n, y_min_unscaled, pad):
+def _ei_bounds_cupynumeric(mu_lo, mu_hi, sig_lo, sig_hi, n, y_min, pad):
     import cupynumeric as cp
     inv_pad = 1.0 / pad
 
@@ -618,8 +650,8 @@ def _ei_bounds_cupynumeric(mu_lo, mu_hi, sig_lo, sig_hi, n, y_min_unscaled, pad)
     mask1 = cp.empty(n, dtype=bool)
 
     # N = y_min - mu
-    cp.subtract(y_min_unscaled, mu_hi, out=N_lo)
-    cp.subtract(y_min_unscaled, mu_lo, out=N_hi)
+    cp.subtract(y_min, mu_hi, out=N_lo)
+    cp.subtract(y_min, mu_lo, out=N_hi)
 
     # J bounds = 1/sigma without divide-by-zero warnings.
     cp.equal(sig_hi, 0.0, out=mask0)

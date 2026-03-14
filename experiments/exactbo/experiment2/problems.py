@@ -40,6 +40,27 @@ def objective_minimization_2d(X: np.ndarray) -> np.ndarray:
     return val
 
 
+def objective_least_squares_5d(X: np.ndarray) -> np.ndarray:
+    """Five-dimensional nonlinear least-squares objective."""
+    X = np.asarray(X, dtype=float)
+    X_eval = X.reshape(1, -1) if X.ndim == 1 else X
+    x0, x1, x2, x3, x4 = [X_eval[:, i] for i in range(5)]
+
+    t1 = -4.583 - 3.933 * x0 + 0.107 * x1 + 0.126 * x2 - 9.99 * x4
+    t2 = 1.4185 - 0.987 * x1 - 22.95 * x3
+    t3 = -0.0921 + 0.002 * x0 - 0.235 * x2 + 5.67 * x4
+    t4 = 0.0084 + x1 - x3
+    t5 = -0.00071 - x2 - 0.196 * x4
+
+    t6 = -0.727 * x1 * x2 + 8.39 * x2 * x3 - 684.4 * x3 * x4 + 63.5 * x3 * x1
+    t7 = 0.949 * x0 * x2 + 0.173 * x0 * x4
+    t8 = -0.716 * x0 * x1 - 1.578 * x0 * x3 + 1.132 * x3 * x1
+    t9 = -x0 * x4
+    t10 = x0 * x3
+
+    return (t1 + t6) ** 2 + (t2 + t7) ** 2 + (t3 + t8) ** 2 + (t4 + t9) ** 2 + (t5 + t10) ** 2
+
+
 _PROBLEMS: dict[str, ProblemSpec] = {
     "problem2d": ProblemSpec(
         name="problem2d",
@@ -56,6 +77,23 @@ _PROBLEMS: dict[str, ProblemSpec] = {
         ),
         y_star=-1.9101873427908376,
         objective=objective_minimization_2d,
+    ),
+    "problem5d": ProblemSpec(
+        name="problem5d",
+        d=5,
+        bounds=np.array(
+            [
+                [-1.0, 1.0],
+                [-1.0, 1.0],
+                [-1.0, 1.0],
+                [-1.0, 1.0],
+                [-1.0, 1.0],
+            ],
+            dtype=float,
+        ),
+        X0=np.array([[0.0, 0.0, 0.0, 0.0, 0.0]], dtype=float),
+        y_star=0.0,
+        objective=objective_least_squares_5d,
     ),
 }
 
