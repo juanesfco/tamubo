@@ -61,6 +61,43 @@ def objective_least_squares_5d(X: np.ndarray) -> np.ndarray:
     return (t1 + t6) ** 2 + (t2 + t7) ** 2 + (t3 + t8) ** 2 + (t4 + t9) ** 2 + (t5 + t10) ** 2
 
 
+_PROBLEM10D_A = np.array(
+    [
+        [-0.8123, 0.2413, -0.2964, 0.2484, 2.3081, -1.3713, 3.0762, -4.4416, -0.0310, -0.1894],
+        [0.6772, 0.0609, -1.2558, -0.0741, 3.4272, 1.2321, -3.4688, -6.2450, -0.6963, -0.7903],
+        [-0.3365, 0.5358, 0.8026, 1.9580, 1.4212, 1.9957, -1.1197, 4.1086, 0.5639, -0.7754],
+        [-0.4282, 0.4834, -0.4652, 1.4991, -2.8462, 0.6664, -1.0966, -4.4469, -0.7988, 0.5689],
+        [0.5119, 0.6563, 0.3090, 1.1751, 1.7230, 1.9228, 1.5512, -1.6881, -0.4119, -0.4169],
+        [-1.0177, -0.4945, 0.6911, -2.2498, -3.0143, -2.1242, 0.8211, 0.7823, -0.5253, 0.2071],
+        [-0.9385, 0.4491, -1.1320, -2.1417, -2.9591, 1.8822, 2.4259, -4.0952, 0.0617, 0.9288],
+        [0.3490, 0.1322, -1.0659, -2.0633, 1.0886, 3.7698, -1.1095, 2.1446, -0.8170, -0.1350],
+    ],
+    dtype=float,
+)
+_PROBLEM10D_B = np.array(
+    [1.7367, 6.9483, -1.1465, 2.6396, -0.5015, -0.2883, 2.1894, 1.8491],
+    dtype=float,
+)
+_PROBLEM10D_X_STAR = np.array(
+    [-0.5232654244, 0.0, 0.0, -0.4590488748, 0.2186127289, 0.2388229495, -0.6444044675, -0.5958475955, 0.0, 0.0],
+    dtype=float,
+)
+_PROBLEM10D_BOUNDS = np.tile(np.array([[-1.0, 1.0]], dtype=float), (10, 1))
+
+
+def objective_convex_l1_10d(X: np.ndarray) -> np.ndarray:
+    """Ten-dimensional L1-regularized least-squares objective."""
+    X = np.asarray(X, dtype=float)
+    X_eval = X.reshape(1, -1) if X.ndim == 1 else X
+    residual = X_eval @ _PROBLEM10D_A.T - _PROBLEM10D_B
+    smooth = 0.5 * np.sum(residual**2, axis=1)
+    penalty = np.sum(np.abs(X_eval), axis=1)
+    return smooth + penalty
+
+
+_PROBLEM10D_Y_STAR = float(objective_convex_l1_10d(_PROBLEM10D_X_STAR)[0])
+
+
 _PROBLEMS: dict[str, ProblemSpec] = {
     "problem2d": ProblemSpec(
         name="problem2d",
@@ -94,6 +131,14 @@ _PROBLEMS: dict[str, ProblemSpec] = {
         X0=np.array([[0.0, 0.0, 0.0, 0.0, 0.0]], dtype=float),
         y_star=0.0,
         objective=objective_least_squares_5d,
+    ),
+    "problem10d": ProblemSpec(
+        name="problem10d",
+        d=10,
+        bounds=_PROBLEM10D_BOUNDS,
+        X0=np.zeros((1, 10), dtype=float),
+        y_star=_PROBLEM10D_Y_STAR,
+        objective=objective_convex_l1_10d,
     ),
 }
 

@@ -6,5 +6,6 @@ tamubo.egg-info/
 .ipynb_checkpoints/
 cufile.log
 development/Data/
+development/Figures/
 examples/exactbo/logs/
 .vscode/*
