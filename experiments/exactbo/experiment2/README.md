@@ -30,6 +30,21 @@ python3 experiments/exactbo/experiment2/run_experiment.py \
   --config experiments/exactbo/experiment2/experiment_config.json
 ```
 
+To sweep `random_seed` sequentially and pause briefly between runs:
+
+```bash
+python3 experiments/exactbo/experiment2/run_seed_sweep.py
+```
+
+Optional overrides:
+
+```bash
+python3 experiments/exactbo/experiment2/run_seed_sweep.py \
+  --start-seed 1 \
+  --end-seed 9 \
+  --rest-seconds 2
+```
+
 ## Notes
 
 - BoTorch workflows require `torch`, `botorch`, and `gpytorch`.

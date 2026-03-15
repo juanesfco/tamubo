@@ -64,6 +64,38 @@ def _force_materialization(backend: BackendName) -> None:
     runtime.issue_mapping_fence()
     runtime.issue_execution_fence(block=True)
 
+def _get_store_target(backend: BackendName):
+    backend_info = resolve_backend(backend)
+    if backend_info.selected == "numpy":
+        return None
+    StoreTarget = getattr(import_module("legate.core"), "StoreTarget")
+    return StoreTarget
+
+
+def _offload_arrays_to_sysmem(
+    backend: BackendName,
+    *arrays,
+    store_target=None,
+    materialize: bool = True,
+) -> None:
+    """Move backend arrays to system memory so device buffers can be released."""
+    if store_target is None:
+        store_target = _get_store_target(backend)
+    if store_target is None:
+        return
+
+    offloaded = False
+    for array in arrays:
+        if array is None:
+            continue
+        offload = getattr(array, "offload_to", None)
+        if callable(offload):
+            offload(store_target.SYSMEM)
+            offloaded = True
+
+    if offloaded and materialize:
+        _force_materialization(backend)
+
 
 def _centered_latin_hypercube_unit(n_points: int, dim: int) -> np.ndarray:
     """
@@ -312,6 +344,7 @@ def exactbo_partitioning(
         Next design point, backend resolution info and log.
     """
     xp = _array_module(backend)
+    store_target = _get_store_target(backend)
     
     # Copy of X for partitioning, converted to backend array
     Xc = xp.asarray(X, dtype=xp.float64)
@@ -369,6 +402,41 @@ def exactbo_partitioning(
 
     # Initialize log
     log = _init_log(logMask)
+
+    def _offload_arrays(*arrays, materialize: bool = True) -> None:
+        _offload_arrays_to_sysmem(
+            backend,
+            *arrays,
+            store_target=store_target,
+            materialize=materialize,
+        )
+
+    def _finalize_result(best_x, ei_max_value: float) -> BOResult:
+        best_x_result = np.asarray(best_x, dtype=np.float64)
+        if logMask:
+            t1 = now()
+            if xp.__name__ == "numpy":
+                log["time"] = t1 - t0
+            else:
+                log["time"] = (t1 - t0) / 1e6  # Convert microseconds to seconds for Legate
+            log["ei_max"] = float(ei_max_value * y_train_std)
+            log["ei_max_scaled"] = float(ei_max_value)
+
+        _offload_arrays(
+            best_x,
+            Xc,
+            bounds_L,
+            bounds_U,
+            length_scale,
+            alpha,
+            L,
+            lhs_unit_design,
+            epsilon_X,
+            target_boxes_mask,
+            w,
+            w_max,
+        )
+        return BOResult(X=best_x_result, log=log)
 
     def _predict_with_std(points):
         points = xp.asarray(points, dtype=xp.float64)
@@ -489,6 +557,16 @@ def exactbo_partitioning(
                 validation=validation,
             )
             ei_hi[start:end] = ei_hi_chunk
+            _offload_arrays(
+                K_lo,
+                K_hi,
+                mu_lo,
+                mu_hi,
+                sig_lo,
+                sig_hi,
+                ei_hi_chunk,
+                materialize=False,
+            )
             del K_lo, K_hi, mu_lo, mu_hi, sig_lo, sig_hi, ei_hi_chunk
             # cuPyNumeric/Legate can defer chunk work aggressively. Fence here so
             # the helper does not accumulate a large pending graph across dozens
@@ -554,6 +632,16 @@ def exactbo_partitioning(
                 axis=1,
             ).reshape((chunk_n, d))
 
+            _offload_arrays(
+                sampled_points,
+                flat_points,
+                mu_chunk,
+                sigma_chunk,
+                sigma_chunk_lat,
+                ei_chunk,
+                gather_idx,
+                materialize=False,
+            )
             del (
                 chunk_L,
                 chunk_U,
@@ -670,10 +758,11 @@ def exactbo_partitioning(
         ei_max_analyze = float(ei_analyze[idx_ei_max_analyze])
         idx_ei_max_analyze_local = int(analyze_local_idx[idx_ei_max_analyze])
         # Find best point among the analyzed boxes and the width of the box with the highest analyzed EI
-        best_x_analyze = analyze_best_points[idx_ei_max_analyze]
+        best_x_analyze = xp.array(analyze_best_points[idx_ei_max_analyze], dtype=xp.float64)
         w_max_ei_analyzed = (
             bounds_U_target[idx_ei_max_analyze_local] - bounds_L_target[idx_ei_max_analyze_local]
         )  # (d,)
+        _offload_arrays(analyze_best_points, ei_analyze)
         del analyze_best_points, ei_analyze
 
         # Active boxes are the ones where ei_hi is higher than ei_max_analyze plus epsilon_ei,
@@ -695,15 +784,7 @@ def exactbo_partitioning(
             #        "bounds_U": np.asarray(bounds_U),
             #        "target_boxes_mask": np.zeros((n,), dtype=bool),
             #    }
-            if logMask:
-                t1 = now()
-                if xp.__name__ == "numpy":
-                    log['time'] = t1 - t0
-                else:
-                    log['time'] = (t1 - t0) / 1e6  # Convert microseconds to seconds for Legate
-                log['ei_max'] = float(ei_max_analyze * y_train_std)
-                log['ei_max_scaled'] = float(ei_max_analyze)
-            return BOResult(X=np.asarray(best_x_analyze), log=log)
+            return _finalize_result(best_x_analyze, ei_max_analyze)
         else:
             # Ensure the box with the highest analyzed EI is also active.
             active_boxes_mask[idx_ei_max_analyze_local] = True
@@ -722,8 +803,9 @@ def exactbo_partitioning(
         ei_max_active = float(ei_active[idx_best])
         idx_best_local = int(active_local_idx[idx_best])
         # Find best point among the active boxes and the width of the box with the highest active EI
-        best_x_active = active_best_points[idx_best]
+        best_x_active = xp.array(active_best_points[idx_best], dtype=xp.float64)
         w_max_ei_active = bounds_U_target[idx_best_local] - bounds_L_target[idx_best_local]  # (d,)
+        _offload_arrays(active_best_points)
         del active_best_points
 
         # Target boxes are the ones where ei_hi is more than epsilon_ei plus ei_max.
@@ -745,15 +827,7 @@ def exactbo_partitioning(
             #        "bounds_U": np.asarray(bounds_U),
             #        "target_boxes_mask": np.zeros((n,), dtype=bool),
             #    }
-            if logMask:
-                t1 = now()
-                if xp.__name__ == "numpy":
-                    log['time'] = t1 - t0
-                else:
-                    log['time'] = (t1 - t0) / 1e6  # Convert microseconds to seconds for Legate
-                log['ei_max'] = float(ei_max_active * y_train_std)
-                log['ei_max_scaled'] = float(ei_max_active)
-            return BOResult(X=np.asarray(best_x_active), log=log)
+            return _finalize_result(best_x_active, ei_max_active)
         else:
             # Ensure the box with the highest active EI is also a target box.
             idx_best_global = int(idx_best_local)
@@ -790,6 +864,7 @@ def exactbo_partitioning(
 
         # Calculate position of the best point in next partition
         idx_best_global_next = int(xp.sum(target_boxes_mask[:idx_best_global]))
+        _offload_arrays(ei_hi, ei_active)
         del ei_hi, ei_active, analyze_box_mask, active_boxes_mask, analyze_local_idx, active_local_idx
         
         # Update maximum width of active boxes
@@ -818,6 +893,8 @@ def exactbo_partitioning(
 
         # Split active boxes (don't if its the last partition)
         if partition < max_partitions:
+            prev_bounds_L = bounds_L
+            prev_bounds_U = bounds_U
             bounds_L, bounds_U = split_boxes(
                 bounds_L,
                 bounds_U,
@@ -829,18 +906,9 @@ def exactbo_partitioning(
                 backend=backend,
                 validation=validation,
             )
+            _offload_arrays(prev_bounds_L, prev_bounds_U, materialize=False)
+            del prev_bounds_L, prev_bounds_U
             #if verbose:
             #    print("  Materializing split output before next EI-upper-bound pass.")
             _force_materialization(backend)
-
-    # Store final log info
-    if logMask:
-        t1 = now()
-        if xp.__name__ == "numpy":
-            log['time'] = t1 - t0
-        else:
-            log['time'] = (t1 - t0) / 1e6  # Convert microseconds to seconds for Legate
-        log['ei_max'] = float(ei_max_active * y_train_std)
-        log['ei_max_scaled'] = float(ei_max_active)
-
-    return BOResult(X=np.asarray(best_x_active), log=log)
+    return _finalize_result(best_x_active, ei_max_active)

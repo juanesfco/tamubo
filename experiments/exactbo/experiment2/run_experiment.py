@@ -22,14 +22,19 @@ if SRC_DIR.exists():
 from sklearn.gaussian_process import GaussianProcessRegressor
 from sklearn.gaussian_process.kernels import ConstantKernel, RBF, WhiteKernel
 
+BOTORCH_IMPORT_ERROR: ImportError | None = None
 try:
     from tamubo.bo import run_botorch_grid_ei, run_botorch_optimize_ei
-except ImportError:
+except ImportError as exc:
+    BOTORCH_IMPORT_ERROR = exc
     run_botorch_grid_ei = None
     run_botorch_optimize_ei = None
+
+EXACTBO_IMPORT_ERROR: ModuleNotFoundError | ImportError | None = None
 try:
     from tamubo.exactbo import exactbo
-except ModuleNotFoundError:
+except (ModuleNotFoundError, ImportError) as exc:
+    EXACTBO_IMPORT_ERROR = exc
     exactbo = None
 
 from problems import list_problem_names, load_problem
@@ -209,6 +214,11 @@ def _run_framework(
     botorch_opt_cfg = deepcopy(config.get("botorch_optimize", {}))
 
     if framework == "exactbo":
+        if exactbo is None:
+            raise ImportError(
+                "Framework 'exactbo' is unavailable because tamubo.exactbo "
+                "could not be imported."
+            ) from EXACTBO_IMPORT_ERROR
         return exactbo(
             X0=X0.copy(),
             bounds=bounds.copy(),
@@ -229,6 +239,12 @@ def _run_framework(
         )
 
     if framework == "botorch_grid":
+        if run_botorch_grid_ei is None:
+            raise ImportError(
+                "Framework 'botorch_grid' is unavailable because BoTorch "
+                "dependencies could not be imported. Install torch, botorch, "
+                "and gpytorch, or switch framework to 'exactbo'."
+            ) from BOTORCH_IMPORT_ERROR
         return run_botorch_grid_ei(
             X0=X0.copy(),
             bounds=bounds.copy(),
@@ -244,6 +260,12 @@ def _run_framework(
         )
 
     if framework == "botorch_optimize":
+        if run_botorch_optimize_ei is None:
+            raise ImportError(
+                "Framework 'botorch_optimize' is unavailable because BoTorch "
+                "dependencies could not be imported. Install torch, botorch, "
+                "and gpytorch, or switch framework to 'exactbo'."
+            ) from BOTORCH_IMPORT_ERROR
         return run_botorch_optimize_ei(
             X0=X0.copy(),
             bounds=bounds.copy(),
