@@ -1,0 +1,28 @@
+services:
+  tamubo:
+    image: tamubo/pytorch:26.01-py3
+    build:
+      context: ../..
+      dockerfile: envs/pytorch/Dockerfile
+      args:
+        BASE_IMAGE: nvcr.io/nvidia/pytorch:26.01-py3
+        USERNAME: ${HOST_USER:-dev}
+        UID: ${HOST_UID:-1000}
+        GID: ${HOST_GID:-1000}
+    working_dir: /workspace
+    stdin_open: true
+    tty: true
+    shm_size: "8g"
+    gpus: all
+    environment:
+      HOME: /home/${HOST_USER:-dev}
+      PYTHONUNBUFFERED: "1"
+    volumes:
+      - ../..:/workspace
+      - tamubo_python_user:/home/${HOST_USER:-dev}/.local
+      - tamubo_pip_cache:/home/${HOST_USER:-dev}/.cache/pip
+    command: bash
+
+volumes:
+  tamubo_python_user:
+  tamubo_pip_cache:

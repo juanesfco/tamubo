@@ -3,7 +3,8 @@
 # Author: Juan E Florez-Coronel
 
 import torch
-import utils
+
+from . import utils
 
 class rbf:
     """Radial basis function kernel (aka squared-exponential kernel).

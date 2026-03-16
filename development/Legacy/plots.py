@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
 from matplotlib.legend_handler import HandlerTuple
 
-from .ei import expected_improvement
+from tamubo.acquisition_functions import expected_improvement
 
 Array = np.ndarray
 

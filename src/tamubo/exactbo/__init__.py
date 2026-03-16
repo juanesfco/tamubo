@@ -2,47 +2,19 @@
 exactBO: minimal exact Bayesian Optimization scaffold.
 
 Exports:
-- Box, Boxes, split_box, hypermask
-- expected_improvement
-- rbf_k_bounds, mu_bounds, sigma_bounds, ei_bounds_from_mu_sigma, ei_bounds
-- Bounds, prod_bound_scalar, add_bounds, sub_bounds, prod_bounds, square_bounds, sqrt_bounds, forward_solve_bounds
-- PartitionMaxEISearch
-- ExactBOLoop, BOResult
-- plot_iterations, plot_iterations_2d, plot_function_2d, plot_partitions_2d, plot_ploop_2d
+- Bounds functions: rbf_k_bounds, mu_bounds, sigma_bounds, ei_bounds
+- Main functions: exactbo, exactbo_partitioning
+- Partitioning utility: split_boxes
+- 2D Plotting helpers: plot_f, plot_log, plot_opt
 """
-from .partition import Box, Boxes, split_box, hypermask
-from .ei import expected_improvement
-from .bounds import rbf_k_bounds, mu_bounds, sigma_bounds, ei_bounds_from_mu_sigma, ei_bounds
-from .interval_arithmetics import Bounds, prod_bound_scalar, add_bounds, sub_bounds, prod_bounds, square_bounds, sqrt_bounds, forward_solve_bounds
-from .loop_partition import PartitionMaxEISearch
-from .loop_exactbo import ExactBOLoop, BOResult
-from .plots import plot_iterations, plot_iterations_2d, plot_function_2d, plot_partitions_2d, plot_ploop_2d
+from .bounds import rbf_k_bounds, mu_bounds, sigma_bounds, ei_bounds
+from .run import exactbo, exactbo_partitioning
+from .partition import split_boxes
+from .plot2D import plot_f, plot_log, plot_opt
 
 __all__ = [
-    "Box",
-    "Boxes",
-    "split_box",
-    "hypermask",
-    "expected_improvement",
-    "rbf_k_bounds",
-    "mu_bounds",
-    "sigma_bounds",
-    "ei_bounds_from_mu_sigma",
-    "ei_bounds",
-    "Bounds",
-    "prod_bound_scalar",
-    "add_bounds",
-    "sub_bounds",
-    "prod_bounds",
-    "square_bounds",
-    "sqrt_bounds",
-    "forward_solve_bounds",
-    "PartitionMaxEISearch",
-    "ExactBOLoop",
-    "BOResult",
-    "plot_iterations",
-    "plot_iterations_2d",
-    "plot_function_2d",
-    "plot_partitions_2d",
-    "plot_ploop_2d",
+    "rbf_k_bounds", "mu_bounds", "sigma_bounds", "ei_bounds",
+    "exactbo", "exactbo_partitioning",
+    "split_boxes",
+    "plot_f", "plot_log", "plot_opt"
 ]
