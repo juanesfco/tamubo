@@ -27,12 +27,13 @@ Use the environment that matches your workflow:
 Unified entry point:
 
 ```python
-from tamubo.exactbo import run_exactbo
+from tamubo.exactbo import exactbo
 
-result = run_exactbo(
-    x0=X0,
+result = exactbo(
+    X0=X0,
     bounds=bounds,
-    epsilon=epsilon,
+    epsilon_X=epsilon_X,
+    epsilon_ei=epsilon_ei
     gp=gp,
     f=f,
     max_iters=10,
