@@ -73,8 +73,8 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--rest-seconds",
         type=float,
-        default=2.0,
-        help="Seconds to sleep between runs. Default: 2.0.",
+        default=10.0,
+        help="Seconds to sleep between runs. Default: 10.0.",
     )
     return parser.parse_args()
 
