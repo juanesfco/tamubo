@@ -1,6 +1,6 @@
 {
-  "random_seed": 2,
-  "framework": "exactbo",
+  "random_seed": 9,
+  "framework": "gridbo",
   "problem": "problem10d",
   "normalize_to_unit_cube": true,
   "verbose": true,
@@ -9,10 +9,10 @@
   "results_filename": "experiment_results_new.csv",
   "X0": 32,
   "max_iters": 10,
-  "epsilon_X": 1e-1,
+  "epsilon_X": 5e-1,
   "exactbo": {
     "epsilon_ei": 1,
-    "max_partitions": 30,
+    "max_partitions": 40,
     "backend": "auto",
     "predict_batch_size": 1e6,
     "bounds_batch_size": 1e6,
