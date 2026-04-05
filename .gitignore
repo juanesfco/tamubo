@@ -1,4 +1,5 @@
-venvs/
+envs/venv313/
+envs/venv313_nocp/
 __pycache__/
 .DS_Store
 tamubo.egg-info/
