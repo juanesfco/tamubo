@@ -4,5 +4,5 @@ Experiments for `tamubo.exactbo` live under this directory.
 
 Current contents:
 
-- `experiment1/`: baseline ExactBO runs, logs, and figures
-- `experiment2/`: ExactBO vs baseline BO workflow benchmark driver
+- `experiment1/`: baseline serial ExactBO, good to compare results but noted time unfeasibility
+- `experiment2/`: ExactBO benchmark vs gridBO and gradBO

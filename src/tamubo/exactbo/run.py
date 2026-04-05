@@ -587,6 +587,8 @@ def exactbo_partitioning(
         boxes_per_chunk = max(1, predict_batch_size // lhs_points_per_box)
 
         for start in range(0, n_boxes, boxes_per_chunk):
+            if verbose:
+                print(f"    Sampling points for boxes {start} to {min(start + boxes_per_chunk, n_boxes) - 1}...")
             end = min(start + boxes_per_chunk, n_boxes)
             chunk_n = end - start
             chunk_L = boxes_L[start:end]
@@ -728,12 +730,12 @@ def exactbo_partitioning(
         bounds_L_target = bounds_L[:n_target_start]
         bounds_U_target = bounds_U[:n_target_start]
 
-        #if verbose:
-        #    print(f"  Start target boxes: {n}, to analyze: {bounds_L_target.shape[0]}, Best global box index: {idx_best_global}.")
+        if verbose:
+            print(f"  Start target boxes: {n}, to analyze: {bounds_L_target.shape[0]}, Best global box index: {idx_best_global}.")
         # Compute EI upper bounds in chunks to cap peak GPU memory.
         ei_hi = _ei_hi_bounds_chunked(bounds_L_target, bounds_U_target)
-        #if verbose:
-        #    print(f"  Computed EI upper bounds for {ei_hi.shape[0]} target boxes.")
+        if verbose:
+            print(f"  Computed EI upper bounds for {ei_hi.shape[0]} target boxes.")
 
         # Find the box with the highest upper EI bound
         idx_max_ei_hi = int(xp.argmax(ei_hi))
@@ -753,6 +755,8 @@ def exactbo_partitioning(
             bounds_L_target[analyze_local_idx],
             bounds_U_target[analyze_local_idx],
         )  # ((n_analyze, d), (n_analyze,))
+        if verbose:
+            print(f"  Analyzed {ei_analyze.shape[0]} boxes with EI within {epsilon_ei} of max EI_hi.")
         # Find the box with the highest analyzed EI
         idx_ei_max_analyze = int(xp.argmax(ei_analyze))
         ei_max_analyze = float(ei_analyze[idx_ei_max_analyze])
@@ -794,10 +798,14 @@ def exactbo_partitioning(
         active_local_idx = xp.where(active_boxes_mask)[0] # (n_active,)
         # Sample 2**d Latin-hypercube points within each active box and retain
         # the best sampled EI per box.
+        if verbose:
+            print(f"  Active boxes with EI_hi > max EI_analyze + epsilon_ei: {n_active}.")
         active_best_points, ei_active = _sampled_box_best_ei(
             bounds_L_target[active_local_idx],
             bounds_U_target[active_local_idx],
         )  # ((n_active, d), (n_active,))
+        if verbose:
+            print(f"  Sampled best points for {ei_active.shape[0]} active boxes with EI_hi > max EI_analyze + epsilon_ei.")
         # Find the box with the highest EI among the active boxes
         idx_best = int(xp.argmax(ei_active))
         ei_max_active = float(ei_active[idx_best])
