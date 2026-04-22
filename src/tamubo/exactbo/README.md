@@ -1,33 +1,116 @@
 # `tamubo.exactbo`
 
-ExactBO package with a shared public API and two execution paths:
+`tamubo.exactbo` implements Exact Bayesian Optimization with a DIRECT-style
+partition search and runtime backend selection.
 
-- CPU/sequential path (NumPy + object-based boxes)
-- GPU/vectorized path (cuPyNumeric + array-based boxes)
+## Public API
 
-## Core public modules
+```python
+from tamubo.exactbo import (
+    exactbo,
+    exactbo_partitioning,
+    split_boxes,
+    rbf_k_bounds,
+    mu_bounds,
+    sigma_bounds,
+    ei_bounds,
+    plot_f,
+    plot_log,
+    plot_opt,
+)
+```
 
+- `exactbo(...)`: full BO loop. Fits the GP each iteration, runs ExactBO
+  partitioning to pick the next point, evaluates the objective, and returns a
+  `BOResult` with `X`, `y`, `backend`, and optional `log`.
+- `exactbo_partitioning(...)`: partition-only step. Expects evaluated points
+  `X` plus an already fitted GP and returns the next candidate in `BOResult.X`.
+- `split_boxes(...)`: backend-dispatched DIRECT-style box splitting utility.
+- `rbf_k_bounds(...)`, `mu_bounds(...)`, `sigma_bounds(...)`, `ei_bounds(...)`:
+  interval-bound helpers used by the partition search.
+- `plot_f(...)`, `plot_log(...)`, `plot_opt(...)`: 2D visualization helpers.
+
+## Package Layout
+
+- `run.py`: ExactBO loop and partitioning implementation.
+- `partition.py`: NumPy and cuPyNumeric box splitting behind `split_boxes(...)`.
+- `bounds.py`: GP kernel/mean/standard-deviation/EI bound propagation.
+- `plot2D.py`: 2D plotting and animation helpers.
 - `__init__.py`: package exports.
-- `run.py`: unified entry point `run_exactbo(...)` that selects backend (`auto`, `numpy`, `cupynumeric`) and returns a normalized result object.
-- `backend.py`: backend detection/resolution utilities (`has_cupynumeric`, `resolve_backend`, `BackendInfo`).
 
-## CPU/sequential implementation
+## Backends
 
-- `loop_exactbo.py`: outer BO loop (`ExactBOLoop`) that fits GP, runs partition search, evaluates oracle, and appends data.
-- `loop_partition.py`: branch-and-bound partition search (`PartitionMaxEISearch`) using `Box`/`Boxes` objects.
-- `partition.py`: box data structures and split/masking utilities (`Box`, `Boxes`, `split_box`, `hypermask`).
-- `bounds.py`: interval bounds for kernel, mean, sigma, and EI over a box.
-- `ei.py`: pointwise expected improvement from model predictions.
-- `interval_arithmetics.py`: interval arithmetic primitives used by bound propagation.
-- `plots.py`: plotting utilities for iterations and partition states.
+The current runner accepts:
 
-## GPU/vectorized implementation
+- `backend="numpy"`: sequential NumPy path.
+- `backend="cupynumeric"`: vectorized cuPyNumeric path.
+- `backend="auto"`: chooses cuPyNumeric when available, otherwise NumPy.
 
-- `vectorized_loop.py`: vectorized ExactBO loops for cuPyNumeric (`exactbo_loop_cupynumeric`, `partition_loop_cupynumeric`).
-- `vectorized_partition.py`: vectorized DIRECT-style box splitting.
-- `vectorized_bounds.py`: vectorized kernel/mean/sigma/EI bound propagation over batches of boxes.
-- `vectorized_ei.py`: vectorized EI/CDF/PDF helpers for cuPyNumeric arrays.
+The resolved backend is available on `result.backend.selected` when using
+`exactbo(...)`.
+
+## Minimal Example
+
+```python
+import numpy as np
+from sklearn.gaussian_process import GaussianProcessRegressor
+from sklearn.gaussian_process.kernels import ConstantKernel, RBF, WhiteKernel
+
+from tamubo.exactbo import exactbo
+
+bounds = np.array([[0.0, 1.0], [0.0, 1.0]], dtype=float)
+X0 = np.array(
+    [
+        [0.25, 0.25],
+        [0.25, 0.75],
+        [0.75, 0.25],
+        [0.75, 0.75],
+    ],
+    dtype=float,
+)
+
+kernel = (
+    ConstantKernel(1.0) * RBF(length_scale=np.full(2, 0.2))
+    + WhiteKernel(noise_level=1e-3)
+)
+gp = GaussianProcessRegressor(kernel=kernel, alpha=0.0, normalize_y=True)
+
+def objective(X):
+    X = np.asarray(X, dtype=float)
+    X = X.reshape(1, -1) if X.ndim == 1 else X
+    return np.sum((X - 0.5) ** 2, axis=1)
+
+result = exactbo(
+    X0=X0,
+    bounds=bounds,
+    epsilon_X=0.05,
+    epsilon_ei=1e-4,
+    gp=gp,
+    f=objective,
+    max_iters=5,
+    max_partitions=20,
+    backend="auto",
+    logMask=True,
+)
+
+print(result.backend.selected)
+print(result.X.shape, result.y.shape)
+```
 
 ## Notes
 
-- Preferred external usage is through `run_exactbo(...)` instead of importing backend-specific internals.
+- `f` should accept an array with shape `(N, d)` and return one value per row.
+- `exactbo(...)` fits `gp` internally on every outer iteration.
+- `exactbo_partitioning(...)` assumes `gp` has already been fitted and currently
+  relies on the scikit-learn `GaussianProcessRegressor` attributes used in this
+  repository, including kernel parameters exposed as
+  `ConstantKernel * RBF + WhiteKernel`.
+- `epsilon_X` may be a scalar or a per-dimension array with shape `(d,)`.
+- `normalize_to_unit_cube=True` runs the internal search on `[0, 1]^d` while
+  still evaluating the objective in the original finite bounds.
+- `predict_batch_size`, `bounds_batch_size`, and `max_target_boxes` are exposed
+  for memory/performance control on large runs.
+- `plot_f(...)` works independently for 2D problems.
+- `plot_log(...)` and `plot_opt(...)` expect partition snapshots (`p0`, `p1`,
+  ...) in the log structure. The current `exactbo(..., logMask=True)` runner
+  emits per-iteration summaries, not full partition snapshots.
