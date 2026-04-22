@@ -2,6 +2,7 @@ envs/venv313/
 envs/venv313_nocp/
 envs/tamubo_exactbo/
 envs/venvTrial/
+envs/plotenv/
 __pycache__/
 .DS_Store
 tamubo.egg-info/
