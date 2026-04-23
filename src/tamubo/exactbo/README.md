@@ -1,7 +1,7 @@
 # `tamubo.exactbo`
 
 `tamubo.exactbo` implements Exact Bayesian Optimization with a DIRECT-style
-partition search and runtime backend selection.
+partition search.
 
 ## Public API
 
@@ -14,6 +14,8 @@ from tamubo.exactbo import (
     mu_bounds,
     sigma_bounds,
     ei_bounds,
+    optimize_acqf_exactbo,
+    run_botorch_exactbo_ei,
     plot_f,
     plot_log,
     plot_opt,
@@ -25,29 +27,33 @@ from tamubo.exactbo import (
   `BOResult` with `X`, `y`, `backend`, and optional `log`.
 - `exactbo_partitioning(...)`: partition-only step. Expects evaluated points
   `X` plus an already fitted GP and returns the next candidate in `BOResult.X`.
-- `split_boxes(...)`: backend-dispatched DIRECT-style box splitting utility.
+- `split_boxes(...)`: cuPyNumeric DIRECT-style box splitting utility.
 - `rbf_k_bounds(...)`, `mu_bounds(...)`, `sigma_bounds(...)`, `ei_bounds(...)`:
   interval-bound helpers used by the partition search.
+- `optimize_acqf_exactbo(...)`: BoTorch adapter that uses ExactBO to optimize a
+  standard analytic EI-style acquisition function.
+- `run_botorch_exactbo_ei(...)`: full Torch/BoTorch workflow that builds a
+  BoTorch GP and uses ExactBO instead of `optimize_acqf(...)`.
 - `plot_f(...)`, `plot_log(...)`, `plot_opt(...)`: 2D visualization helpers.
 
 ## Package Layout
 
 - `run.py`: ExactBO loop and partitioning implementation.
-- `partition.py`: NumPy and cuPyNumeric box splitting behind `split_boxes(...)`.
-- `bounds.py`: GP kernel/mean/standard-deviation/EI bound propagation.
+- `partition.py`: cuPyNumeric box splitting.
+- `bounds.py`: cuPyNumeric GP kernel/mean/standard-deviation/EI bound propagation.
+- `torch_bounds.py`, `torch_partition.py`: Torch implementation of the ExactBO
+  bound propagation and partition search.
+- `botorch.py`, `torch_run.py`: BoTorch-facing optimizer and full workflow.
 - `plot2D.py`: 2D plotting and animation helpers.
 - `__init__.py`: package exports.
 
-## Backends
+## Runtime Assumptions
 
-The current runner accepts:
-
-- `backend="numpy"`: sequential NumPy path.
-- `backend="cupynumeric"`: vectorized cuPyNumeric path.
-- `backend="auto"`: chooses cuPyNumeric when available, otherwise NumPy.
-
-The resolved backend is available on `result.backend.selected` when using
-`exactbo(...)`.
+- The sklearn-based ExactBO path now requires `cupynumeric`.
+- `backend="auto"` is still accepted for API compatibility, but it must resolve
+  to `cupynumeric`.
+- The old NumPy backend and the memory-tuning controls
+  `predict_batch_size`, `bounds_batch_size`, and `max_target_boxes` were removed.
 
 ## Minimal Example
 
@@ -108,8 +114,8 @@ print(result.X.shape, result.y.shape)
 - `epsilon_X` may be a scalar or a per-dimension array with shape `(d,)`.
 - `normalize_to_unit_cube=True` runs the internal search on `[0, 1]^d` while
   still evaluating the objective in the original finite bounds.
-- `predict_batch_size`, `bounds_batch_size`, and `max_target_boxes` are exposed
-  for memory/performance control on large runs.
+- `optimize_acqf_exactbo(...)` currently supports analytic single-point
+  `ExpectedImprovement` and `LogExpectedImprovement` with `maximize=False`.
 - `plot_f(...)` works independently for 2D problems.
 - `plot_log(...)` and `plot_opt(...)` expect partition snapshots (`p0`, `p1`,
   ...) in the log structure. The current `exactbo(..., logMask=True)` runner
