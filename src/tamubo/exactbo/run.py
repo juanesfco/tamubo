@@ -6,6 +6,7 @@ import math
 import time as pytime
 
 import numpy as np
+from legate.core import get_legate_runtime
 
 from tamubo.acquisition_functions import expected_improvement
 from tamubo.gpugp.posterior import gp_posterior
@@ -23,6 +24,12 @@ from tamubo.utils import (
 from ._cupynumeric import cp, require_cupynumeric_backend
 from .bounds import ei_bounds, mu_bounds, rbf_k_bounds, sigma_bounds
 from .partition import split_boxes
+
+
+_DEFAULT_SAMPLE_BATCH_BYTES = 64 * 1024**2
+_FLOAT64_BYTES = np.dtype(np.float64).itemsize
+_ROW_COPY_MAX_SELECTED = 4096
+_CPU_MAX_WIDTH_ROWS = 10_000
 
 
 @dataclass(frozen=True)
@@ -80,6 +87,21 @@ def _scalar_bool(value) -> bool:
     return bool(np.asarray(value).item())
 
 
+def _chunk_size_for_bytes(bytes_per_item: int, max_bytes: int) -> int:
+    if max_bytes <= 0:
+        raise ValueError(f"sample_batch_bytes must be positive, got {max_bytes}")
+    return max(1, int(max_bytes) // max(1, int(bytes_per_item)))
+
+
+def _execute_pending_tasks() -> None:
+    get_legate_runtime().issue_execution_fence(block=True)
+
+
+def _split_batch_size(dim: int, stride: int, batch_bytes: int) -> int:
+    bytes_per_box = (4 * stride * dim + 6 * dim) * _FLOAT64_BYTES
+    return _chunk_size_for_bytes(bytes_per_box, batch_bytes)
+
+
 def _extract_sklearn_gp_state(X: np.ndarray, gp) -> SklearnGPState:
     kernel = gp.kernel_
     sigma_f_squared = float(kernel.k1.k1.constant_value)
@@ -119,6 +141,40 @@ def _predict_standardized_posterior(points, gp, state: SklearnGPState):
 
 
 def _compute_ei_upper_bounds(
+    bounds_L_target,
+    bounds_U_target,
+    state: SklearnGPState,
+    dim: int,
+    *,
+    batch_bytes: int,
+    validation: bool,
+):
+    n_target = _scalar_int(bounds_L_target.shape[0])
+    if n_target == 0:
+        return cp.empty((0,), dtype=cp.float64)
+
+    n_train = _scalar_int(state.alpha.shape[0])
+    bytes_per_box = (4 * dim + 2 * n_train + 12) * _FLOAT64_BYTES
+    chunk_size = _chunk_size_for_bytes(bytes_per_box, batch_bytes)
+    ei_hi = cp.empty((n_target,), dtype=cp.float64)
+
+    for start in range(0, n_target, chunk_size):
+        stop = min(start + chunk_size, n_target)
+        chunk_L = bounds_L_target[start:stop].copy()
+        chunk_U = bounds_U_target[start:stop].copy()
+        ei_hi[start:stop] = _compute_ei_upper_bounds_chunk(
+            chunk_L,
+            chunk_U,
+            state,
+            dim,
+            validation=validation,
+        )
+        _execute_pending_tasks()
+
+    return ei_hi
+
+
+def _compute_ei_upper_bounds_chunk(
     bounds_L_target,
     bounds_U_target,
     state: SklearnGPState,
@@ -181,26 +237,46 @@ def _compute_ei_upper_bounds(
     return ei_hi
 
 
-def _sample_boxes_best_ei(boxes_L, boxes_U, gp, state: SklearnGPState, lhs_unit_design):
+def _sample_points_for_boxes(boxes_L, boxes_U, lhs_unit_design):
+    """Build a flat sample buffer without materializing a 3D box/sample tensor."""
     n_boxes = _scalar_int(boxes_L.shape[0])
     dim = _scalar_int(boxes_L.shape[1])
     n_samples = _scalar_int(lhs_unit_design.shape[0])
 
-    if n_boxes == 0:
-        return (
-            cp.empty((0, dim), dtype=cp.float64),
-            cp.empty((0,), dtype=cp.float64),
-        )
-
+    flat_points = cp.empty((n_samples * n_boxes, dim), dtype=cp.float64)
     widths = boxes_U - boxes_L
-    sampled_points = boxes_L[:, cp.newaxis, :] + lhs_unit_design[cp.newaxis, :, :] * widths[:, cp.newaxis, :]
-    flat_points = sampled_points.reshape((n_boxes * n_samples, dim))
 
+    for sample_idx in range(n_samples):
+        rows = slice(sample_idx * n_boxes, (sample_idx + 1) * n_boxes)
+        sample_points = flat_points[rows]
+        cp.multiply(widths, lhs_unit_design[sample_idx], out=sample_points)
+        sample_points += boxes_L
+
+    return flat_points
+
+
+def _best_sampled_box_in_chunk(
+    boxes_L,
+    boxes_U,
+    gp,
+    state: SklearnGPState,
+    lhs_unit_design,
+    box_mask=None,
+):
+    n_boxes = _scalar_int(boxes_L.shape[0])
+    n_samples = _scalar_int(lhs_unit_design.shape[0])
+
+    flat_points = _sample_points_for_boxes(boxes_L, boxes_U, lhs_unit_design)
     mu, sigma = _predict_standardized_posterior(flat_points, gp, state)
-    mu = cp.asarray(mu, dtype=cp.float64).reshape((n_boxes, n_samples))
-    sigma = cp.asarray(sigma, dtype=cp.float64).reshape((n_boxes, n_samples))
+    mu = cp.asarray(mu, dtype=cp.float64).reshape((n_samples, n_boxes))
+    sigma = cp.asarray(sigma, dtype=cp.float64).reshape((n_samples, n_boxes))
 
-    sigma_latent = cp.sqrt(cp.maximum(sigma * sigma - state.sigma_n_squared, 1e-12))
+    sigma_latent = cp.empty_like(sigma)
+    cp.multiply(sigma, sigma, out=sigma_latent)
+    sigma_latent -= state.sigma_n_squared
+    cp.maximum(sigma_latent, 1e-12, out=sigma_latent)
+    cp.sqrt(sigma_latent, out=sigma_latent)
+
     ei = expected_improvement(
         mu,
         sigma_latent,
@@ -208,11 +284,175 @@ def _sample_boxes_best_ei(boxes_L, boxes_U, gp, state: SklearnGPState, lhs_unit_
         backend="cupynumeric",
     )
 
-    best_idx = cp.argmax(ei, axis=1).reshape((n_boxes, 1))
-    best_ei = cp.take_along_axis(ei, best_idx, axis=1).reshape((n_boxes,))
-    gather_idx = cp.broadcast_to(best_idx[:, :, cp.newaxis], (n_boxes, 1, dim))
-    best_points = cp.take_along_axis(sampled_points, gather_idx, axis=1).reshape((n_boxes, dim))
-    return best_points, best_ei
+    ei_by_box = ei.T
+    best_sample_by_box = cp.argmax(ei_by_box, axis=1).reshape((n_boxes, 1))
+    best_ei_by_box = cp.take_along_axis(
+        ei_by_box,
+        best_sample_by_box,
+        axis=1,
+    ).reshape((n_boxes,))
+    if box_mask is not None:
+        best_ei_by_box = cp.where(box_mask, best_ei_by_box, -cp.inf)
+
+    best_box_pos = _scalar_int(cp.argmax(best_ei_by_box))
+    best_sample_pos = _scalar_int(best_sample_by_box[best_box_pos, 0])
+    best_row = best_sample_pos * n_boxes + best_box_pos
+
+    return (
+        cp.asarray(flat_points[best_row], dtype=cp.float64).copy(),
+        _scalar_float(best_ei_by_box[best_box_pos]),
+        best_box_pos,
+    )
+
+
+def _copy_selected_box_bounds(bounds_L_window, bounds_U_window, local_indices, n_selected: int, dim: int):
+    if n_selected == _scalar_int(bounds_L_window.shape[0]):
+        return bounds_L_window.copy(), bounds_U_window.copy()
+
+    selected_L = cp.empty((n_selected, dim), dtype=cp.float64)
+    selected_U = cp.empty((n_selected, dim), dtype=cp.float64)
+    local_indices_np = np.asarray(local_indices, dtype=np.int64)
+
+    out_start = 0
+    while out_start < n_selected:
+        src_start = int(local_indices_np[out_start])
+        out_stop = out_start + 1
+        src_stop = src_start + 1
+
+        while out_stop < n_selected and int(local_indices_np[out_stop]) == src_stop:
+            out_stop += 1
+            src_stop += 1
+
+        selected_L[out_start:out_stop] = bounds_L_window[src_start:src_stop]
+        selected_U[out_start:out_stop] = bounds_U_window[src_start:src_stop]
+        out_start = out_stop
+
+    return selected_L, selected_U
+
+
+def _sample_masked_boxes_best_ei(
+    bounds_L,
+    bounds_U,
+    box_mask,
+    gp,
+    state: SklearnGPState,
+    lhs_unit_design,
+    *,
+    sample_batch_bytes: int,
+):
+    box_mask = cp.asarray(box_mask, dtype=bool)
+    n_total = _scalar_int(bounds_L.shape[0])
+    dim = _scalar_int(bounds_L.shape[1])
+    n_samples = _scalar_int(lhs_unit_design.shape[0])
+
+    n_boxes = _scalar_int(cp.sum(box_mask))
+    if n_boxes == 0:
+        return cp.empty((dim,), dtype=cp.float64), float("-inf"), -1
+
+    bytes_per_box = (n_samples + 2) * dim * _FLOAT64_BYTES
+    chunk_size = _chunk_size_for_bytes(bytes_per_box, sample_batch_bytes)
+
+    best_point = None
+    best_ei = float("-inf")
+    best_box_idx = -1
+
+    for start in range(0, n_total, chunk_size):
+        stop = min(start + chunk_size, n_total)
+        mask_window = box_mask[start:stop]
+        n_selected = _scalar_int(cp.sum(mask_window))
+        if n_selected == 0:
+            continue
+
+        bounds_L_window = bounds_L[start:stop]
+        bounds_U_window = bounds_U[start:stop]
+
+        if n_selected > _ROW_COPY_MAX_SELECTED:
+            chunk_point, chunk_ei, chunk_box_pos = _best_sampled_box_in_chunk(
+                bounds_L_window,
+                bounds_U_window,
+                gp,
+                state,
+                lhs_unit_design,
+                box_mask=mask_window,
+            )
+            candidate_box_idx = start + chunk_box_pos
+        else:
+            local_indices = cp.where(mask_window)[0]
+            chunk_L, chunk_U = _copy_selected_box_bounds(
+                bounds_L_window,
+                bounds_U_window,
+                local_indices,
+                n_selected,
+                dim,
+            )
+
+            chunk_point, chunk_ei, chunk_box_pos = _best_sampled_box_in_chunk(
+                chunk_L,
+                chunk_U,
+                gp,
+                state,
+                lhs_unit_design,
+            )
+            candidate_box_idx = start + _scalar_int(local_indices[chunk_box_pos])
+
+        if chunk_ei > best_ei:
+            best_point = chunk_point
+            best_ei = chunk_ei
+            best_box_idx = candidate_box_idx
+        _execute_pending_tasks()
+
+    return best_point, best_ei, best_box_idx
+
+
+def _max_width_for_masked_boxes(
+    bounds_L,
+    bounds_U,
+    box_mask,
+    *,
+    sample_batch_bytes: int,
+):
+    box_mask = cp.asarray(box_mask, dtype=bool)
+    n_total = _scalar_int(bounds_L.shape[0])
+    dim = _scalar_int(bounds_L.shape[1])
+
+    n_boxes = _scalar_int(cp.sum(box_mask))
+    if n_boxes == 0:
+        return cp.zeros((dim,), dtype=cp.float64)
+
+    if n_total <= _CPU_MAX_WIDTH_ROWS:
+        mask_np = np.asarray(box_mask, dtype=bool)
+        widths_np = np.asarray(bounds_U, dtype=np.float64) - np.asarray(bounds_L, dtype=np.float64)
+        return np.max(widths_np[mask_np], axis=0)
+
+    bytes_per_box = 2 * dim * _FLOAT64_BYTES
+    chunk_size = _chunk_size_for_bytes(bytes_per_box, sample_batch_bytes)
+    max_width = cp.full((dim,), -cp.inf, dtype=cp.float64)
+
+    for start in range(0, n_total, chunk_size):
+        stop = min(start + chunk_size, n_total)
+        mask_window = box_mask[start:stop]
+        n_selected = _scalar_int(cp.sum(mask_window))
+        if n_selected == 0:
+            continue
+
+        if n_selected <= _ROW_COPY_MAX_SELECTED:
+            local_indices = cp.where(mask_window)[0]
+            chunk_L, chunk_U = _copy_selected_box_bounds(
+                bounds_L[start:stop],
+                bounds_U[start:stop],
+                local_indices,
+                n_selected,
+                dim,
+            )
+            chunk_width = chunk_U - chunk_L
+        else:
+            chunk_width = bounds_U[start:stop] - bounds_L[start:stop]
+            if n_selected != stop - start:
+                chunk_width = cp.where(mask_window[:, cp.newaxis], chunk_width, -cp.inf)
+        max_width = cp.maximum(max_width, cp.max(chunk_width, axis=0))
+        _execute_pending_tasks()
+
+    return max_width
 
 
 def _build_partition_result(
@@ -251,12 +491,17 @@ def exactbo(
     verbose: bool = False,
     logMask: bool = False,
     normalize_to_unit_cube: bool = False,
+    sample_batch_bytes: int = _DEFAULT_SAMPLE_BATCH_BYTES,
 ) -> BOResult:
     """
     Run ExactBO with the cuPyNumeric backend.
 
     ``backend="auto"`` is still accepted for compatibility, but it must resolve
     to ``"cupynumeric"``.
+
+    ``sample_batch_bytes`` bounds the main per-chunk working buffers used for
+    EI-bound evaluation, box splitting, and LHS sample scoring. Smaller values
+    reduce peak memory at the cost of more chunks.
     """
     backend_info = require_cupynumeric_backend(backend)
     X, search_bounds, dim = _normalize_inputs(X0, bounds, validation=validation)
@@ -285,7 +530,6 @@ def exactbo(
             if physical_bounds is not None
             else X
         )
-        y = _evaluate_objective(objective, X)
 
         if verbose:
             print(f"Iteration {iteration + 1}/{iterations}")
@@ -309,6 +553,7 @@ def exactbo(
             validation=validation,
             verbose=verbose,
             logMask=logMask,
+            sample_batch_bytes=sample_batch_bytes,
         )
 
         Xn = np.asarray(partitioning_result.X, dtype=np.float64).reshape(-1)
@@ -350,6 +595,7 @@ def exactbo_partitioning(
     validation: bool = True,
     verbose: bool = False,
     logMask: bool = False,
+    sample_batch_bytes: int = _DEFAULT_SAMPLE_BATCH_BYTES,
 ) -> BOResult:
     """Run one ExactBO partitioning step on a fitted sklearn-like GP."""
     backend_info = require_cupynumeric_backend(backend)
@@ -384,8 +630,6 @@ def exactbo_partitioning(
     start_time = pytime.perf_counter() if logMask else None
 
     while partition < partitions:
-        n_boxes = _scalar_int(bounds_L.shape[0])
-
         if partition > 0:
             n_target_start = n_target * stride
             idx_best_global_start = idx_best_global_next * stride
@@ -411,6 +655,7 @@ def exactbo_partitioning(
             bounds_U_target,
             state,
             dim,
+            batch_bytes=sample_batch_bytes,
             validation=validation,
         )
         idx_max_ei_hi = _scalar_int(cp.argmax(ei_hi))
@@ -418,24 +663,28 @@ def exactbo_partitioning(
 
         analyze_box_mask = ei_hi >= (max_ei_hi - epsilon_ei)
         analyze_box_mask[preserved_analyze_idx] = True
-        analyze_local_idx = cp.where(analyze_box_mask)[0]
-        n_analyze = _scalar_int(analyze_local_idx.shape[0])
+        n_analyze = _scalar_int(cp.sum(analyze_box_mask))
 
-        analyze_best_points, ei_analyze = _sample_boxes_best_ei(
-            bounds_L_target[analyze_local_idx],
-            bounds_U_target[analyze_local_idx],
+        (
+            best_x_analyze,
+            ei_max_analyze,
+            idx_ei_max_analyze_local,
+        ) = _sample_masked_boxes_best_ei(
+            bounds_L_target,
+            bounds_U_target,
+            analyze_box_mask,
             gp,
             state,
             lhs_unit_design,
+            sample_batch_bytes=sample_batch_bytes,
         )
-        idx_ei_max_analyze = _scalar_int(cp.argmax(ei_analyze))
-        ei_max_analyze = _scalar_float(ei_analyze[idx_ei_max_analyze])
-        idx_ei_max_analyze_local = _scalar_int(analyze_local_idx[idx_ei_max_analyze])
-        best_x_analyze = cp.asarray(analyze_best_points[idx_ei_max_analyze], dtype=cp.float64)
         best_x = best_x_analyze
         best_ei_scaled = ei_max_analyze
 
-        w_max_ei_analyzed = bounds_U_target[idx_ei_max_analyze_local] - bounds_L_target[idx_ei_max_analyze_local]
+        w_max_ei_analyzed = (
+            bounds_U_target[idx_ei_max_analyze_local]
+            - bounds_L_target[idx_ei_max_analyze_local]
+        )
         active_boxes_mask = ei_hi > (ei_max_analyze + epsilon_ei)
         n_active = _scalar_int(cp.sum(active_boxes_mask))
 
@@ -450,24 +699,27 @@ def exactbo_partitioning(
             )
 
         active_boxes_mask[idx_ei_max_analyze_local] = True
-        active_local_idx = cp.where(active_boxes_mask)[0]
-        n_active = _scalar_int(active_local_idx.shape[0])
+        n_active = _scalar_int(cp.sum(active_boxes_mask))
 
-        active_best_points, ei_active = _sample_boxes_best_ei(
-            bounds_L_target[active_local_idx],
-            bounds_U_target[active_local_idx],
+        (
+            best_x_active,
+            ei_max_active,
+            idx_best_local,
+        ) = _sample_masked_boxes_best_ei(
+            bounds_L_target,
+            bounds_U_target,
+            active_boxes_mask,
             gp,
             state,
             lhs_unit_design,
+            sample_batch_bytes=sample_batch_bytes,
         )
-        idx_best = _scalar_int(cp.argmax(ei_active))
-        ei_max_active = _scalar_float(ei_active[idx_best])
-        idx_best_local = _scalar_int(active_local_idx[idx_best])
-        best_x_active = cp.asarray(active_best_points[idx_best], dtype=cp.float64)
         best_x = best_x_active
         best_ei_scaled = ei_max_active
 
-        w_max_ei_active = bounds_U_target[idx_best_local] - bounds_L_target[idx_best_local]
+        w_max_ei_active = (
+            bounds_U_target[idx_best_local] - bounds_L_target[idx_best_local]
+        )
         target_boxes_mask = ei_hi > (ei_max_active + epsilon_ei)
         n_target = _scalar_int(cp.sum(target_boxes_mask))
 
@@ -487,7 +739,12 @@ def exactbo_partitioning(
         idx_best_global_next = _scalar_int(cp.sum(target_boxes_mask[:idx_best_global]))
 
         if verbose:
-            target_width = cp.max(bounds_U_target[target_boxes_mask] - bounds_L_target[target_boxes_mask], axis=0)
+            target_width = _max_width_for_masked_boxes(
+                bounds_L_target,
+                bounds_U_target,
+                target_boxes_mask,
+                sample_batch_bytes=sample_batch_bytes,
+            )
             print(
                 f"  Analyzed: {n_analyze}, Active: {n_active}, Target: {n_target}, "
                 f"Max EI_hi: {max_ei_hi:.6f}, Max EI Active: {ei_max_active:.6f}, "
@@ -498,7 +755,7 @@ def exactbo_partitioning(
         n_total += n_target * (2 * dim)
 
         if partition < partitions:
-            bounds_L, bounds_U = split_boxes(
+            next_bounds_L, next_bounds_U = split_boxes(
                 bounds_L_target,
                 bounds_U_target,
                 target_boxes_mask,
@@ -508,7 +765,13 @@ def exactbo_partitioning(
                 keep_inactive=False,
                 backend="cupynumeric",
                 validation=validation,
+                batch_size=_split_batch_size(dim, stride, sample_batch_bytes),
             )
+            del bounds_L, bounds_U, bounds_L_target, bounds_U_target
+            del analyze_box_mask, active_boxes_mask
+            del target_boxes_mask, ei_hi
+            bounds_L, bounds_U = next_bounds_L, next_bounds_U
+            _execute_pending_tasks()
 
     return _build_partition_result(
         best_x,

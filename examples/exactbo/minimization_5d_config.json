@@ -1,0 +1,8 @@
+{
+  "epsilon_X": 1e-5,
+  "epsilon_ei": 0.001,
+  "max_iters": 3,
+  "max_partitions": 100,
+  "log_filename": "",
+  "verbose": true
+}
