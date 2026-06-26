@@ -12,3 +12,4 @@ cufile.log
 examples/exactbo/logs/minimization_2d_visualization.json
 examples/exactbo/profiles/
 .vscode/*
+native/build/
