@@ -1,0 +1,389 @@
+job_id=18983373
+host=t001
+workdir=/scratch/user/juan.florez/tamubo
+MPI_RANKS=2
+DATA_DIR=/scratch/user/juan.florez/tamubo/native/data/matrix_benchmark_18983373
+CUDA_ARCHITECTURES=75
+OMP_NUM_THREADS=2
+
+Currently Loaded Modules:
+  1) GCCcore/14.3.0   8) libpciaccess/0.18.1  15) PRRTE/3.0.11
+  2) zlib/1.3.1       9) hwloc/2.12.1         16) UCC/1.4.4
+  3) binutils/2.44   10) OpenSSL/3            17) OpenMPI/5.0.8
+  4) GCC/14.3.0      11) libevent/2.1.12      18) Ninja/1.13.0
+  5) numactl/2.0.19  12) UCX/1.19.0           19) CUDA/13.1.0
+  6) XZ/5.8.1        13) libfabric/2.1.0
+  7) libxml2/2.14.3  14) PMIx/5.0.8
+
+ 
+
+/sw/eb/sw/CUDA/13.1.0/bin/nvcc
+nvcc: NVIDIA (R) Cuda compiler driver
+Copyright (c) 2005-2025 NVIDIA Corporation
+Built on Fri_Nov__7_07:23:37_PM_PST_2025
+Cuda compilation tools, release 13.1, V13.1.80
+Build cuda_13.1.r13.1/compiler.36836380_0
+/sw/eb/sw/OpenMPI/5.0.8-GCC-14.3.0/bin/mpicxx
+g++ (GCC) 14.3.0
+Copyright (C) 2024 Free Software Foundation, Inc.
+This is free software; see the source for copying conditions.  There is NO
+warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+
+/usr/bin/cmake
+cmake version 3.26.5
+
+CMake suite maintained and supported by Kitware (kitware.com/cmake).
+/sw/eb/sw/Ninja/1.13.0-GCCcore-14.3.0/bin/ninja
+1.13.0
+GPU 0: Tesla T4 (UUID: GPU-b30bc463-5d5c-2df9-966e-951d066c6f0e)
+GPU 1: Tesla T4 (UUID: GPU-b5446c0d-1209-fae9-2461-f0cee19bdbc6)
+-- Configuring done (45.8s)
+-- Generating done (0.5s)
+-- Build files have been written to: /scratch/user/juan.florez/tamubo/native/build
+ninja: no work to do.
+wrote 4096x4096 matrices
+matrix_products_mpi: mpi_size=2 device_count=2 execution=concurrent AB/BA
+rank 0 starting AB on pid=2477335 launch_cpu=16 gpu_device=0 gpu_name="Tesla T4" matrix=4096x4096 bytes_per_matrix=0.125 GiB repeats=20 cycles=10
+rank 0 memory [AB cycle 1/10 before cudaMalloc] used=0.102 GiB free=15.454 GiB total=15.556 GiB
+rank 0 memory [AB cycle 1/10 after cudaMalloc left/right/result] used=0.477 GiB free=15.079 GiB total=15.556 GiB
+rank 1 starting BA on pid=2477336 launch_cpu=18 gpu_device=1 gpu_name="Tesla T4" matrix=4096x4096 bytes_per_matrix=0.125 GiB repeats=20 cycles=10
+rank 1 memory [BA cycle 1/10 before cudaMalloc] used=0.102 GiB free=15.454 GiB total=15.556 GiB
+rank 1 memory [BA cycle 1/10 after cudaMalloc left/right/result] used=0.477 GiB free=15.079 GiB total=15.556 GiB
+rank 0 memory [AB cycle 1/10 after host-to-device copies] used=0.477 GiB free=15.079 GiB total=15.556 GiB
+rank 1 memory [BA cycle 1/10 after host-to-device copies] used=0.477 GiB free=15.079 GiB total=15.556 GiB
+rank 0 memory [AB cycle 1/10 after kernel] used=0.477 GiB free=15.079 GiB total=15.556 GiB
+rank 0 holding AB cycle 1/10 allocations for 1000 ms
+rank 1 memory [BA cycle 1/10 after kernel] used=0.477 GiB free=15.079 GiB total=15.556 GiB
+rank 1 holding BA cycle 1/10 allocations for 1000 ms
+rank 0 memory [AB cycle 1/10 after cudaFree] used=0.102 GiB free=15.454 GiB total=15.556 GiB
+rank 0 finished AB cycle 1/10 seconds=12.0495 approx_gflop_s=228.124
+rank 0 memory [AB cycle 2/10 before cudaMalloc] used=0.102 GiB free=15.454 GiB total=15.556 GiB
+rank 0 memory [AB cycle 2/10 after cudaMalloc left/right/result] used=0.477 GiB free=15.079 GiB total=15.556 GiB
+rank 0 memory [AB cycle 2/10 after host-to-device copies] used=0.477 GiB free=15.079 GiB total=15.556 GiB
+rank 1 memory [BA cycle 1/10 after cudaFree] used=0.102 GiB free=15.454 GiB total=15.556 GiB
+rank 1 finished BA cycle 1/10 seconds=12.4067 approx_gflop_s=221.556
+rank 1 memory [BA cycle 2/10 before cudaMalloc] used=0.102 GiB free=15.454 GiB total=15.556 GiB
+rank 1 memory [BA cycle 2/10 after cudaMalloc left/right/result] used=0.477 GiB free=15.079 GiB total=15.556 GiB
+rank 1 memory [BA cycle 2/10 after host-to-device copies] used=0.477 GiB free=15.079 GiB total=15.556 GiB
+rank 0 memory [AB cycle 2/10 after kernel] used=0.477 GiB free=15.079 GiB total=15.556 GiB
+rank 0 holding AB cycle 2/10 allocations for 1000 ms
+rank 1 memory [BA cycle 2/10 after kernel] used=0.477 GiB free=15.079 GiB total=15.556 GiB
+rank 1 holding BA cycle 2/10 allocations for 1000 ms
+rank 0 memory [AB cycle 2/10 after cudaFree] used=0.102 GiB free=15.454 GiB total=15.556 GiB
+rank 0 finished AB cycle 2/10 seconds=12.0536 approx_gflop_s=228.046
+rank 0 memory [AB cycle 3/10 before cudaMalloc] used=0.102 GiB free=15.454 GiB total=15.556 GiB
+rank 0 memory [AB cycle 3/10 after cudaMalloc left/right/result] used=0.477 GiB free=15.079 GiB total=15.556 GiB
+rank 0 memory [AB cycle 3/10 after host-to-device copies] used=0.477 GiB free=15.079 GiB total=15.556 GiB
+rank 1 memory [BA cycle 2/10 after cudaFree] used=0.102 GiB free=15.454 GiB total=15.556 GiB
+rank 1 finished BA cycle 2/10 seconds=12.4192 approx_gflop_s=221.333
+rank 1 memory [BA cycle 3/10 before cudaMalloc] used=0.102 GiB free=15.454 GiB total=15.556 GiB
+rank 1 memory [BA cycle 3/10 after cudaMalloc left/right/result] used=0.477 GiB free=15.079 GiB total=15.556 GiB
+rank 1 memory [BA cycle 3/10 after host-to-device copies] used=0.477 GiB free=15.079 GiB total=15.556 GiB
+rank 0 memory [AB cycle 3/10 after kernel] used=0.477 GiB free=15.079 GiB total=15.556 GiB
+rank 0 holding AB cycle 3/10 allocations for 1000 ms
+rank 0 memory [AB cycle 3/10 after cudaFree] used=0.102 GiB free=15.454 GiB total=15.556 GiB
+rank 0 finished AB cycle 3/10 seconds=12.1727 approx_gflop_s=225.815
+rank 0 memory [AB cycle 4/10 before cudaMalloc] used=0.102 GiB free=15.454 GiB total=15.556 GiB
+rank 0 memory [AB cycle 4/10 after cudaMalloc left/right/result] used=0.477 GiB free=15.079 GiB total=15.556 GiB
+rank 0 memory [AB cycle 4/10 after host-to-device copies] used=0.477 GiB free=15.079 GiB total=15.556 GiB
+rank 1 memory [BA cycle 3/10 after kernel] used=0.477 GiB free=15.079 GiB total=15.556 GiB
+rank 1 holding BA cycle 3/10 allocations for 1000 ms
+rank 1 memory [BA cycle 3/10 after cudaFree] used=0.102 GiB free=15.454 GiB total=15.556 GiB
+rank 1 finished BA cycle 3/10 seconds=12.5281 approx_gflop_s=219.41
+rank 1 memory [BA cycle 4/10 before cudaMalloc] used=0.102 GiB free=15.454 GiB total=15.556 GiB
+rank 1 memory [BA cycle 4/10 after cudaMalloc left/right/result] used=0.477 GiB free=15.079 GiB total=15.556 GiB
+rank 1 memory [BA cycle 4/10 after host-to-device copies] used=0.477 GiB free=15.079 GiB total=15.556 GiB
+rank 0 memory [AB cycle 4/10 after kernel] used=0.477 GiB free=15.079 GiB total=15.556 GiB
+rank 0 holding AB cycle 4/10 allocations for 1000 ms
+rank 0 memory [AB cycle 4/10 after cudaFree] used=0.102 GiB free=15.454 GiB total=15.556 GiB
+rank 0 finished AB cycle 4/10 seconds=12.2733 approx_gflop_s=223.965
+rank 0 memory [AB cycle 5/10 before cudaMalloc] used=0.102 GiB free=15.454 GiB total=15.556 GiB
+rank 0 memory [AB cycle 5/10 after cudaMalloc left/right/result] used=0.477 GiB free=15.079 GiB total=15.556 GiB
+rank 0 memory [AB cycle 5/10 after host-to-device copies] used=0.477 GiB free=15.079 GiB total=15.556 GiB
+rank 1 memory [BA cycle 4/10 after kernel] used=0.477 GiB free=15.079 GiB total=15.556 GiB
+rank 1 holding BA cycle 4/10 allocations for 1000 ms
+rank 1 memory [BA cycle 4/10 after cudaFree] used=0.102 GiB free=15.454 GiB total=15.556 GiB
+rank 1 finished BA cycle 4/10 seconds=12.6226 approx_gflop_s=217.766
+rank 1 memory [BA cycle 5/10 before cudaMalloc] used=0.102 GiB free=15.454 GiB total=15.556 GiB
+rank 1 memory [BA cycle 5/10 after cudaMalloc left/right/result] used=0.477 GiB free=15.079 GiB total=15.556 GiB
+rank 1 memory [BA cycle 5/10 after host-to-device copies] used=0.477 GiB free=15.079 GiB total=15.556 GiB
+rank 0 memory [AB cycle 5/10 after kernel] used=0.477 GiB free=15.079 GiB total=15.556 GiB
+rank 0 holding AB cycle 5/10 allocations for 1000 ms
+rank 0 memory [AB cycle 5/10 after cudaFree] used=0.102 GiB free=15.454 GiB total=15.556 GiB
+rank 0 finished AB cycle 5/10 seconds=12.3391 approx_gflop_s=222.769
+rank 0 memory [AB cycle 6/10 before cudaMalloc] used=0.102 GiB free=15.454 GiB total=15.556 GiB
+rank 0 memory [AB cycle 6/10 after cudaMalloc left/right/result] used=0.477 GiB free=15.079 GiB total=15.556 GiB
+rank 0 memory [AB cycle 6/10 after host-to-device copies] used=0.477 GiB free=15.079 GiB total=15.556 GiB
+rank 1 memory [BA cycle 5/10 after kernel] used=0.477 GiB free=15.079 GiB total=15.556 GiB
+rank 1 holding BA cycle 5/10 allocations for 1000 ms
+rank 1 memory [BA cycle 5/10 after cudaFree] used=0.102 GiB free=15.454 GiB total=15.556 GiB
+rank 1 finished BA cycle 5/10 seconds=12.7052 approx_gflop_s=216.35
+rank 1 memory [BA cycle 6/10 before cudaMalloc] used=0.102 GiB free=15.454 GiB total=15.556 GiB
+rank 1 memory [BA cycle 6/10 after cudaMalloc left/right/result] used=0.477 GiB free=15.079 GiB total=15.556 GiB
+rank 1 memory [BA cycle 6/10 after host-to-device copies] used=0.477 GiB free=15.079 GiB total=15.556 GiB
+rank 0 memory [AB cycle 6/10 after kernel] used=0.477 GiB free=15.079 GiB total=15.556 GiB
+rank 0 holding AB cycle 6/10 allocations for 1000 ms
+rank 0 memory [AB cycle 6/10 after cudaFree] used=0.102 GiB free=15.454 GiB total=15.556 GiB
+rank 0 finished AB cycle 6/10 seconds=12.41 approx_gflop_s=221.497
+rank 0 memory [AB cycle 7/10 before cudaMalloc] used=0.102 GiB free=15.454 GiB total=15.556 GiB
+rank 0 memory [AB cycle 7/10 after cudaMalloc left/right/result] used=0.477 GiB free=15.079 GiB total=15.556 GiB
+rank 0 memory [AB cycle 7/10 after host-to-device copies] used=0.477 GiB free=15.079 GiB total=15.556 GiB
+rank 1 memory [BA cycle 6/10 after kernel] used=0.477 GiB free=15.079 GiB total=15.556 GiB
+rank 1 holding BA cycle 6/10 allocations for 1000 ms
+rank 1 memory [BA cycle 6/10 after cudaFree] used=0.102 GiB free=15.454 GiB total=15.556 GiB
+rank 1 finished BA cycle 6/10 seconds=12.8521 approx_gflop_s=213.878
+rank 1 memory [BA cycle 7/10 before cudaMalloc] used=0.102 GiB free=15.454 GiB total=15.556 GiB
+rank 1 memory [BA cycle 7/10 after cudaMalloc left/right/result] used=0.477 GiB free=15.079 GiB total=15.556 GiB
+rank 1 memory [BA cycle 7/10 after host-to-device copies] used=0.477 GiB free=15.079 GiB total=15.556 GiB
+rank 0 memory [AB cycle 7/10 after kernel] used=0.477 GiB free=15.079 GiB total=15.556 GiB
+rank 0 holding AB cycle 7/10 allocations for 1000 ms
+rank 0 memory [AB cycle 7/10 after cudaFree] used=0.102 GiB free=15.454 GiB total=15.556 GiB
+rank 0 finished AB cycle 7/10 seconds=12.448 approx_gflop_s=220.82
+rank 0 memory [AB cycle 8/10 before cudaMalloc] used=0.102 GiB free=15.454 GiB total=15.556 GiB
+rank 0 memory [AB cycle 8/10 after cudaMalloc left/right/result] used=0.477 GiB free=15.079 GiB total=15.556 GiB
+rank 0 memory [AB cycle 8/10 after host-to-device copies] used=0.477 GiB free=15.079 GiB total=15.556 GiB
+rank 1 memory [BA cycle 7/10 after kernel] used=0.477 GiB free=15.079 GiB total=15.556 GiB
+rank 1 holding BA cycle 7/10 allocations for 1000 ms
+rank 1 memory [BA cycle 7/10 after cudaFree] used=0.102 GiB free=15.454 GiB total=15.556 GiB
+rank 1 finished BA cycle 7/10 seconds=12.99 approx_gflop_s=211.608
+rank 1 memory [BA cycle 8/10 before cudaMalloc] used=0.102 GiB free=15.454 GiB total=15.556 GiB
+rank 1 memory [BA cycle 8/10 after cudaMalloc left/right/result] used=0.477 GiB free=15.079 GiB total=15.556 GiB
+rank 1 memory [BA cycle 8/10 after host-to-device copies] used=0.477 GiB free=15.079 GiB total=15.556 GiB
+rank 0 memory [AB cycle 8/10 after kernel] used=0.477 GiB free=15.079 GiB total=15.556 GiB
+rank 0 holding AB cycle 8/10 allocations for 1000 ms
+rank 0 memory [AB cycle 8/10 after cudaFree] used=0.102 GiB free=15.454 GiB total=15.556 GiB
+rank 0 finished AB cycle 8/10 seconds=12.4998 approx_gflop_s=219.906
+rank 0 memory [AB cycle 9/10 before cudaMalloc] used=0.102 GiB free=15.454 GiB total=15.556 GiB
+rank 0 memory [AB cycle 9/10 after cudaMalloc left/right/result] used=0.477 GiB free=15.079 GiB total=15.556 GiB
+rank 0 memory [AB cycle 9/10 after host-to-device copies] used=0.477 GiB free=15.079 GiB total=15.556 GiB
+rank 1 memory [BA cycle 8/10 after kernel] used=0.477 GiB free=15.079 GiB total=15.556 GiB
+rank 1 holding BA cycle 8/10 allocations for 1000 ms
+rank 1 memory [BA cycle 8/10 after cudaFree] used=0.102 GiB free=15.454 GiB total=15.556 GiB
+rank 1 finished BA cycle 8/10 seconds=13.0006 approx_gflop_s=211.434
+rank 1 memory [BA cycle 9/10 before cudaMalloc] used=0.102 GiB free=15.454 GiB total=15.556 GiB
+rank 1 memory [BA cycle 9/10 after cudaMalloc left/right/result] used=0.477 GiB free=15.079 GiB total=15.556 GiB
+rank 1 memory [BA cycle 9/10 after host-to-device copies] used=0.477 GiB free=15.079 GiB total=15.556 GiB
+rank 0 memory [AB cycle 9/10 after kernel] used=0.477 GiB free=15.079 GiB total=15.556 GiB
+rank 0 holding AB cycle 9/10 allocations for 1000 ms
+rank 0 memory [AB cycle 9/10 after cudaFree] used=0.102 GiB free=15.454 GiB total=15.556 GiB
+rank 0 finished AB cycle 9/10 seconds=12.5539 approx_gflop_s=218.959
+rank 0 memory [AB cycle 10/10 before cudaMalloc] used=0.102 GiB free=15.454 GiB total=15.556 GiB
+rank 0 memory [AB cycle 10/10 after cudaMalloc left/right/result] used=0.477 GiB free=15.079 GiB total=15.556 GiB
+rank 0 memory [AB cycle 10/10 after host-to-device copies] used=0.477 GiB free=15.079 GiB total=15.556 GiB
+rank 1 memory [BA cycle 9/10 after kernel] used=0.477 GiB free=15.079 GiB total=15.556 GiB
+rank 1 holding BA cycle 9/10 allocations for 1000 ms
+rank 1 memory [BA cycle 9/10 after cudaFree] used=0.102 GiB free=15.454 GiB total=15.556 GiB
+rank 1 finished BA cycle 9/10 seconds=13.0389 approx_gflop_s=210.814
+rank 1 memory [BA cycle 10/10 before cudaMalloc] used=0.102 GiB free=15.454 GiB total=15.556 GiB
+rank 1 memory [BA cycle 10/10 after cudaMalloc left/right/result] used=0.477 GiB free=15.079 GiB total=15.556 GiB
+rank 1 memory [BA cycle 10/10 after host-to-device copies] used=0.477 GiB free=15.079 GiB total=15.556 GiB
+rank 0 memory [AB cycle 10/10 after kernel] used=0.477 GiB free=15.079 GiB total=15.556 GiB
+rank 0 holding AB cycle 10/10 allocations for 1000 ms
+rank 0 memory [AB cycle 10/10 after device-to-host copy] used=0.477 GiB free=15.079 GiB total=15.556 GiB
+rank 0 memory [AB cycle 10/10 after cudaFree] used=0.102 GiB free=15.454 GiB total=15.556 GiB
+rank 0 finished AB cycle 10/10 seconds=12.559 approx_gflop_s=218.87
+rank 0 finished all AB cycles total_kernel_seconds=123.359 aggregate_approx_gflop_s=222.828
+rank 0 wrote AB to /scratch/user/juan.florez/tamubo/native/data/matrix_benchmark_18983373/AB_tiled.bin
+rank 1 memory [BA cycle 10/10 after kernel] used=0.477 GiB free=15.079 GiB total=15.556 GiB
+rank 1 holding BA cycle 10/10 allocations for 1000 ms
+rank 1 memory [BA cycle 10/10 after device-to-host copy] used=0.477 GiB free=15.079 GiB total=15.556 GiB
+rank 1 memory [BA cycle 10/10 after cudaFree] used=0.102 GiB free=15.454 GiB total=15.556 GiB
+rank 1 finished BA cycle 10/10 seconds=13.1152 approx_gflop_s=209.587
+rank 1 finished all BA cycles total_kernel_seconds=127.679 aggregate_approx_gflop_s=215.289
+rank 1 wrote BA to /scratch/user/juan.florez/tamubo/native/data/matrix_benchmark_18983373/BA_tiled.bin
+matrix_products_cublas_mpi: mpi_size=2 device_count=2 execution=concurrent AB/BA
+rank 0 starting cuBLAS AB on pid=2477459 launch_cpu=16 gpu_device=0 gpu_name="Tesla T4" matrix=4096x4096 bytes_per_matrix=0.125 GiB repeats=20 cycles=10
+rank 0 memory [cuBLAS AB cycle 1/10 before cublasCreate] used=0.102 GiB free=15.454 GiB total=15.556 GiB
+rank 1 starting cuBLAS BA on pid=2477460 launch_cpu=18 gpu_device=1 gpu_name="Tesla T4" matrix=4096x4096 bytes_per_matrix=0.125 GiB repeats=20 cycles=10
+rank 1 memory [cuBLAS BA cycle 1/10 before cublasCreate] used=0.102 GiB free=15.454 GiB total=15.556 GiB
+rank 1 memory [cuBLAS BA cycle 1/10 after cublasCreate] used=0.114 GiB free=15.442 GiB total=15.556 GiB
+rank 0 memory [cuBLAS AB cycle 1/10 after cublasCreate] used=0.114 GiB free=15.442 GiB total=15.556 GiB
+rank 1 memory [cuBLAS BA cycle 1/10 after cudaMalloc left/right/result] used=0.489 GiB free=15.067 GiB total=15.556 GiB
+rank 0 memory [cuBLAS AB cycle 1/10 after cudaMalloc left/right/result] used=0.489 GiB free=15.067 GiB total=15.556 GiB
+rank 0 memory [cuBLAS AB cycle 1/10 after host-to-device copies] used=0.489 GiB free=15.067 GiB total=15.556 GiB
+rank 1 memory [cuBLAS BA cycle 1/10 after host-to-device copies] used=0.489 GiB free=15.067 GiB total=15.556 GiB
+rank 0 memory [cuBLAS AB cycle 1/10 after cublasDgemm] used=0.489 GiB free=15.067 GiB total=15.556 GiB
+rank 0 holding cuBLAS AB cycle 1/10 allocations for 1000 ms
+rank 1 memory [cuBLAS BA cycle 1/10 after cublasDgemm] used=0.489 GiB free=15.067 GiB total=15.556 GiB
+rank 1 holding cuBLAS BA cycle 1/10 allocations for 1000 ms
+rank 1 memory [cuBLAS BA cycle 1/10 after cublasDestroy] used=0.479 GiB free=15.077 GiB total=15.556 GiB
+rank 0 memory [cuBLAS AB cycle 1/10 after cublasDestroy] used=0.479 GiB free=15.077 GiB total=15.556 GiB
+rank 1 memory [cuBLAS BA cycle 1/10 after cudaFree] used=0.104 GiB free=15.452 GiB total=15.556 GiB
+rank 1 finished cuBLAS BA cycle 1/10 seconds=15.0459 approx_gflop_s=182.692
+rank 1 memory [cuBLAS BA cycle 2/10 before cublasCreate] used=0.104 GiB free=15.452 GiB total=15.556 GiB
+rank 0 memory [cuBLAS AB cycle 1/10 after cudaFree] used=0.104 GiB free=15.452 GiB total=15.556 GiB
+rank 0 finished cuBLAS AB cycle 1/10 seconds=15.0464 approx_gflop_s=182.686
+rank 0 memory [cuBLAS AB cycle 2/10 before cublasCreate] used=0.104 GiB free=15.452 GiB total=15.556 GiB
+rank 1 memory [cuBLAS BA cycle 2/10 after cublasCreate] used=0.114 GiB free=15.442 GiB total=15.556 GiB
+rank 0 memory [cuBLAS AB cycle 2/10 after cublasCreate] used=0.114 GiB free=15.442 GiB total=15.556 GiB
+rank 1 memory [cuBLAS BA cycle 2/10 after cudaMalloc left/right/result] used=0.489 GiB free=15.067 GiB total=15.556 GiB
+rank 0 memory [cuBLAS AB cycle 2/10 after cudaMalloc left/right/result] used=0.489 GiB free=15.067 GiB total=15.556 GiB
+rank 0 memory [cuBLAS AB cycle 2/10 after host-to-device copies] used=0.489 GiB free=15.067 GiB total=15.556 GiB
+rank 1 memory [cuBLAS BA cycle 2/10 after host-to-device copies] used=0.489 GiB free=15.067 GiB total=15.556 GiB
+rank 0 memory [cuBLAS AB cycle 2/10 after cublasDgemm] used=0.489 GiB free=15.067 GiB total=15.556 GiB
+rank 0 holding cuBLAS AB cycle 2/10 allocations for 1000 ms
+rank 1 memory [cuBLAS BA cycle 2/10 after cublasDgemm] used=0.489 GiB free=15.067 GiB total=15.556 GiB
+rank 1 holding cuBLAS BA cycle 2/10 allocations for 1000 ms
+rank 0 memory [cuBLAS AB cycle 2/10 after cublasDestroy] used=0.479 GiB free=15.077 GiB total=15.556 GiB
+rank 0 memory [cuBLAS AB cycle 2/10 after cudaFree] used=0.104 GiB free=15.452 GiB total=15.556 GiB
+rank 0 finished cuBLAS AB cycle 2/10 seconds=10.951 approx_gflop_s=251.008
+rank 0 memory [cuBLAS AB cycle 3/10 before cublasCreate] used=0.104 GiB free=15.452 GiB total=15.556 GiB
+rank 0 memory [cuBLAS AB cycle 3/10 after cublasCreate] used=0.114 GiB free=15.442 GiB total=15.556 GiB
+rank 0 memory [cuBLAS AB cycle 3/10 after cudaMalloc left/right/result] used=0.489 GiB free=15.067 GiB total=15.556 GiB
+rank 0 memory [cuBLAS AB cycle 3/10 after host-to-device copies] used=0.489 GiB free=15.067 GiB total=15.556 GiB
+rank 1 memory [cuBLAS BA cycle 2/10 after cublasDestroy] used=0.479 GiB free=15.077 GiB total=15.556 GiB
+rank 1 memory [cuBLAS BA cycle 2/10 after cudaFree] used=0.104 GiB free=15.452 GiB total=15.556 GiB
+rank 1 finished cuBLAS BA cycle 2/10 seconds=11.0436 approx_gflop_s=248.902
+rank 1 memory [cuBLAS BA cycle 3/10 before cublasCreate] used=0.104 GiB free=15.452 GiB total=15.556 GiB
+rank 1 memory [cuBLAS BA cycle 3/10 after cublasCreate] used=0.114 GiB free=15.442 GiB total=15.556 GiB
+rank 1 memory [cuBLAS BA cycle 3/10 after cudaMalloc left/right/result] used=0.489 GiB free=15.067 GiB total=15.556 GiB
+rank 1 memory [cuBLAS BA cycle 3/10 after host-to-device copies] used=0.489 GiB free=15.067 GiB total=15.556 GiB
+rank 0 memory [cuBLAS AB cycle 3/10 after cublasDgemm] used=0.489 GiB free=15.067 GiB total=15.556 GiB
+rank 0 holding cuBLAS AB cycle 3/10 allocations for 1000 ms
+rank 1 memory [cuBLAS BA cycle 3/10 after cublasDgemm] used=0.489 GiB free=15.067 GiB total=15.556 GiB
+rank 1 holding cuBLAS BA cycle 3/10 allocations for 1000 ms
+rank 0 memory [cuBLAS AB cycle 3/10 after cublasDestroy] used=0.479 GiB free=15.077 GiB total=15.556 GiB
+rank 0 memory [cuBLAS AB cycle 3/10 after cudaFree] used=0.104 GiB free=15.452 GiB total=15.556 GiB
+rank 0 finished cuBLAS AB cycle 3/10 seconds=10.9356 approx_gflop_s=251.362
+rank 0 memory [cuBLAS AB cycle 4/10 before cublasCreate] used=0.104 GiB free=15.452 GiB total=15.556 GiB
+rank 0 memory [cuBLAS AB cycle 4/10 after cublasCreate] used=0.114 GiB free=15.442 GiB total=15.556 GiB
+rank 0 memory [cuBLAS AB cycle 4/10 after cudaMalloc left/right/result] used=0.489 GiB free=15.067 GiB total=15.556 GiB
+rank 0 memory [cuBLAS AB cycle 4/10 after host-to-device copies] used=0.489 GiB free=15.067 GiB total=15.556 GiB
+rank 1 memory [cuBLAS BA cycle 3/10 after cublasDestroy] used=0.479 GiB free=15.077 GiB total=15.556 GiB
+rank 1 memory [cuBLAS BA cycle 3/10 after cudaFree] used=0.104 GiB free=15.452 GiB total=15.556 GiB
+rank 1 finished cuBLAS BA cycle 3/10 seconds=10.9145 approx_gflop_s=251.846
+rank 1 memory [cuBLAS BA cycle 4/10 before cublasCreate] used=0.104 GiB free=15.452 GiB total=15.556 GiB
+rank 1 memory [cuBLAS BA cycle 4/10 after cublasCreate] used=0.114 GiB free=15.442 GiB total=15.556 GiB
+rank 1 memory [cuBLAS BA cycle 4/10 after cudaMalloc left/right/result] used=0.489 GiB free=15.067 GiB total=15.556 GiB
+rank 1 memory [cuBLAS BA cycle 4/10 after host-to-device copies] used=0.489 GiB free=15.067 GiB total=15.556 GiB
+rank 1 memory [cuBLAS BA cycle 4/10 after cublasDgemm] used=0.489 GiB free=15.067 GiB total=15.556 GiB
+rank 1 holding cuBLAS BA cycle 4/10 allocations for 1000 ms
+rank 0 memory [cuBLAS AB cycle 4/10 after cublasDgemm] used=0.489 GiB free=15.067 GiB total=15.556 GiB
+rank 0 holding cuBLAS AB cycle 4/10 allocations for 1000 ms
+rank 1 memory [cuBLAS BA cycle 4/10 after cublasDestroy] used=0.479 GiB free=15.077 GiB total=15.556 GiB
+rank 1 memory [cuBLAS BA cycle 4/10 after cudaFree] used=0.104 GiB free=15.452 GiB total=15.556 GiB
+rank 1 finished cuBLAS BA cycle 4/10 seconds=10.8941 approx_gflop_s=252.318
+rank 1 memory [cuBLAS BA cycle 5/10 before cublasCreate] used=0.104 GiB free=15.452 GiB total=15.556 GiB
+rank 1 memory [cuBLAS BA cycle 5/10 after cublasCreate] used=0.114 GiB free=15.442 GiB total=15.556 GiB
+rank 1 memory [cuBLAS BA cycle 5/10 after cudaMalloc left/right/result] used=0.489 GiB free=15.067 GiB total=15.556 GiB
+rank 0 memory [cuBLAS AB cycle 4/10 after cublasDestroy] used=0.479 GiB free=15.077 GiB total=15.556 GiB
+rank 0 memory [cuBLAS AB cycle 4/10 after cudaFree] used=0.104 GiB free=15.452 GiB total=15.556 GiB
+rank 0 finished cuBLAS AB cycle 4/10 seconds=10.9883 approx_gflop_s=250.155
+rank 0 memory [cuBLAS AB cycle 5/10 before cublasCreate] used=0.104 GiB free=15.452 GiB total=15.556 GiB
+rank 0 memory [cuBLAS AB cycle 5/10 after cublasCreate] used=0.114 GiB free=15.442 GiB total=15.556 GiB
+rank 0 memory [cuBLAS AB cycle 5/10 after cudaMalloc left/right/result] used=0.489 GiB free=15.067 GiB total=15.556 GiB
+rank 1 memory [cuBLAS BA cycle 5/10 after host-to-device copies] used=0.489 GiB free=15.067 GiB total=15.556 GiB
+rank 0 memory [cuBLAS AB cycle 5/10 after host-to-device copies] used=0.489 GiB free=15.067 GiB total=15.556 GiB
+rank 1 memory [cuBLAS BA cycle 5/10 after cublasDgemm] used=0.489 GiB free=15.067 GiB total=15.556 GiB
+rank 1 holding cuBLAS BA cycle 5/10 allocations for 1000 ms
+rank 0 memory [cuBLAS AB cycle 5/10 after cublasDgemm] used=0.489 GiB free=15.067 GiB total=15.556 GiB
+rank 0 holding cuBLAS AB cycle 5/10 allocations for 1000 ms
+rank 1 memory [cuBLAS BA cycle 5/10 after cublasDestroy] used=0.479 GiB free=15.077 GiB total=15.556 GiB
+rank 1 memory [cuBLAS BA cycle 5/10 after cudaFree] used=0.104 GiB free=15.452 GiB total=15.556 GiB
+rank 1 finished cuBLAS BA cycle 5/10 seconds=10.9495 approx_gflop_s=251.042
+rank 1 memory [cuBLAS BA cycle 6/10 before cublasCreate] used=0.104 GiB free=15.452 GiB total=15.556 GiB
+rank 1 memory [cuBLAS BA cycle 6/10 after cublasCreate] used=0.114 GiB free=15.442 GiB total=15.556 GiB
+rank 1 memory [cuBLAS BA cycle 6/10 after cudaMalloc left/right/result] used=0.489 GiB free=15.067 GiB total=15.556 GiB
+rank 0 memory [cuBLAS AB cycle 5/10 after cublasDestroy] used=0.479 GiB free=15.077 GiB total=15.556 GiB
+rank 1 memory [cuBLAS BA cycle 6/10 after host-to-device copies] used=0.489 GiB free=15.067 GiB total=15.556 GiB
+rank 0 memory [cuBLAS AB cycle 5/10 after cudaFree] used=0.104 GiB free=15.452 GiB total=15.556 GiB
+rank 0 finished cuBLAS AB cycle 5/10 seconds=10.9876 approx_gflop_s=250.171
+rank 0 memory [cuBLAS AB cycle 6/10 before cublasCreate] used=0.104 GiB free=15.452 GiB total=15.556 GiB
+rank 0 memory [cuBLAS AB cycle 6/10 after cublasCreate] used=0.114 GiB free=15.442 GiB total=15.556 GiB
+rank 0 memory [cuBLAS AB cycle 6/10 after cudaMalloc left/right/result] used=0.489 GiB free=15.067 GiB total=15.556 GiB
+rank 0 memory [cuBLAS AB cycle 6/10 after host-to-device copies] used=0.489 GiB free=15.067 GiB total=15.556 GiB
+rank 1 memory [cuBLAS BA cycle 6/10 after cublasDgemm] used=0.489 GiB free=15.067 GiB total=15.556 GiB
+rank 1 holding cuBLAS BA cycle 6/10 allocations for 1000 ms
+rank 1 memory [cuBLAS BA cycle 6/10 after cublasDestroy] used=0.479 GiB free=15.077 GiB total=15.556 GiB
+rank 1 memory [cuBLAS BA cycle 6/10 after cudaFree] used=0.104 GiB free=15.452 GiB total=15.556 GiB
+rank 1 finished cuBLAS BA cycle 6/10 seconds=21.4852 approx_gflop_s=127.939
+rank 1 memory [cuBLAS BA cycle 7/10 before cublasCreate] used=0.104 GiB free=15.452 GiB total=15.556 GiB
+rank 1 memory [cuBLAS BA cycle 7/10 after cublasCreate] used=0.114 GiB free=15.442 GiB total=15.556 GiB
+rank 1 memory [cuBLAS BA cycle 7/10 after cudaMalloc left/right/result] used=0.489 GiB free=15.067 GiB total=15.556 GiB
+rank 1 memory [cuBLAS BA cycle 7/10 after host-to-device copies] used=0.489 GiB free=15.067 GiB total=15.556 GiB
+rank 0 memory [cuBLAS AB cycle 6/10 after cublasDgemm] used=0.489 GiB free=15.067 GiB total=15.556 GiB
+rank 0 holding cuBLAS AB cycle 6/10 allocations for 1000 ms
+rank 0 memory [cuBLAS AB cycle 6/10 after cublasDestroy] used=0.479 GiB free=15.077 GiB total=15.556 GiB
+rank 0 memory [cuBLAS AB cycle 6/10 after cudaFree] used=0.104 GiB free=15.452 GiB total=15.556 GiB
+rank 0 finished cuBLAS AB cycle 6/10 seconds=11.144 approx_gflop_s=246.659
+rank 0 memory [cuBLAS AB cycle 7/10 before cublasCreate] used=0.104 GiB free=15.452 GiB total=15.556 GiB
+rank 0 memory [cuBLAS AB cycle 7/10 after cublasCreate] used=0.114 GiB free=15.442 GiB total=15.556 GiB
+rank 0 memory [cuBLAS AB cycle 7/10 after cudaMalloc left/right/result] used=0.489 GiB free=15.067 GiB total=15.556 GiB
+rank 0 memory [cuBLAS AB cycle 7/10 after host-to-device copies] used=0.489 GiB free=15.067 GiB total=15.556 GiB
+rank 1 memory [cuBLAS BA cycle 7/10 after cublasDgemm] used=0.489 GiB free=15.067 GiB total=15.556 GiB
+rank 1 holding cuBLAS BA cycle 7/10 allocations for 1000 ms
+rank 1 memory [cuBLAS BA cycle 7/10 after cublasDestroy] used=0.479 GiB free=15.077 GiB total=15.556 GiB
+rank 1 memory [cuBLAS BA cycle 7/10 after cudaFree] used=0.104 GiB free=15.452 GiB total=15.556 GiB
+rank 1 finished cuBLAS BA cycle 7/10 seconds=10.9855 approx_gflop_s=250.218
+rank 1 memory [cuBLAS BA cycle 8/10 before cublasCreate] used=0.104 GiB free=15.452 GiB total=15.556 GiB
+rank 1 memory [cuBLAS BA cycle 8/10 after cublasCreate] used=0.114 GiB free=15.442 GiB total=15.556 GiB
+rank 1 memory [cuBLAS BA cycle 8/10 after cudaMalloc left/right/result] used=0.489 GiB free=15.067 GiB total=15.556 GiB
+rank 1 memory [cuBLAS BA cycle 8/10 after host-to-device copies] used=0.489 GiB free=15.067 GiB total=15.556 GiB
+rank 0 memory [cuBLAS AB cycle 7/10 after cublasDgemm] used=0.489 GiB free=15.067 GiB total=15.556 GiB
+rank 0 holding cuBLAS AB cycle 7/10 allocations for 1000 ms
+rank 0 memory [cuBLAS AB cycle 7/10 after cublasDestroy] used=0.479 GiB free=15.077 GiB total=15.556 GiB
+rank 0 memory [cuBLAS AB cycle 7/10 after cudaFree] used=0.104 GiB free=15.452 GiB total=15.556 GiB
+rank 0 finished cuBLAS AB cycle 7/10 seconds=10.9509 approx_gflop_s=251.01
+rank 0 memory [cuBLAS AB cycle 8/10 before cublasCreate] used=0.104 GiB free=15.452 GiB total=15.556 GiB
+rank 0 memory [cuBLAS AB cycle 8/10 after cublasCreate] used=0.114 GiB free=15.442 GiB total=15.556 GiB
+rank 0 memory [cuBLAS AB cycle 8/10 after cudaMalloc left/right/result] used=0.489 GiB free=15.067 GiB total=15.556 GiB
+rank 0 memory [cuBLAS AB cycle 8/10 after host-to-device copies] used=0.489 GiB free=15.067 GiB total=15.556 GiB
+rank 1 memory [cuBLAS BA cycle 8/10 after cublasDgemm] used=0.489 GiB free=15.067 GiB total=15.556 GiB
+rank 1 holding cuBLAS BA cycle 8/10 allocations for 1000 ms
+rank 1 memory [cuBLAS BA cycle 8/10 after cublasDestroy] used=0.479 GiB free=15.077 GiB total=15.556 GiB
+rank 1 memory [cuBLAS BA cycle 8/10 after cudaFree] used=0.104 GiB free=15.452 GiB total=15.556 GiB
+rank 1 finished cuBLAS BA cycle 8/10 seconds=10.9483 approx_gflop_s=251.069
+rank 1 memory [cuBLAS BA cycle 9/10 before cublasCreate] used=0.104 GiB free=15.452 GiB total=15.556 GiB
+rank 1 memory [cuBLAS BA cycle 9/10 after cublasCreate] used=0.114 GiB free=15.442 GiB total=15.556 GiB
+rank 1 memory [cuBLAS BA cycle 9/10 after cudaMalloc left/right/result] used=0.489 GiB free=15.067 GiB total=15.556 GiB
+rank 1 memory [cuBLAS BA cycle 9/10 after host-to-device copies] used=0.489 GiB free=15.067 GiB total=15.556 GiB
+rank 0 memory [cuBLAS AB cycle 8/10 after cublasDgemm] used=0.489 GiB free=15.067 GiB total=15.556 GiB
+rank 0 holding cuBLAS AB cycle 8/10 allocations for 1000 ms
+rank 0 memory [cuBLAS AB cycle 8/10 after cublasDestroy] used=0.479 GiB free=15.077 GiB total=15.556 GiB
+rank 0 memory [cuBLAS AB cycle 8/10 after cudaFree] used=0.104 GiB free=15.452 GiB total=15.556 GiB
+rank 0 finished cuBLAS AB cycle 8/10 seconds=10.9019 approx_gflop_s=252.137
+rank 0 memory [cuBLAS AB cycle 9/10 before cublasCreate] used=0.104 GiB free=15.452 GiB total=15.556 GiB
+rank 0 memory [cuBLAS AB cycle 9/10 after cublasCreate] used=0.114 GiB free=15.442 GiB total=15.556 GiB
+rank 0 memory [cuBLAS AB cycle 9/10 after cudaMalloc left/right/result] used=0.489 GiB free=15.067 GiB total=15.556 GiB
+rank 0 memory [cuBLAS AB cycle 9/10 after host-to-device copies] used=0.489 GiB free=15.067 GiB total=15.556 GiB
+rank 1 memory [cuBLAS BA cycle 9/10 after cublasDgemm] used=0.489 GiB free=15.067 GiB total=15.556 GiB
+rank 1 holding cuBLAS BA cycle 9/10 allocations for 1000 ms
+rank 1 memory [cuBLAS BA cycle 9/10 after cublasDestroy] used=0.479 GiB free=15.077 GiB total=15.556 GiB
+rank 1 memory [cuBLAS BA cycle 9/10 after cudaFree] used=0.104 GiB free=15.452 GiB total=15.556 GiB
+rank 1 finished cuBLAS BA cycle 9/10 seconds=10.8942 approx_gflop_s=252.316
+rank 1 memory [cuBLAS BA cycle 10/10 before cublasCreate] used=0.104 GiB free=15.452 GiB total=15.556 GiB
+rank 1 memory [cuBLAS BA cycle 10/10 after cublasCreate] used=0.114 GiB free=15.442 GiB total=15.556 GiB
+rank 1 memory [cuBLAS BA cycle 10/10 after cudaMalloc left/right/result] used=0.489 GiB free=15.067 GiB total=15.556 GiB
+rank 1 memory [cuBLAS BA cycle 10/10 after host-to-device copies] used=0.489 GiB free=15.067 GiB total=15.556 GiB
+rank 0 memory [cuBLAS AB cycle 9/10 after cublasDgemm] used=0.489 GiB free=15.067 GiB total=15.556 GiB
+rank 0 holding cuBLAS AB cycle 9/10 allocations for 1000 ms
+rank 0 memory [cuBLAS AB cycle 9/10 after cublasDestroy] used=0.479 GiB free=15.077 GiB total=15.556 GiB
+rank 0 memory [cuBLAS AB cycle 9/10 after cudaFree] used=0.104 GiB free=15.452 GiB total=15.556 GiB
+rank 0 finished cuBLAS AB cycle 9/10 seconds=10.8995 approx_gflop_s=252.193
+rank 0 memory [cuBLAS AB cycle 10/10 before cublasCreate] used=0.104 GiB free=15.452 GiB total=15.556 GiB
+rank 0 memory [cuBLAS AB cycle 10/10 after cublasCreate] used=0.114 GiB free=15.442 GiB total=15.556 GiB
+rank 0 memory [cuBLAS AB cycle 10/10 after cudaMalloc left/right/result] used=0.489 GiB free=15.067 GiB total=15.556 GiB
+rank 0 memory [cuBLAS AB cycle 10/10 after host-to-device copies] used=0.489 GiB free=15.067 GiB total=15.556 GiB
+rank 1 memory [cuBLAS BA cycle 10/10 after cublasDgemm] used=0.489 GiB free=15.067 GiB total=15.556 GiB
+rank 1 holding cuBLAS BA cycle 10/10 allocations for 1000 ms
+rank 1 memory [cuBLAS BA cycle 10/10 after device-to-host copy] used=0.489 GiB free=15.067 GiB total=15.556 GiB
+rank 1 memory [cuBLAS BA cycle 10/10 after cublasDestroy] used=0.479 GiB free=15.077 GiB total=15.556 GiB
+rank 1 memory [cuBLAS BA cycle 10/10 after cudaFree] used=0.104 GiB free=15.452 GiB total=15.556 GiB
+rank 1 finished cuBLAS BA cycle 10/10 seconds=10.8989 approx_gflop_s=252.208
+rank 1 finished all cuBLAS BA cycles total_kernel_seconds=124.06 aggregate_approx_gflop_s=221.569
+rank 1 wrote cuBLAS BA to /scratch/user/juan.florez/tamubo/native/data/matrix_benchmark_18983373/BA_cublas.bin
+rank 0 memory [cuBLAS AB cycle 10/10 after cublasDgemm] used=0.489 GiB free=15.067 GiB total=15.556 GiB
+rank 0 holding cuBLAS AB cycle 10/10 allocations for 1000 ms
+rank 0 memory [cuBLAS AB cycle 10/10 after device-to-host copy] used=0.489 GiB free=15.067 GiB total=15.556 GiB
+rank 0 memory [cuBLAS AB cycle 10/10 after cublasDestroy] used=0.479 GiB free=15.077 GiB total=15.556 GiB
+rank 0 memory [cuBLAS AB cycle 10/10 after cudaFree] used=0.104 GiB free=15.452 GiB total=15.556 GiB
+rank 0 finished cuBLAS AB cycle 10/10 seconds=10.8977 approx_gflop_s=252.235
+rank 0 finished all cuBLAS AB cycles total_kernel_seconds=113.703 aggregate_approx_gflop_s=241.751
+rank 0 wrote cuBLAS AB to /scratch/user/juan.florez/tamubo/native/data/matrix_benchmark_18983373/AB_cublas.bin
+matrix_compare: n=4096 elements=16777216 max_abs=0 max_rel_at_max_abs=0 rmse=0 max_abs_index=(0,0) failures=0 atol=1e-08 rtol=1e-08
+matrix_compare: n=4096 elements=16777216 max_abs=0 max_rel_at_max_abs=0 rmse=0 max_abs_index=(0,0) failures=0 atol=1e-08 rtol=1e-08
+benchmark outputs:
+  data:      /scratch/user/juan.florez/tamubo/native/data/matrix_benchmark_18983373
+  tiled:     /scratch/user/juan.florez/tamubo/native/data/matrix_benchmark_18983373/matrix_products_tiled.out
+  cuBLAS:    /scratch/user/juan.florez/tamubo/native/data/matrix_benchmark_18983373/matrix_products_cublas.out
+  compare:   /scratch/user/juan.florez/tamubo/native/data/matrix_benchmark_18983373/matrix_compare.out
