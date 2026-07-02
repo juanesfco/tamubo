@@ -11,6 +11,7 @@ if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
 endif()
 
 find_package(MPI REQUIRED)
+find_package(CUDAToolkit REQUIRED)
 
 add_executable(cuda_smoke src/cuda_smoke.cu)
 
@@ -21,3 +22,13 @@ add_executable(cuda_mpi_smoke src/cuda_mpi_smoke.cu)
 target_link_libraries(cuda_mpi_smoke PRIVATE MPI::MPI_CXX)
 
 add_executable(unified_memory_query src/unified_memory_query.cu)
+
+add_executable(matrix_make_inputs src/matrix_make_inputs.cpp)
+
+add_executable(matrix_products_mpi src/matrix_products_mpi.cu)
+target_link_libraries(matrix_products_mpi PRIVATE MPI::MPI_CXX)
+
+add_executable(matrix_products_cublas_mpi src/matrix_products_cublas_mpi.cu)
+target_link_libraries(matrix_products_cublas_mpi PRIVATE MPI::MPI_CXX CUDA::cublas)
+
+add_executable(matrix_compare src/matrix_compare.cpp)
