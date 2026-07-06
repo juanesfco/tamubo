@@ -9,7 +9,7 @@
 #SBATCH --gres=gpu:2
 #SBATCH --mem=16G
 #SBATCH --time=01:30:00
-#SBATCH --output=native/slurm-%x-%j.out
+#SBATCH --output=native/jobs/slurm-%x-%j.out
 #SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=juan.florez@tamu.edu
 
@@ -46,4 +46,4 @@ which ninja
 ninja --version
 nvidia-smi -L
 
-bash ./native/run_matrix_benchmark.sh
+bash ./native/benchmarks/matrix/run_matrix_benchmark.sh

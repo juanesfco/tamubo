@@ -2,8 +2,9 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-BUILD_DIR="${SCRIPT_DIR}/build"
-DATA_DIR="${DATA_DIR:-${SCRIPT_DIR}/data/matrix_benchmark}"
+NATIVE_DIR="$(cd -- "${SCRIPT_DIR}/../.." && pwd)"
+BUILD_DIR="${NATIVE_DIR}/build"
+DATA_DIR="${DATA_DIR:-${NATIVE_DIR}/data/matrix_benchmark}"
 
 MATRIX_N="${MATRIX_N:-1024}"
 MPI_RANKS="${MPI_RANKS:-1}"
@@ -12,12 +13,27 @@ CYCLES="${CYCLES:-3}"
 HOLD_MS="${HOLD_MS:-0}"
 ATOL="${ATOL:-1e-8}"
 RTOL="${RTOL:-1e-8}"
-CMAKE_GENERATOR="${CMAKE_GENERATOR:-Ninja}"
+CMAKE_GENERATOR="${CMAKE_GENERATOR:-}"
 CUDA_ARCHITECTURES="${CUDA_ARCHITECTURES:-}"
+
+if [ -z "${CMAKE_GENERATOR}" ] && [ -f "${BUILD_DIR}/CMakeCache.txt" ]; then
+  CACHED_GENERATOR="$(sed -n 's/^CMAKE_GENERATOR:INTERNAL=//p' "${BUILD_DIR}/CMakeCache.txt" | head -n 1)"
+  if [ -n "${CACHED_GENERATOR}" ]; then
+    CMAKE_GENERATOR="${CACHED_GENERATOR}"
+  fi
+fi
+
+if [ -z "${CMAKE_GENERATOR}" ]; then
+  if command -v ninja >/dev/null 2>&1; then
+    CMAKE_GENERATOR="Ninja"
+  else
+    CMAKE_GENERATOR="Unix Makefiles"
+  fi
+fi
 
 mkdir -p "${DATA_DIR}"
 
-cmake_args=(-S "${SCRIPT_DIR}" -B "${BUILD_DIR}" -G "${CMAKE_GENERATOR}")
+cmake_args=(-S "${NATIVE_DIR}" -B "${BUILD_DIR}" -G "${CMAKE_GENERATOR}")
 if [ -n "${CUDA_ARCHITECTURES}" ]; then
   cmake_args+=("-DCMAKE_CUDA_ARCHITECTURES=${CUDA_ARCHITECTURES}")
 fi

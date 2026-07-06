@@ -14,3 +14,5 @@ examples/exactbo/profiles/
 .vscode/*
 native/build/
 native/data/
+native/slurm-*.out
+native/jobs/slurm-*.out
