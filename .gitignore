@@ -13,6 +13,9 @@ examples/exactbo/logs/minimization_2d_visualization.json
 examples/exactbo/profiles/
 .vscode/*
 native/build/
-native/data/
+native/benchmarks/data/*
+!native/benchmarks/data/.gitkeep
+native/exactbo/data/*
+!native/exactbo/data/.gitkeep
 native/slurm-*.out
-native/jobs/slurm-*.out
+native/benchmarks/jobs/slurm-*.out

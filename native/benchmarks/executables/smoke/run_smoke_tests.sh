@@ -2,7 +2,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-NATIVE_DIR="$(cd -- "${SCRIPT_DIR}/../.." && pwd)"
+NATIVE_DIR="$(cd -- "${SCRIPT_DIR}/../../.." && pwd)"
 BUILD_DIR="${NATIVE_DIR}/build"
 MPI_RANKS="${MPI_RANKS:-2}"
 CMAKE_GENERATOR="${CMAKE_GENERATOR:-}"

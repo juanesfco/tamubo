@@ -2,9 +2,9 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-NATIVE_DIR="$(cd -- "${SCRIPT_DIR}/../.." && pwd)"
+NATIVE_DIR="$(cd -- "${SCRIPT_DIR}/../../.." && pwd)"
 BUILD_DIR="${NATIVE_DIR}/build"
-DATA_DIR="${DATA_DIR:-${NATIVE_DIR}/data/matrix_benchmark}"
+DATA_DIR="${DATA_DIR:-${NATIVE_DIR}/benchmarks/data/matrix_benchmark}"
 
 MATRIX_N="${MATRIX_N:-1024}"
 MPI_RANKS="${MPI_RANKS:-1}"

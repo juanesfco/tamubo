@@ -1,51 +1,50 @@
 # Native ExactBO
 
-This directory is reserved for the C++/MPI/CUDA ExactBO implementation.
+This directory contains the C++/MPI/CUDA ExactBO implementation. Benchmark and learning programs live under `native/benchmarks/`.
 
-The existing CUDA, MPI, memory, and matrix multiplication programs live under
-`native/benchmarks/` because they are reference benchmarks and development
-scaffolding, not production ExactBO code.
+## Layout
 
-## `rbf_k_bounds`
+```text
+native/exactbo/
+  executables/   CUDA/MPI programs that are built into native executables
+  scripts/       Python orchestration scripts
+  data/          generated workflow inputs/outputs, ignored except .gitkeep
+  kernels/       reserved for reusable device kernels
+  src/           reserved for reusable native ExactBO code
+```
 
-The first native ExactBO step mirrors `tamubo.exactbo.bounds.rbf_k_bounds`.
-Python still orchestrates the workflow: it evaluates the black-box function,
-fits the sklearn GPR, exports files, launches the CUDA/MPI executable, and reads
-`K_lo` / `K_hi` back from disk.
+## Bounds Workflow
 
-Build the native executable:
+`bounds_workflow.py` starts from the same simple 2D example data, trains the sklearn GPR, exports the trained parameters and box bounds, launches the native kernels, and reads back final `ei_lo` / `ei_hi` arrays for each box.
+
+Build the native executables:
 
 ```bash
 cmake -S native -B native/build
-cmake --build native/build --target exactbo_rbf_k_bounds
+cmake --build native/build --target exactbo_rbf_k_bounds exactbo_mu_bounds exactbo_sigma_bounds exactbo_ei_bounds
 ```
 
-Run the `examples/exactbo/minimization_2d.py`-style example:
+Run the workflow:
 
 ```bash
-envs/venvTrial/bin/python native/exactbo/scripts/rbf_k_bounds_workflow.py \
-  --workdir native/data/exactbo/rbf_k_bounds_workflow \
-  --native-exe native/build/exactbo_rbf_k_bounds \
+envs/venvTrial/bin/python native/exactbo/scripts/bounds_workflow.py \
+  --workdir native/exactbo/data/bounds_workflow \
+  --native-build-dir native/build \
   --mpi-ranks 1
 ```
 
-The script writes:
+The workflow writes training data, GP parameters, native binary inputs/outputs, and these final NumPy arrays:
 
 ```text
-X0.npy
-y0.npy
-domain_bounds.npy
-box_bounds_L.npy
-box_bounds_U.npy
-gpr_parameters.npz
-rbf_inputs/train_*.bin
-rbf_outputs/train_*.bin
 K_lo.npy
 K_hi.npy
+mu_lo.npy
+mu_hi.npy
+sig_lo.npy
+sig_hi.npy
+ei_lo.npy
+ei_hi.npy
 manifest.json
 ```
 
-To use a different black-box function and initial design, import
-`run_workflow(...)` from `rbf_k_bounds_workflow.py` and pass your own `f`, `X0`,
-domain bounds, and box bounds.
-
+To use a different black-box function and initial design, import `run_workflow(...)` from `bounds_workflow.py` and pass your own `f`, `X0`, domain bounds, and box bounds.

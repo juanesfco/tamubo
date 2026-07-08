@@ -1,2 +1,2 @@
-add_subdirectory(smoke)
-add_subdirectory(matrix)
+add_subdirectory(executables/smoke)
+add_subdirectory(executables/matrix)

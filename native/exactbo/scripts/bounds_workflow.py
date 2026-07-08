@@ -293,7 +293,7 @@ def run_workflow(
     box_bounds_l,
     box_bounds_u,
     *,
-    workdir="native/data/exactbo/rbf_k_bounds_workflow",
+    workdir="native/exactbo/data/bounds_workflow",
     native_build_dir="native/build",
     rbf_exe=None,
     mu_exe=None,
@@ -417,7 +417,7 @@ def run_minimization_2d_example(args):
 def main():
     parser = argparse.ArgumentParser(description="Run Python-orchestrated native ExactBO bounds through EI.")
     parser.add_argument("--example", choices=["minimization_2d"], default="minimization_2d")
-    parser.add_argument("--workdir", default="native/data/exactbo/bounds_workflow")
+    parser.add_argument("--workdir", default="native/exactbo/data/bounds_workflow")
     parser.add_argument("--native-build-dir", default="native/build")
     parser.add_argument("--rbf-exe", default=None)
     parser.add_argument("--mu-exe", default=None)
