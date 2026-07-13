@@ -14,3 +14,9 @@ target_link_libraries(exactbo_sigma_bounds PRIVATE MPI::MPI_CXX)
 
 add_executable(exactbo_ei_bounds executables/ei_bounds.cu)
 target_link_libraries(exactbo_ei_bounds PRIVATE MPI::MPI_CXX)
+
+add_executable(exactbo_split_boxes executables/split_boxes.cu)
+target_link_libraries(exactbo_split_boxes PRIVATE MPI::MPI_CXX)
+
+add_executable(exactbo_partitioning executables/partitioning.cu)
+target_link_libraries(exactbo_partitioning PRIVATE MPI::MPI_CXX)
