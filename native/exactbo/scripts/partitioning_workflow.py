@@ -124,7 +124,21 @@ def read_partition_output(path):
     }
 
 
-def launch_native(exe, mpi_ranks, input_path, output_path, *, device_batch_rows=4096, verbose=False):
+def launch_native(
+    exe,
+    mpi_ranks,
+    input_path,
+    output_path,
+    *,
+    device_batch_rows=4096,
+    split_batch_parents=0,
+    box_storage="auto",
+    host_box_limit_bytes=0,
+    spill_dir=None,
+    keep_spill_files=False,
+    verbose=False,
+):
+    """Launch the native partitioner with explicit memory-policy controls."""
     output_path.parent.mkdir(parents=True, exist_ok=True)
     if mpi_ranks <= 1:
         cmd = [str(exe), "--input", str(input_path), "--output", str(output_path)]
@@ -132,14 +146,43 @@ def launch_native(exe, mpi_ranks, input_path, output_path, *, device_batch_rows=
         cmd = ["mpirun", "-np", str(mpi_ranks), str(exe), "--input", str(input_path), "--output", str(output_path)]
     if device_batch_rows <= 0:
         raise ValueError("device_batch_rows must be positive")
+    if split_batch_parents < 0:
+        raise ValueError("split_batch_parents must be nonnegative (0 means automatic)")
+    if box_storage not in {"auto", "host", "file"}:
+        raise ValueError("box_storage must be 'auto', 'host', or 'file'")
+    if host_box_limit_bytes < 0:
+        raise ValueError("host_box_limit_bytes must be nonnegative")
     cmd.extend(("--device-batch-rows", str(int(device_batch_rows))))
+    cmd.extend(("--split-batch-parents", str(int(split_batch_parents))))
+    cmd.extend(("--box-storage", box_storage))
+    cmd.extend(("--host-box-limit-bytes", str(int(host_box_limit_bytes))))
+    if spill_dir is not None:
+        cmd.extend(("--spill-dir", str(spill_dir)))
+    if keep_spill_files:
+        cmd.append("--keep-spill-files")
     if verbose:
         cmd.append("--verbose")
     print("launch:", " ".join(cmd), flush=True)
     subprocess.run(cmd, check=True)
 
 
-def run_workflow(*, workdir, native_build_dir, partitioning_exe=None, mpi_ranks=1, max_partitions=6, epsilon_x=1e-3, epsilon_ei=1e-6, device_batch_rows=4096, verbose=False):
+def run_workflow(
+    *,
+    workdir,
+    native_build_dir,
+    partitioning_exe=None,
+    mpi_ranks=1,
+    max_partitions=6,
+    epsilon_x=1e-3,
+    epsilon_ei=1e-6,
+    device_batch_rows=4096,
+    split_batch_parents=0,
+    box_storage="auto",
+    host_box_limit_bytes=0,
+    spill_dir=None,
+    keep_spill_files=False,
+    verbose=False,
+):
     workdir = Path(workdir)
     workdir.mkdir(parents=True, exist_ok=True)
     exe = Path(partitioning_exe) if partitioning_exe else Path(native_build_dir) / "exactbo_partitioning"
@@ -167,7 +210,19 @@ def run_workflow(*, workdir, native_build_dir, partitioning_exe=None, mpi_ranks=
         epsilon_ei=epsilon_ei,
         max_partitions=max_partitions,
     )
-    launch_native(exe, mpi_ranks, input_path, output_path, device_batch_rows=device_batch_rows, verbose=verbose)
+    launch_native(
+        exe,
+        mpi_ranks,
+        input_path,
+        output_path,
+        device_batch_rows=device_batch_rows,
+        split_batch_parents=split_batch_parents,
+        box_storage=box_storage,
+        host_box_limit_bytes=host_box_limit_bytes,
+        spill_dir=spill_dir,
+        keep_spill_files=keep_spill_files,
+        verbose=verbose,
+    )
     result = read_partition_output(output_path)
     np.save(workdir / "best_x.npy", result["best_x"])
     (workdir / "manifest.json").write_text(
@@ -179,6 +234,11 @@ def run_workflow(*, workdir, native_build_dir, partitioning_exe=None, mpi_ranks=
                 "epsilon_x": epsilon_x_array.tolist(),
                 "epsilon_ei": float(epsilon_ei),
                 "device_batch_rows": int(device_batch_rows),
+                "split_batch_parents": int(split_batch_parents),
+                "box_storage": box_storage,
+                "host_box_limit_bytes": int(host_box_limit_bytes),
+                "spill_dir": None if spill_dir is None else str(spill_dir),
+                "keep_spill_files": bool(keep_spill_files),
                 "best_ei_scaled": result["best_ei_scaled"],
                 "partitions_done": result["partitions_done"],
                 "n_boxes_final": result["n_boxes_final"],
@@ -213,6 +273,15 @@ def main():
     parser.add_argument("--epsilon-ei", type=float, default=1e-6)
     parser.add_argument("--device-batch-rows", type=int, default=4096,
                         help="Maximum boxes in one CUDA allocation/launch batch.")
+    parser.add_argument("--split-batch-parents", type=int, default=0,
+                        help="Selected parents per CUDA split batch; 0 chooses automatically.")
+    parser.add_argument("--box-storage", choices=["auto", "host", "file"], default="auto",
+                        help="Where complete box populations are retained between phases.")
+    parser.add_argument("--host-box-limit-bytes", type=int, default=0,
+                        help="RAM budget for box stores; 0 derives a conservative limit.")
+    parser.add_argument("--spill-dir", default=None,
+                        help="Shared filesystem directory for temporary box stores.")
+    parser.add_argument("--keep-spill-files", action="store_true")
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args()
     run_workflow(
@@ -224,6 +293,11 @@ def main():
         epsilon_x=args.epsilon_x,
         epsilon_ei=args.epsilon_ei,
         device_batch_rows=args.device_batch_rows,
+        split_batch_parents=args.split_batch_parents,
+        box_storage=args.box_storage,
+        host_box_limit_bytes=args.host_box_limit_bytes,
+        spill_dir=args.spill_dir,
+        keep_spill_files=args.keep_spill_files,
         verbose=args.verbose,
     )
 

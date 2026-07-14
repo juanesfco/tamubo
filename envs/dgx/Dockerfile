@@ -31,6 +31,8 @@ RUN python3 -m venv "${VIRTUAL_ENV}" \
     scipy \
     scikit-learn \
     pybind11 \
+    jupyter \
+    notebook \
     pytest
 
 RUN set -eux; \

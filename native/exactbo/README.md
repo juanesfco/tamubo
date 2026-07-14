@@ -12,7 +12,7 @@ native/exactbo/
   scripts/       Python orchestration scripts
   data/          generated workflow inputs/outputs, ignored except .gitkeep
   kernels/       reserved for reusable device kernels
-  src/           reserved for reusable native ExactBO code
+  src/           reusable host/file box-storage implementation
 ```
 
 ## Bounds Workflow
@@ -67,10 +67,31 @@ Run the small example workflow:
 envs/venvTrial/bin/python native/exactbo/scripts/split_boxes_workflow.py \
   --workdir native/exactbo/data/split_boxes_workflow \
   --native-build-dir native/build \
-  --mpi-ranks 1
+  --mpi-ranks 1 \
+  --split-batch-parents 0
 ```
 
 Use `--mpi-ranks 2` or higher when the job has multiple MPI ranks/GPUs available.
+The default `--split-batch-parents 0` derives a conservative batch from free
+CUDA memory and the number of ranks sharing a device. The standalone executable
+writes active children and retained inactive rows directly into their final
+planar output offsets with MPI-IO; it no longer gathers a complete child
+population on rank zero. Its diagnostic input file is still read completely by
+each rank.
+
+The repeated all-active stress workflow is also bounded by default:
+
+```bash
+envs/venvTrial/bin/python native/exactbo/scripts/partition_all_boxes_workflow.py \
+  --workdir /tmp/exactbo-split-stress \
+  --native-build-dir native/build \
+  --steps 8 \
+  --split-batch-parents 0
+```
+
+It keeps one rolling input/output generation, copies planar bounds in 64 MiB
+chunks, and retains only the final native output. Add `--debug-save-numpy` only
+for small runs where per-step arrays are useful.
 
 ## Native ExactBO Partitioning
 
@@ -143,8 +164,24 @@ envs/venvTrial/bin/python native/exactbo/scripts/exactbo_bo_workflow.py \
 The objective must accept an array shaped `(n, d)` and return one value per row. `bounds.npy` must have shape `(d, 2)`. If initial objective values are already available, pass `--y0 path/to/y0.npy`; otherwise the script evaluates `objective(X0)`.
 
 
-## Memory control and current limits
+## Memory control
 
-`exactbo_partitioning` processes EI-bound and EI-sampling work in CUDA batches. Set `--device-batch-rows` on either Python workflow; reducing it lowers peak GPU memory without changing the result. The default is 4096. See `IMPLEMENTATION.md` for exact workspace formulas.
+The acquisition now streams all box phases. `--device-batch-rows` bounds EI
+work, while `--split-batch-parents 0` selects a safe split batch from current
+CUDA memory. Use `--box-storage auto` for normal runs: small populations remain
+in RAM and large child generations are written directly to a temporary binary
+store without a box gather or broadcast.
 
-The box population itself can still grow rapidly: each target becomes `2*d + 1` children. All MPI ranks currently receive the complete host box list after a split, and split output is not yet streamed. Those are the remaining memory-scaling limits; adding GPUs divides kernel work but does not divide the retained host box list.
+Force and test either backend with `--box-storage host|file`. The RAM threshold
+is controlled by `--host-box-limit-bytes`; zero recomputes it before each split
+from currently available host/cgroup memory and reaches one MPI-wide decision.
+Forced `host` mode bypasses that guard and is intended for small equivalence
+tests. `--spill-dir` must name a real filesystem visible to every MPI rank.
+Completed writes are synced and evicted from the page cache before atomic
+publication; obsolete files are removed automatically unless
+`--keep-spill-files` is supplied.
+
+The population can still grow exponentially, but file-backed peak box memory is
+now proportional to a processing batch rather than the complete population.
+Local EI values and masks remain proportional to each rank's assigned box count.
+See `IMPLEMENTATION.md` for formulas, file lifecycle, and exact equivalence tests.

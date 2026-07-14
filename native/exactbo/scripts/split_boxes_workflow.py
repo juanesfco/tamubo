@@ -78,17 +78,35 @@ def read_split_output(path: Path):
     return bounds_l, bounds_u, {"n_out": n_out, "d": d, "n_active": n_active, "stride": stride}
 
 
-def launch_native(exe: Path, mpi_ranks: int, input_path: Path, output_path: Path):
+def launch_native(
+    exe: Path,
+    mpi_ranks: int,
+    input_path: Path,
+    output_path: Path,
+    *,
+    split_batch_parents: int = 0,
+):
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    if int(split_batch_parents) < 0:
+        raise ValueError("split_batch_parents must be nonnegative (0 selects automatic sizing)")
     if mpi_ranks <= 1:
         cmd = [str(exe), "--input", str(input_path), "--output", str(output_path)]
     else:
         cmd = ["mpirun", "-np", str(mpi_ranks), str(exe), "--input", str(input_path), "--output", str(output_path)]
+    cmd.extend(("--split-batch-parents", str(int(split_batch_parents))))
     print("launch:", " ".join(cmd), flush=True)
     subprocess.run(cmd, check=True)
 
 
-def run_example(*, workdir, native_build_dir, split_exe=None, mpi_ranks=1, keep_inactive=True):
+def run_example(
+    *,
+    workdir,
+    native_build_dir,
+    split_exe=None,
+    mpi_ranks=1,
+    keep_inactive=True,
+    split_batch_parents=0,
+):
     workdir = Path(workdir)
     workdir.mkdir(parents=True, exist_ok=True)
     exe = Path(split_exe) if split_exe else Path(native_build_dir) / "exactbo_split_boxes"
@@ -102,7 +120,13 @@ def run_example(*, workdir, native_build_dir, split_exe=None, mpi_ranks=1, keep_
     input_path = workdir / "split_boxes_input.bin"
     output_path = workdir / "split_boxes_output.bin"
     write_split_input(input_path, bounds_l, bounds_u, active_mask, domain_width, keep_inactive=keep_inactive)
-    launch_native(exe, mpi_ranks, input_path, output_path)
+    launch_native(
+        exe,
+        mpi_ranks,
+        input_path,
+        output_path,
+        split_batch_parents=split_batch_parents,
+    )
 
     out_l, out_u, meta = read_split_output(output_path)
     np.save(workdir / "split_bounds_L.npy", out_l)
@@ -113,6 +137,7 @@ def run_example(*, workdir, native_build_dir, split_exe=None, mpi_ranks=1, keep_
                 "executable": str(exe),
                 "mpi_ranks": int(mpi_ranks),
                 "keep_inactive": bool(keep_inactive),
+                "split_batch_parents": int(split_batch_parents),
                 **{k: int(v) for k, v in meta.items()},
                 "files": {
                     "input_bounds_L": "input_bounds_L.npy",
@@ -140,6 +165,12 @@ def main():
     parser.add_argument("--native-build-dir", default="native/build")
     parser.add_argument("--split-exe", default=None)
     parser.add_argument("--mpi-ranks", type=int, default=1)
+    parser.add_argument(
+        "--split-batch-parents",
+        type=int,
+        default=0,
+        help="Maximum selected parents per CUDA split batch; 0 chooses automatically.",
+    )
     parser.add_argument("--drop-inactive", action="store_true")
     args = parser.parse_args()
 
@@ -149,6 +180,7 @@ def main():
         split_exe=args.split_exe,
         mpi_ranks=args.mpi_ranks,
         keep_inactive=not args.drop_inactive,
+        split_batch_parents=args.split_batch_parents,
     )
 
 

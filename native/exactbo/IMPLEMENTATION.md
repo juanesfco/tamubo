@@ -47,15 +47,18 @@ for compatibility and reporting but are not needed by the native acquisition.
 
 The loop in `partitioning.cu` mirrors `exactbo_partitioning()` in `run.py`:
 
-1. `compute_ei_hi_global()` computes a conservative EI upper bound per box.
-2. Boxes within `epsilon_ei` of the largest upper bound are analyzed. Children
-   of the previously best box are forcibly preserved in this set.
-3. `sample_best_global()` evaluates a deterministic centered Latin hypercube
-   with `2^d` points in every selected box.
+1. `compute_ei_hi_streamed()` reads each rank's boxes in bounded windows and
+   computes a conservative EI upper bound per box.
+2. Boxes within `epsilon_ei` of the global maximum are analyzed. Children of
+   the previously best box are forcibly preserved in this set.
+3. `sample_best_streamed()` evaluates a deterministic centered Latin
+   hypercube with `2^d` points in every selected box. Batch results are reduced
+   immediately instead of retaining every sampled point.
 4. Boxes whose EI upper bound can still beat the sampled EI become active.
 5. The active boxes are sampled again. Boxes that can beat that result become
    targets; the sampled-best box is always included.
-6. `split_selected_global()` splits every target into `2*d + 1` children.
+6. `split_selected_streamed()` compacts targets into bounded parent batches
+   and writes each `2*d + 1` child block directly to the next box store.
 7. The loop stops only when no bound can beat the sampled EI and every width of
    the best box is below `epsilon_x`, or when `max_partitions` is reached.
 
@@ -94,36 +97,72 @@ index breaks ties. Every later child inherits the middle third from dimensions
 already processed. This ordering matters because the next iteration preserves
 the contiguous child block containing the previous best box.
 
-## Memory model
+## Memory and box-storage model
 
-Use `--device-batch-rows N` to cap box rows in the two largest CUDA phases. The
-default is 4096. Smaller values use less device memory and launch more kernels;
-they do not change numerical results.
+`BoxStore` gives the partition loop one interface for two backends:
 
-Approximate per-batch device work, excluding the constant GP arrays, is:
+- `HostBoxStore` keeps planar lower/upper arrays in RAM;
+- `FileBoxStore` reads bounded windows from a versioned temporary binary
+  file using `pread`, while split batches write disjoint ranges using `pwrite`.
+
+Use `--box-storage auto|host|file`. In `auto` mode, small populations
+remain in RAM. Before every split the program knows the exact child count and
+checks the peak coexistence of the current and next stores against
+`--host-box-limit-bytes`. Zero derives a conservative limit from
+current `MemAvailable` and cgroup-v2 or conventional cgroup-v1 state. It first
+divides each node's allowance among its local ranks, then uses one global
+minimum so heterogeneous nodes make the same MPI storage decision. Once a run
+spills, later generations remain file-backed so a large file is never silently
+loaded back into RAM. `--box-storage host` is an intentional diagnostic force;
+it bypasses the automatic RAM guard and can OOM on a large run.
+
+The default spill directory is next to the native output. Override it with
+`--spill-dir PATH`. It must be a real filesystem visible at the same path
+to every MPI rank; a RAM-backed `tmpfs` does not solve host OOM. Rank zero
+preallocates a `.partial` file so ENOSPC is detected before CUDA work, ranks
+write non-overlapping child ranges computed with `MPI_Exscan`, and rank zero
+publishes it without replacing an existing file only after every rank has
+synced its writes and asked the kernel to evict clean cached pages. Old
+generations are removed after the collective store swap. Each launch uses an
+atomically unique `run_XXXXXX` directory. `--keep-spill-files` preserves it for
+debugging; a killed or MPI-aborted job may also leave it behind, and that
+specific directory is safe to remove after the job exits.
+
+`--device-batch-rows N` bounds EI-bound and sampled-EI CUDA work. Approximate
+per-box device work, excluding constant GP arrays, is:
 
 ```text
 EI bounds:  8 * N * (4*n_train + 2*d + 1) bytes
 EI samples: 8 * N * (  n_train + 3*d + 1) bytes
 ```
 
-The EI-bound phase currently keeps four interval work matrices (`K_lo`,
-`K_hi`, `v_lo`, `v_hi`). They are now bounded by the batch setting instead of
-by the total box count. Constant GP arrays are uploaded once per phase and each
-batch is freed immediately after its result is copied to the host.
+This batch size is an explicit cap, not an automatic planner. The constant GP
+arrays, including the `n_train^2` Cholesky factor, must also fit on the device.
 
-Two scaling limits remain important:
+`--split-batch-parents N` bounds splitting. Zero chooses automatically from
+`cudaMemGetInfo`, reserves at least 10%/1 GiB, divides the budget between MPI
+ranks sharing a GPU, and counts host staging twice on integrated or
+host-page-table/coherent GPUs such as GB10. A compact
+selected-parent batch uses:
 
-- all ranks still hold the complete host-side box list after each gather and
-  broadcast, so host memory is replicated rather than fully distributed;
-- the split phase creates `2*d + 1` children per target and currently allocates
-  its local output in one piece.
+```text
+split device bytes = 32 * d * (d + 1) * N parents
+split output rows  = (2*d + 1) * N parents
+```
 
-Thus `--device-batch-rows` fixes the former unbounded EI workspaces, but it does
-not make the algorithm's exponentially growing box population disappear. For
-very deep/high-dimensional searches, the next architectural step is keeping
-boxes sharded across ranks and streaming split output rather than gathering it
-after every partition.
+Each rank reads a balanced contiguous range from the global store. EI maxima,
+box counts, convergence flags, and sampled winners use scalar MPI reductions.
+File-backed populations are never gathered or broadcast; the small host backend
+still replicates its completed population after a bounded split. Masks remain
+local in both modes. Global parent order and every contiguous child block are
+unchanged.
+
+File-backed mode still retains one local EI-upper-bound value and a few local
+byte masks per assigned box. Those are much smaller than the two `d`-dimensional
+box arrays but remain the next host-scaling target. GPU-resident box caching is
+deliberately not enabled yet: on the GB10 it consumes the same unified physical
+memory and would need both old and new generations resident during a split.
+Streaming is the safe fallback and CUDA batches are the reusable fast path.
 
 ## Build and validate
 
@@ -135,18 +174,27 @@ cmake -S native -B native/build
 cmake --build native/build --target exactbo_partitioning exactbo_split_boxes
 ```
 
-Force multi-batch execution during a small validation run:
+Force the two opposite memory paths:
 
 ```bash
 envs/venvTrial/bin/python native/exactbo/scripts/partitioning_workflow.py \
-  --native-build-dir native/build \
-  --workdir /tmp/exactbo-check \
-  --max-partitions 6 \
-  --device-batch-rows 2 \
-  --verbose
+  --native-build-dir native/build --workdir /tmp/exactbo-host \
+  --max-partitions 8 --device-batch-rows 4096 \
+  --split-batch-parents 4096 --box-storage host
+
+envs/venvTrial/bin/python native/exactbo/scripts/partitioning_workflow.py \
+  --native-build-dir native/build --workdir /tmp/exactbo-file \
+  --max-partitions 8 --device-batch-rows 2 \
+  --split-batch-parents 1 --box-storage file \
+  --host-box-limit-bytes 1 --spill-dir /tmp/exactbo-spill
+
+cmp /tmp/exactbo-host/partitioning_output.bin \
+    /tmp/exactbo-file/partitioning_output.bin
 ```
 
-A correct batch refactor produces the same `best_x`, `best_ei_scaled`, box
-counts, and convergence status for batch size 2 and 4096. Use the standalone
-`bounds_workflow.py` and `split_boxes_workflow.py` when isolating a discrepancy
+The comparison must be byte-identical. Repeat the file-backed command with
+`--mpi-ranks 2` and compare again to exercise rank-boundary target runs and
+`MPI_Exscan` child offsets. On multiple nodes, choose a shared spill directory.
+
+Use `bounds_workflow.py` and `split_boxes_workflow.py` when isolating a discrepancy
 in interval math or child-box ordering.

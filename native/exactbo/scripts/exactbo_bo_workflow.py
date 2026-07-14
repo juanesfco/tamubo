@@ -147,6 +147,11 @@ def run_native_exactbo(
     epsilon_x=1e-3,
     epsilon_ei=1e-6,
     device_batch_rows=4096,
+    split_batch_parents=0,
+    box_storage="auto",
+    host_box_limit_bytes=0,
+    spill_dir=None,
+    keep_spill_files=False,
     verbose=False,
 ):
     """Run BO iterations with native ExactBO partitioning as acquisition.
@@ -215,7 +220,19 @@ def run_native_exactbo(
             epsilon_ei=epsilon_ei,
             max_partitions=max_partitions,
         )
-        launch_native(exe, mpi_ranks, input_path, output_path, device_batch_rows=device_batch_rows, verbose=verbose)
+        launch_native(
+            exe,
+            mpi_ranks,
+            input_path,
+            output_path,
+            device_batch_rows=device_batch_rows,
+            split_batch_parents=split_batch_parents,
+            box_storage=box_storage,
+            host_box_limit_bytes=host_box_limit_bytes,
+            spill_dir=spill_dir,
+            keep_spill_files=keep_spill_files,
+            verbose=verbose,
+        )
         partition_result = read_partition_output(output_path)
         x_next = np.asarray(partition_result["best_x"], dtype=np.float64).reshape(dim)
         y_next = evaluate_objective(f, x_next, dim)[0]
@@ -254,6 +271,11 @@ def run_native_exactbo(
         "epsilon_x": epsilon_x_array,
         "epsilon_ei": float(epsilon_ei),
         "device_batch_rows": int(device_batch_rows),
+        "split_batch_parents": int(split_batch_parents),
+        "box_storage": box_storage,
+        "host_box_limit_bytes": int(host_box_limit_bytes),
+        "spill_dir": None if spill_dir is None else str(spill_dir),
+        "keep_spill_files": bool(keep_spill_files),
         "mpi_ranks": int(mpi_ranks),
         "executable": str(exe),
         "best_x": X[best_idx],
@@ -312,6 +334,13 @@ def main():
     parser.add_argument("--epsilon-ei", type=float, default=1e-6)
     parser.add_argument("--device-batch-rows", type=int, default=4096,
                         help="Maximum boxes in one CUDA allocation/launch batch.")
+    parser.add_argument("--split-batch-parents", type=int, default=0,
+                        help="Selected parents per CUDA split batch; 0 chooses automatically.")
+    parser.add_argument("--box-storage", choices=["auto", "host", "file"], default="auto")
+    parser.add_argument("--host-box-limit-bytes", type=int, default=0)
+    parser.add_argument("--spill-dir", default=None,
+                        help="Shared filesystem directory for temporary box stores.")
+    parser.add_argument("--keep-spill-files", action="store_true")
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args()
 
@@ -330,6 +359,11 @@ def main():
         epsilon_x=args.epsilon_x,
         epsilon_ei=args.epsilon_ei,
         device_batch_rows=args.device_batch_rows,
+        split_batch_parents=args.split_batch_parents,
+        box_storage=args.box_storage,
+        host_box_limit_bytes=args.host_box_limit_bytes,
+        spill_dir=args.spill_dir,
+        keep_spill_files=args.keep_spill_files,
         verbose=args.verbose,
     )
     print(f"final_best_x={result['best_x']}")
