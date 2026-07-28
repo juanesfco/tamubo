@@ -16,6 +16,8 @@ import argparse
 import importlib
 import importlib.util
 import json
+import struct
+import subprocess
 from pathlib import Path
 from typing import Callable
 
@@ -23,12 +25,38 @@ import numpy as np
 from sklearn.gaussian_process import GaussianProcessRegressor
 from sklearn.gaussian_process.kernels import ConstantKernel, RBF, WhiteKernel
 
-from partitioning_workflow import (
-    gp_params,
-    launch_native,
-    read_partition_output,
-    write_partition_input,
-)
+PARTITION_INPUT_MAGIC = b"TPARIN1!"
+PARTITION_OUTPUT_MAGIC = b"TPAROU1!"
+
+
+def load_problem_from_args(args):
+    if args.example == "minimization_2d":
+        f, X0, bounds = make_minimization_2d_data()
+    else:
+        if args.objective is None:
+            raise ValueError("--objective is required when --example is not used")
+        if args.x0 is None or args.bounds is None:
+            raise ValueError("--x0 and --bounds are required when --example is not used")
+        f = load_callable(args.objective)
+        X0 = np.load(args.x0)
+        bounds = np.load(args.bounds)
+
+    y0 = np.load(args.y0) if args.y0 else None
+    return f, X0, bounds, y0
+
+
+def make_minimization_2d_data():
+    bounds = np.array([[0.0, 1.0], [0.0, 1.0]], dtype=np.float64)
+    X0 = np.array(
+        [
+            [0.25, 0.25],
+            [0.25, 0.75],
+            [0.75, 0.25],
+            [0.75, 0.75],
+        ],
+        dtype=np.float64,
+    )
+    return minimization_2d_objective, X0, bounds
 
 
 def minimization_2d_objective(X):
@@ -49,27 +77,25 @@ def minimization_2d_objective(X):
     return value + 2.0
 
 
-def make_minimization_2d_data():
-    bounds = np.array([[0.0, 1.0], [0.0, 1.0]], dtype=np.float64)
-    X0 = np.array(
-        [
-            [0.25, 0.25],
-            [0.25, 0.75],
-            [0.75, 0.25],
-            [0.75, 0.75],
-        ],
-        dtype=np.float64,
-    )
-    return minimization_2d_objective, X0, bounds
-
-
-def make_gpr(dim: int):
-    kernel = (
-        ConstantKernel(1.0, (1e-2, 1e3))
-        * RBF(length_scale=np.full(dim, 0.2), length_scale_bounds=(1e-2, 10.0))
-        + WhiteKernel(noise_level=1e-3, noise_level_bounds=(1e-10, 1e1))
-    )
-    return GaussianProcessRegressor(kernel=kernel, alpha=0.0, normalize_y=True)
+def load_callable(spec: str):
+    """Load an objective from 'module:function' or '/path/file.py:function'."""
+    if ":" not in spec:
+        raise ValueError("objective spec must be 'module:function' or '/path/file.py:function'")
+    module_spec, function_name = spec.split(":", 1)
+    if module_spec.endswith(".py") or "/" in module_spec:
+        module_path = Path(module_spec).resolve()
+        module_name = module_path.stem
+        spec_obj = importlib.util.spec_from_file_location(module_name, module_path)
+        if spec_obj is None or spec_obj.loader is None:
+            raise ImportError(f"cannot import module from {module_path}")
+        module = importlib.util.module_from_spec(spec_obj)
+        spec_obj.loader.exec_module(module)
+    else:
+        module = importlib.import_module(module_spec)
+    f = getattr(module, function_name)
+    if not callable(f):
+        raise TypeError(f"{spec} is not callable")
+    return f
 
 
 def normalize_epsilon(epsilon, dim: int):
@@ -94,25 +120,120 @@ def evaluate_objective(f: Callable[[np.ndarray], np.ndarray], X, dim: int):
     return y
 
 
-def load_callable(spec: str):
-    """Load an objective from 'module:function' or '/path/file.py:function'."""
-    if ":" not in spec:
-        raise ValueError("objective spec must be 'module:function' or '/path/file.py:function'")
-    module_spec, function_name = spec.split(":", 1)
-    if module_spec.endswith(".py") or "/" in module_spec:
-        module_path = Path(module_spec).resolve()
-        module_name = module_path.stem
-        spec_obj = importlib.util.spec_from_file_location(module_name, module_path)
-        if spec_obj is None or spec_obj.loader is None:
-            raise ImportError(f"cannot import module from {module_path}")
-        module = importlib.util.module_from_spec(spec_obj)
-        spec_obj.loader.exec_module(module)
+def make_gpr(dim: int):
+    kernel = (
+        ConstantKernel(1.0, (1e-2, 1e3))
+        * RBF(length_scale=np.full(dim, 0.2), length_scale_bounds=(1e-2, 10.0))
+        + WhiteKernel(noise_level=1e-3, noise_level_bounds=(1e-10, 1e1))
+    )
+    return GaussianProcessRegressor(kernel=kernel, alpha=0.0, normalize_y=True)
+
+
+def gp_params(gp, X_train):
+    kernel = gp.kernel_
+    return {
+        "X_train": np.asarray(X_train, dtype=np.float64),
+        "alpha": np.asarray(gp.alpha_, dtype=np.float64).reshape(-1),
+        "L": np.asarray(gp.L_, dtype=np.float64),
+        "length_scale": np.asarray(kernel.k1.k2.length_scale, dtype=np.float64).reshape(-1),
+        "sigma_f_squared": float(kernel.k1.k1.constant_value),
+        "sigma_n_squared": float(kernel.k2.noise_level),
+        "y_train_mean": float(np.asarray(gp._y_train_mean, dtype=np.float64).reshape(-1)[0]),
+        "y_train_std": float(np.asarray(gp._y_train_std, dtype=np.float64).reshape(-1)[0]),
+        "y_min_scaled": float(np.min(np.asarray(gp.y_train_, dtype=np.float64))),
+    }
+
+
+def save_gp_parameters(path: Path, params: dict):
+    np.savez(path, **{k: np.asarray(v) for k, v in params.items()})
+
+
+def write_partition_input(path, *, X0, bounds, params, epsilon_x, epsilon_ei, max_partitions):
+    X0 = np.asarray(X0, dtype=np.float64)
+    bounds = np.asarray(bounds, dtype=np.float64)
+    epsilon_x = np.asarray(epsilon_x, dtype=np.float64).reshape(-1)
+    n_train, d = X0.shape
+    if bounds.shape != (d, 2):
+        raise ValueError("bounds must have shape (d, 2)")
+    if epsilon_x.shape != (d,):
+        raise ValueError("epsilon_x must have shape (d,)")
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("wb") as f:
+        f.write(PARTITION_INPUT_MAGIC)
+        f.write(struct.pack("<QQQdddddd", n_train, d, int(max_partitions), float(epsilon_ei),
+                            params["sigma_f_squared"], params["sigma_n_squared"],
+                            params["y_train_mean"], params["y_train_std"], params["y_min_scaled"]))
+        _write_array(f, epsilon_x)
+        _write_array(f, bounds[:, 0])
+        _write_array(f, bounds[:, 1])
+        _write_array(f, params["X_train"])
+        _write_array(f, params["alpha"])
+        _write_array(f, params["L"])
+        _write_array(f, params["length_scale"])
+
+
+def _write_array(f, values):
+    f.write(np.ascontiguousarray(values, dtype=np.float64).tobytes())
+
+
+def launch_native(
+    exe,
+    mpi_ranks,
+    input_path,
+    output_path,
+    *,
+    device_batch_rows=4096,
+    split_batch_parents=0,
+    box_storage="auto",
+    host_box_limit_bytes=0,
+    spill_dir=None,
+    keep_spill_files=False,
+    verbose=False,
+):
+    """Launch the native partitioner with explicit memory-policy controls."""
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    if mpi_ranks <= 1:
+        cmd = [str(exe), "--input", str(input_path), "--output", str(output_path)]
     else:
-        module = importlib.import_module(module_spec)
-    f = getattr(module, function_name)
-    if not callable(f):
-        raise TypeError(f"{spec} is not callable")
-    return f
+        cmd = ["mpirun", "-np", str(mpi_ranks), str(exe), "--input", str(input_path), "--output", str(output_path)]
+    if device_batch_rows <= 0:
+        raise ValueError("device_batch_rows must be positive")
+    if split_batch_parents < 0:
+        raise ValueError("split_batch_parents must be nonnegative (0 means automatic)")
+    if box_storage not in {"auto", "host", "file"}:
+        raise ValueError("box_storage must be 'auto', 'host', or 'file'")
+    if host_box_limit_bytes < 0:
+        raise ValueError("host_box_limit_bytes must be nonnegative")
+    cmd.extend(("--device-batch-rows", str(int(device_batch_rows))))
+    cmd.extend(("--split-batch-parents", str(int(split_batch_parents))))
+    cmd.extend(("--box-storage", box_storage))
+    cmd.extend(("--host-box-limit-bytes", str(int(host_box_limit_bytes))))
+    if spill_dir is not None:
+        cmd.extend(("--spill-dir", str(spill_dir)))
+    if keep_spill_files:
+        cmd.append("--keep-spill-files")
+    if verbose:
+        cmd.append("--verbose")
+    print("launch:", " ".join(cmd), flush=True)
+    subprocess.run(cmd, check=True)
+
+
+def read_partition_output(path):
+    with path.open("rb") as f:
+        if f.read(8) != PARTITION_OUTPUT_MAGIC:
+            raise ValueError(f"{path} is not an exactbo_partitioning output file")
+        d, partitions_done, n_boxes_final = struct.unpack("<QQQ", f.read(24))
+        (converged,) = struct.unpack("<i", f.read(4))
+        (best_ei_scaled,) = struct.unpack("<d", f.read(8))
+        best_x = np.frombuffer(f.read(8 * d), dtype="<f8").copy()
+    return {
+        "best_x": best_x,
+        "best_ei_scaled": float(best_ei_scaled),
+        "partitions_done": int(partitions_done),
+        "n_boxes_final": int(n_boxes_final),
+        "converged": bool(converged),
+    }
 
 
 def _jsonable(value):
@@ -127,10 +248,6 @@ def _jsonable(value):
     return value
 
 
-def save_gp_parameters(path: Path, params: dict):
-    np.savez(path, **{k: np.asarray(v) for k, v in params.items()})
-
-
 def run_native_exactbo(
     f: Callable[[np.ndarray], np.ndarray],
     X0,
@@ -138,14 +255,14 @@ def run_native_exactbo(
     *,
     y0=None,
     gp: GaussianProcessRegressor | None = None,
-    workdir="native/exactbo/data/exactbo_bo_workflow",
+    workdir="native/exactbo/data/exactbo_workflow",
     native_build_dir="native/build",
     partitioning_exe=None,
     mpi_ranks=1,
     max_iters=3,
     max_partitions=6,
-    epsilon_x=1e-3,
-    epsilon_ei=1e-6,
+    epsilon_x=1e-5,
+    epsilon_ei=1e-2,
     device_batch_rows=4096,
     split_batch_parents=0,
     box_storage="auto",
@@ -301,22 +418,6 @@ def run_native_exactbo(
     }
 
 
-def load_problem_from_args(args):
-    if args.example == "minimization_2d":
-        f, X0, bounds = make_minimization_2d_data()
-    else:
-        if args.objective is None:
-            raise ValueError("--objective is required when --example is not used")
-        if args.x0 is None or args.bounds is None:
-            raise ValueError("--x0 and --bounds are required when --example is not used")
-        f = load_callable(args.objective)
-        X0 = np.load(args.x0)
-        bounds = np.load(args.bounds)
-
-    y0 = np.load(args.y0) if args.y0 else None
-    return f, X0, bounds, y0
-
-
 def main():
     parser = argparse.ArgumentParser(description="Run BO with native ExactBO partitioning as acquisition.")
     parser.add_argument("--example", choices=["minimization_2d", "none"], default="minimization_2d")
@@ -324,14 +425,14 @@ def main():
     parser.add_argument("--x0", default=None, help=".npy file with initial X, shape (n0, d).")
     parser.add_argument("--y0", default=None, help="Optional .npy file with initial y, shape (n0,).")
     parser.add_argument("--bounds", default=None, help=".npy file with bounds, shape (d, 2).")
-    parser.add_argument("--workdir", default="native/exactbo/data/exactbo_bo_workflow")
+    parser.add_argument("--workdir", default="native/exactbo/data/exactbo_workflow")
     parser.add_argument("--native-build-dir", default="native/build")
     parser.add_argument("--partitioning-exe", default=None)
     parser.add_argument("--mpi-ranks", type=int, default=1)
     parser.add_argument("--max-iters", type=int, default=3)
     parser.add_argument("--max-partitions", type=int, default=6)
-    parser.add_argument("--epsilon-x", type=float, default=1e-3)
-    parser.add_argument("--epsilon-ei", type=float, default=1e-6)
+    parser.add_argument("--epsilon-x", type=float, default=1e-5)
+    parser.add_argument("--epsilon-ei", type=float, default=1e-2)
     parser.add_argument("--device-batch-rows", type=int, default=4096,
                         help="Maximum boxes in one CUDA allocation/launch batch.")
     parser.add_argument("--split-batch-parents", type=int, default=0,

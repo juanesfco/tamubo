@@ -127,7 +127,7 @@ envs/venvTrial/bin/python native/exactbo/scripts/partitioning_workflow.py \
 
 ## Full Native-Acquisition BO Workflow
 
-`exactbo_bo_workflow.py` is the Python orchestrator for the full Bayesian optimization loop. Python receives the problem and data, evaluates the black-box function, fits the sklearn GP, and launches the native `exactbo_partitioning` executable each BO iteration to propose the next point.
+`exactbo_workflow.py` is the Python orchestrator for the full Bayesian optimization loop. Python receives the problem and data, evaluates the black-box function, fits the sklearn GP, and launches the native `exactbo_partitioning` executable each BO iteration to propose the next point.
 
 Build the native acquisition executable:
 
@@ -139,8 +139,8 @@ cmake --build native/build --target exactbo_partitioning
 Run the built-in 2D example:
 
 ```bash
-envs/venvTrial/bin/python native/exactbo/scripts/exactbo_bo_workflow.py \
-  --workdir native/exactbo/data/exactbo_bo_workflow \
+envs/venvTrial/bin/python native/exactbo/scripts/exactbo_workflow.py \
+  --workdir native/exactbo/data/exactbo_workflow \
   --native-build-dir native/build \
   --mpi-ranks 1 \
   --max-iters 3 \
@@ -151,7 +151,7 @@ envs/venvTrial/bin/python native/exactbo/scripts/exactbo_bo_workflow.py \
 Run a custom problem by providing an objective and `.npy` data files:
 
 ```bash
-envs/venvTrial/bin/python native/exactbo/scripts/exactbo_bo_workflow.py \
+envs/venvTrial/bin/python native/exactbo/scripts/exactbo_workflow.py \
   --example none \
   --objective path/to/problem.py:objective \
   --x0 path/to/X0.npy \
