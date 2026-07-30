@@ -28,11 +28,49 @@
 #include <sched.h>
 #endif
 
+// Frequently used standard-library names are imported once here.  This keeps
+// the algorithm below readable without hiding the origin of less common names.
+using std::cerr;
+using std::copy_n;
+using std::cout;
+using std::error_code;
+using std::exception;
+using std::exit;
+using std::fill;
+using std::fprintf;
+using std::fixed;
+using std::gcd;
+using std::ifstream;
+using std::ios;
+using std::isfinite;
+using std::make_unique;
+using std::memcmp;
+using std::max;
+using std::min;
+using std::move;
+using std::numeric_limits;
+using std::ofstream;
+using std::ostringstream;
+using std::runtime_error;
+using std::setprecision;
+using std::size_t;
+using std::string;
+using std::strcmp;
+using std::strerror;
+using std::stoi;
+using std::stoull;
+using std::to_string;
+using std::uint64_t;
+using std::unique_ptr;
+using std::vector;
+
+namespace fs = std::filesystem;
+
 #define CUDA_CHECK(call)                                                        \
     do {                                                                        \
         cudaError_t status = (call);                                            \
         if (status != cudaSuccess) {                                            \
-            std::fprintf(stderr, "CUDA error at %s:%d: %s\n", __FILE__,         \
+            fprintf(stderr, "CUDA error at %s:%d: %s\n", __FILE__,         \
                          __LINE__, cudaGetErrorString(status));                 \
             MPI_Abort(MPI_COMM_WORLD, EXIT_FAILURE);                            \
         }                                                                       \
@@ -40,22 +78,26 @@
 
 namespace {
 
+// -----------------------------------------------------------------------------
+// File format constants and small data containers
+// -----------------------------------------------------------------------------
+
 constexpr char kInputMagic[8] = {'T', 'P', 'A', 'R', 'I', 'N', '1', '!'};
 constexpr char kOutputMagic[8] = {'T', 'P', 'A', 'R', 'O', 'U', '1', '!'};
 constexpr double kInvSqrt2Pi = 0.39894228040143267794;
 constexpr double kSqrt2 = 1.41421356237309504880;
 
 struct Options {
-    std::string input_path;
-    std::string output_path;
+    string input_path;
+    string output_path;
     int verbose = 0;
-    std::uint64_t device_batch_rows = 4096;
+    int device_batch_rows = 4096;
     // Zero asks the memory planner to choose a safe split batch automatically.
-    std::uint64_t split_batch_parents = 0;
-    std::string box_storage = "auto";
+    int split_batch_parents = 0;
+    string box_storage = "auto";
     // Zero derives a conservative limit from MemAvailable/cgroup state.
-    std::uint64_t host_box_limit_bytes = 0;
-    std::string spill_dir;
+    uint64_t host_box_limit_bytes = 0;
+    string spill_dir;
     bool keep_spill_files = false;
 };
 
@@ -64,30 +106,36 @@ using tamubo::exactbo::FileBoxStore;
 using tamubo::exactbo::FileBoxWriter;
 using tamubo::exactbo::HostBoxStore;
 
+// Training size, dimension, and partition limit are small ordinary ints in the
+// algorithm.  read_input() converts them from the Python file format.
 struct PartitionInput {
-    std::uint64_t n_train = 0;
-    std::uint64_t d = 0;
-    std::uint64_t max_partitions = 0;
+    int n_train = 0;
+    int d = 0;
+    int max_partitions = 0;
     double epsilon_ei = 0.0;
     double sigma_f_2 = 1.0;
     double sigma_n_2 = 0.0;
     double y_train_mean = 0.0;
     double y_train_std = 1.0;
     double y_min_scaled = 0.0;
-    std::vector<double> epsilon_x;
-    std::vector<double> domain_L;
-    std::vector<double> domain_U;
-    std::vector<double> X_train;
-    std::vector<double> alpha;
-    std::vector<double> L;
-    std::vector<double> length_scale;
+    vector<double> epsilon_x;
+    vector<double> domain_L;
+    vector<double> domain_U;
+    vector<double> X_train;
+    vector<double> alpha;
+    vector<double> L;
+    vector<double> length_scale;
 };
 
 struct BestSample {
-    double ei = -std::numeric_limits<double>::infinity();
+    double ei = -numeric_limits<double>::infinity();
     long long box_idx = -1;
-    std::vector<double> x;
+    vector<double> x;
 };
+
+// -----------------------------------------------------------------------------
+// MPI rank and device-information helpers
+// -----------------------------------------------------------------------------
 
 int current_cpu() {
 #ifdef __linux__
@@ -116,284 +164,279 @@ int local_size_on_node() {
     return local_size;
 }
 
-std::string format_bytes(std::size_t bytes) {
-    constexpr double gib = 1024.0 * 1024.0 * 1024.0;
-    std::ostringstream out;
-    out << std::fixed << std::setprecision(3) << static_cast<double>(bytes) / gib << " GiB";
+string format_bytes(size_t bytes) {
+    constexpr double gib_divisor = 1024.0 * 1024.0 * 1024.0;
+    constexpr double gb_divisor  = 1000.0 * 1000.0 * 1000.0;
+    ostringstream out;
+    out << fixed << setprecision(3)
+        << bytes / gib_divisor << " GiB"
+        << " (" << bytes / gb_divisor << " GB)";
     return out.str();
 }
 
-void print_device_memory(int rank, const std::string& label) {
-    std::size_t free_bytes = 0;
-    std::size_t total_bytes = 0;
+void print_device_memory(int rank, const string& label) {
+    size_t free_bytes = 0;
+    size_t total_bytes = 0;
     CUDA_CHECK(cudaMemGetInfo(&free_bytes, &total_bytes));
-    std::size_t used_bytes = total_bytes - free_bytes;
-    std::cout << "rank " << rank << " memory [" << label << "] "
+    size_t used_bytes = total_bytes - free_bytes;
+    cout << "rank " << rank << " memory [" << label << "] "
               << "used=" << format_bytes(used_bytes)
               << " free=" << format_bytes(free_bytes)
               << " total=" << format_bytes(total_bytes) << "\n";
 }
+
+// -----------------------------------------------------------------------------
+// Command-line and binary file input/output
+// -----------------------------------------------------------------------------
 
 Options parse_args(int argc, char** argv) {
     Options options;
     for (int i = 1; i < argc; ++i) {
         auto need_value = [&](const char* flag) -> char* {
             if (i + 1 >= argc) {
-                throw std::runtime_error(std::string("missing value for ") + flag);
+                throw runtime_error(string("missing value for ") + flag);
             }
             return argv[++i];
         };
-        if (std::strcmp(argv[i], "--input") == 0) {
+        if (strcmp(argv[i], "--input") == 0) {
             options.input_path = need_value("--input");
-        } else if (std::strcmp(argv[i], "--output") == 0) {
+        } else if (strcmp(argv[i], "--output") == 0) {
             options.output_path = need_value("--output");
-        } else if (std::strcmp(argv[i], "--verbose") == 0) {
+        } else if (strcmp(argv[i], "--verbose") == 0) {
             options.verbose = 1;
-        } else if (std::strcmp(argv[i], "--device-batch-rows") == 0) {
+        } else if (strcmp(argv[i], "--device-batch-rows") == 0) {
             const char* value = need_value("--device-batch-rows");
-            std::size_t parsed = 0;
-            options.device_batch_rows = std::stoull(value, &parsed);
+            size_t parsed = 0;
+            options.device_batch_rows = stoi(value, &parsed);
             if (value[0] == '-' || value[parsed] != '\0' ||
                 options.device_batch_rows == 0) {
-                throw std::runtime_error("--device-batch-rows must be a positive integer");
+                throw runtime_error("--device-batch-rows must be a positive integer");
             }
-        } else if (std::strcmp(argv[i], "--split-batch-parents") == 0) {
+        } else if (strcmp(argv[i], "--split-batch-parents") == 0) {
             const char* value = need_value("--split-batch-parents");
-            std::size_t parsed = 0;
-            options.split_batch_parents = std::stoull(value, &parsed);
+            size_t parsed = 0;
+            options.split_batch_parents = stoi(value, &parsed);
             if (value[0] == '-' || value[parsed] != '\0') {
-                throw std::runtime_error("--split-batch-parents must be a nonnegative integer");
+                throw runtime_error("--split-batch-parents must be a nonnegative integer");
             }
-        } else if (std::strcmp(argv[i], "--box-storage") == 0) {
+        } else if (strcmp(argv[i], "--box-storage") == 0) {
             options.box_storage = need_value("--box-storage");
             if (options.box_storage != "auto" && options.box_storage != "host" &&
                 options.box_storage != "file") {
-                throw std::runtime_error("--box-storage must be auto, host, or file");
+                throw runtime_error("--box-storage must be auto, host, or file");
             }
-        } else if (std::strcmp(argv[i], "--host-box-limit-bytes") == 0) {
+        } else if (strcmp(argv[i], "--host-box-limit-bytes") == 0) {
             const char* value = need_value("--host-box-limit-bytes");
-            std::size_t parsed = 0;
-            options.host_box_limit_bytes = std::stoull(value, &parsed);
+            size_t parsed = 0;
+            options.host_box_limit_bytes = stoull(value, &parsed);
             if (value[0] == '-' || value[parsed] != '\0') {
-                throw std::runtime_error("--host-box-limit-bytes must be a nonnegative integer");
+                throw runtime_error("--host-box-limit-bytes must be a nonnegative integer");
             }
-        } else if (std::strcmp(argv[i], "--spill-dir") == 0) {
+        } else if (strcmp(argv[i], "--spill-dir") == 0) {
             options.spill_dir = need_value("--spill-dir");
-        } else if (std::strcmp(argv[i], "--keep-spill-files") == 0) {
+        } else if (strcmp(argv[i], "--keep-spill-files") == 0) {
             options.keep_spill_files = true;
-        } else if (std::strcmp(argv[i], "--help") == 0) {
-            std::cout << "Usage: exactbo_partitioning --input input.bin --output output.bin\n"
+        } else if (strcmp(argv[i], "--help") == 0) {
+            cout << "Usage: exactbo_partitioning --input input.bin --output output.bin\n"
                       << "       [--device-batch-rows N] [--split-batch-parents N]\n"
                       << "       [--box-storage auto|host|file] [--host-box-limit-bytes N]\n"
                       << "       [--spill-dir PATH] [--keep-spill-files] [--verbose]\n";
-            std::exit(EXIT_SUCCESS);
+            exit(EXIT_SUCCESS);
         } else {
-            throw std::runtime_error(std::string("unknown argument: ") + argv[i]);
+            throw runtime_error(string("unknown argument: ") + argv[i]);
         }
     }
     if (options.input_path.empty() || options.output_path.empty()) {
-        throw std::runtime_error("--input and --output are required");
+        throw runtime_error("--input and --output are required");
     }
     return options;
 }
 
-template <class T>
-void read_value(std::istream& in, T& value, const std::string& label) {
-    in.read(reinterpret_cast<char*>(&value), sizeof(T));
+
+uint64_t local_start_for_rank(uint64_t n, int rank, int size) {
+    uint64_t base = n / size;
+    uint64_t rem = n % size;
+    return rank * base + min<uint64_t>(rank, rem);
+}
+
+uint64_t local_count_for_rank(uint64_t n, int rank, int size) {
+    uint64_t base = n / size;
+    uint64_t rem = n % size;
+    return base + (rank < rem ? 1 : 0);
+}
+
+PartitionInput read_input(const string& path) {
+    ifstream in(path, ios::binary);
     if (!in) {
-        throw std::runtime_error("failed to read " + label);
-    }
-}
-
-void read_doubles(std::istream& in, std::vector<double>& values, const std::string& label) {
-    in.read(reinterpret_cast<char*>(values.data()), static_cast<std::streamsize>(values.size() * sizeof(double)));
-    if (!in) {
-        throw std::runtime_error("failed to read " + label);
-    }
-}
-
-void check_no_trailing_bytes(std::istream& in) {
-    char trailing = 0;
-    in.read(&trailing, 1);
-    if (in.gcount() != 0) {
-        throw std::runtime_error("input file has trailing bytes");
-    }
-}
-
-std::uint64_t checked_mul(std::uint64_t a, std::uint64_t b, const std::string& label) {
-    if (a != 0 && b > std::numeric_limits<std::uint64_t>::max() / a) {
-        throw std::runtime_error(label + " overflows uint64");
-    }
-    return a * b;
-}
-
-int checked_int_count(std::uint64_t value, const std::string& label) {
-    if (value > static_cast<std::uint64_t>(std::numeric_limits<int>::max())) {
-        throw std::runtime_error(label + " is too large for MPI int counts");
-    }
-    return static_cast<int>(value);
-}
-
-std::uint64_t local_start_for_rank(std::uint64_t n, int rank, int size) {
-    std::uint64_t base = n / static_cast<std::uint64_t>(size);
-    std::uint64_t rem = n % static_cast<std::uint64_t>(size);
-    return static_cast<std::uint64_t>(rank) * base + std::min<std::uint64_t>(rank, rem);
-}
-
-std::uint64_t local_count_for_rank(std::uint64_t n, int rank, int size) {
-    std::uint64_t base = n / static_cast<std::uint64_t>(size);
-    std::uint64_t rem = n % static_cast<std::uint64_t>(size);
-    return base + (static_cast<std::uint64_t>(rank) < rem ? 1 : 0);
-}
-
-PartitionInput read_input(const std::string& path) {
-    std::ifstream in(path, std::ios::binary);
-    if (!in) {
-        throw std::runtime_error("failed to open input file: " + path);
+        throw runtime_error("failed to open input file: " + path);
     }
     char magic[8]{};
     in.read(magic, sizeof(magic));
-    if (!in || std::memcmp(magic, kInputMagic, sizeof(magic)) != 0) {
-        throw std::runtime_error("invalid exactbo_partitioning input magic");
+    if (!in || memcmp(magic, kInputMagic, sizeof(magic)) != 0) {
+        throw runtime_error("invalid exactbo_partitioning input magic");
     }
 
     PartitionInput input;
-    read_value(in, input.n_train, "n_train");
-    read_value(in, input.d, "d");
-    read_value(in, input.max_partitions, "max_partitions");
-    read_value(in, input.epsilon_ei, "epsilon_ei");
-    read_value(in, input.sigma_f_2, "sigma_f_2");
-    read_value(in, input.sigma_n_2, "sigma_n_2");
-    read_value(in, input.y_train_mean, "y_train_mean");
-    read_value(in, input.y_train_std, "y_train_std");
-    read_value(in, input.y_min_scaled, "y_min_scaled");
+    uint64_t n_train_on_disk = 0;
+    uint64_t dimensions_on_disk = 0;
+    uint64_t max_partitions_on_disk = 0;
+    // Binary streams read bytes through char pointers.  These casts are required
+    // by the C++ stream API; they do not change the stored values.
+    in.read(reinterpret_cast<char*>(&n_train_on_disk), sizeof(n_train_on_disk));
+    in.read(reinterpret_cast<char*>(&dimensions_on_disk), sizeof(dimensions_on_disk));
+    in.read(reinterpret_cast<char*>(&max_partitions_on_disk), sizeof(max_partitions_on_disk));
+    in.read(reinterpret_cast<char*>(&input.epsilon_ei), sizeof(input.epsilon_ei));
+    in.read(reinterpret_cast<char*>(&input.sigma_f_2), sizeof(input.sigma_f_2));
+    in.read(reinterpret_cast<char*>(&input.sigma_n_2), sizeof(input.sigma_n_2));
+    in.read(reinterpret_cast<char*>(&input.y_train_mean), sizeof(input.y_train_mean));
+    in.read(reinterpret_cast<char*>(&input.y_train_std), sizeof(input.y_train_std));
+    in.read(reinterpret_cast<char*>(&input.y_min_scaled), sizeof(input.y_min_scaled));
+    if (!in) {
+        throw runtime_error("input file ended while reading GP settings");
+    }
+    if (n_train_on_disk > numeric_limits<int>::max() ||
+        dimensions_on_disk > numeric_limits<int>::max() ||
+        max_partitions_on_disk > numeric_limits<int>::max()) {
+        throw runtime_error("training size, dimensions, or partitions exceed int range");
+    }
+    // These casts deliberately narrow validated on-disk 64-bit values.
+    input.n_train = static_cast<int>(n_train_on_disk);
+    input.d = static_cast<int>(dimensions_on_disk);
+    input.max_partitions = static_cast<int>(max_partitions_on_disk);
 
     if (input.n_train == 0 || input.d == 0 || input.max_partitions == 0) {
-        throw std::runtime_error("n_train, d, and max_partitions must be > 0");
+        throw runtime_error("n_train, d, and max_partitions must be > 0");
     }
     if (input.d >= 63) {
-        throw std::runtime_error("d is too large for m=2^d samples");
+        throw runtime_error("d is too large for m=2^d samples");
     }
 
     input.epsilon_x.resize(input.d);
     input.domain_L.resize(input.d);
     input.domain_U.resize(input.d);
-    input.X_train.resize(checked_mul(input.n_train, input.d, "n_train*d"));
+    input.X_train.resize(input.n_train * input.d);
     input.alpha.resize(input.n_train);
-    input.L.resize(checked_mul(input.n_train, input.n_train, "n_train*n_train"));
+    input.L.resize(input.n_train * input.n_train);
     input.length_scale.resize(input.d);
 
-    read_doubles(in, input.epsilon_x, "epsilon_x");
-    read_doubles(in, input.domain_L, "domain_L");
-    read_doubles(in, input.domain_U, "domain_U");
-    read_doubles(in, input.X_train, "X_train");
-    read_doubles(in, input.alpha, "alpha");
-    read_doubles(in, input.L, "L");
-    read_doubles(in, input.length_scale, "length_scale");
-    check_no_trailing_bytes(in);
+    in.read(reinterpret_cast<char*>(input.epsilon_x.data()), input.epsilon_x.size() * sizeof(double));
+    in.read(reinterpret_cast<char*>(input.domain_L.data()), input.domain_L.size() * sizeof(double));
+    in.read(reinterpret_cast<char*>(input.domain_U.data()), input.domain_U.size() * sizeof(double));
+    in.read(reinterpret_cast<char*>(input.X_train.data()), input.X_train.size() * sizeof(double));
+    in.read(reinterpret_cast<char*>(input.alpha.data()), input.alpha.size() * sizeof(double));
+    in.read(reinterpret_cast<char*>(input.L.data()), input.L.size() * sizeof(double));
+    in.read(reinterpret_cast<char*>(input.length_scale.data()), input.length_scale.size() * sizeof(double));
+    if (!in) {
+        throw runtime_error("input file ended while reading GP arrays");
+    }
 
-    for (std::uint64_t dim = 0; dim < input.d; ++dim) {
-        if (!std::isfinite(input.domain_L[dim]) || !std::isfinite(input.domain_U[dim]) ||
+    for (int dim = 0; dim < input.d; ++dim) {
+        if (!isfinite(input.domain_L[dim]) || !isfinite(input.domain_U[dim]) ||
             !(input.domain_L[dim] < input.domain_U[dim])) {
-            throw std::runtime_error("each domain lower bound must be finite and smaller than its upper bound");
+            throw runtime_error("each domain lower bound must be finite and smaller than its upper bound");
         }
-        if (!std::isfinite(input.epsilon_x[dim]) || input.epsilon_x[dim] < 0.0) {
-            throw std::runtime_error("epsilon_x values must be finite and nonnegative");
+        if (!isfinite(input.epsilon_x[dim]) || input.epsilon_x[dim] < 0.0) {
+            throw runtime_error("epsilon_x values must be finite and nonnegative");
         }
-        if (!std::isfinite(input.length_scale[dim]) || !(input.length_scale[dim] > 0.0)) {
-            throw std::runtime_error("length scales must be finite and positive");
+        if (!isfinite(input.length_scale[dim]) || !(input.length_scale[dim] > 0.0)) {
+            throw runtime_error("length scales must be finite and positive");
         }
     }
-    if (!std::isfinite(input.epsilon_ei) || input.epsilon_ei < 0.0 ||
-        !std::isfinite(input.sigma_f_2) || !(input.sigma_f_2 > 0.0) ||
-        !std::isfinite(input.y_min_scaled)) {
-        throw std::runtime_error("invalid EI tolerance or GP scalar parameters");
+    if (!isfinite(input.epsilon_ei) || input.epsilon_ei < 0.0 ||
+        !isfinite(input.sigma_f_2) || !(input.sigma_f_2 > 0.0) ||
+        !isfinite(input.y_min_scaled)) {
+        throw runtime_error("invalid EI tolerance or GP scalar parameters");
     }
-    for (std::uint64_t j = 0; j < input.n_train; ++j) {
+    for (int j = 0; j < input.n_train; ++j) {
         double diagonal = input.L[j * input.n_train + j];
-        if (!std::isfinite(diagonal) || !(diagonal > 0.0)) {
-            throw std::runtime_error("the Cholesky factor must have a finite positive diagonal");
+        if (!isfinite(diagonal) || !(diagonal > 0.0)) {
+            throw runtime_error("the Cholesky factor must have a finite positive diagonal");
         }
     }
     return input;
 }
 
 void write_output(
-    const std::string& path,
+    const string& path,
     const BestSample& best,
-    std::uint64_t d,
-    std::uint64_t partitions_done,
-    std::uint64_t n_boxes_final,
+    int d,
+    uint64_t partitions_done,
+    uint64_t n_boxes_final,
     int converged) {
-    std::ofstream out(path, std::ios::binary);
+    ofstream out(path, ios::binary);
     if (!out) {
-        throw std::runtime_error("failed to open output file: " + path);
+        throw runtime_error("failed to open output file: " + path);
     }
     out.write(kOutputMagic, sizeof(kOutputMagic));
-    out.write(reinterpret_cast<const char*>(&d), sizeof(d));
+    uint64_t dimensions_on_disk = d;
+    out.write(reinterpret_cast<const char*>(&dimensions_on_disk),
+              sizeof(dimensions_on_disk));
     out.write(reinterpret_cast<const char*>(&partitions_done), sizeof(partitions_done));
     out.write(reinterpret_cast<const char*>(&n_boxes_final), sizeof(n_boxes_final));
     out.write(reinterpret_cast<const char*>(&converged), sizeof(converged));
     out.write(reinterpret_cast<const char*>(&best.ei), sizeof(best.ei));
-    out.write(reinterpret_cast<const char*>(best.x.data()), static_cast<std::streamsize>(d * sizeof(double)));
+    out.write(reinterpret_cast<const char*>(best.x.data()), d * sizeof(double));
     if (!out) {
-        throw std::runtime_error("failed to write output file: " + path);
+        throw runtime_error("failed to write output file: " + path);
     }
 }
 
-std::vector<double> centered_latin_hypercube_unit(std::uint64_t n_points, std::uint64_t d) {
-    std::vector<double> lhs(checked_mul(n_points, d, "lhs elements"));
-    std::vector<double> centers(n_points);
-    for (std::uint64_t i = 0; i < n_points; ++i) {
-        centers[i] = (static_cast<double>(i) + 0.5) / static_cast<double>(n_points);
+// -----------------------------------------------------------------------------
+// Deterministic sample points and CUDA memory management
+// -----------------------------------------------------------------------------
+
+vector<double> centered_latin_hypercube_unit(uint64_t n_points, int d) {
+    vector<double> lhs(n_points * d);
+    vector<double> centers(n_points);
+    for (uint64_t i = 0; i < n_points; ++i) {
+        centers[i] = (i + 0.5) / n_points;
     }
-    for (std::uint64_t j = 0; j < d; ++j) {
-        std::uint64_t step = 2 * j + 1;
-        while (std::gcd(step, n_points) != 1) {
+    for (int j = 0; j < d; ++j) {
+        uint64_t step = 2 * j + 1;
+        while (gcd(step, n_points) != 1) {
             step += 2;
         }
-        for (std::uint64_t i = 0; i < n_points; ++i) {
+        for (uint64_t i = 0; i < n_points; ++i) {
             lhs[i * d + j] = centers[(i * step + j) % n_points];
         }
     }
     return lhs;
 }
 
-void check_cuda_alloc(cudaError_t status, const char* label, std::size_t bytes, const char* file, int line) {
+void check_cuda_alloc(cudaError_t status, const char* label, size_t bytes, const char* file, int line) {
     if (status == cudaSuccess) {
         return;
     }
-    std::size_t free_bytes = 0;
-    std::size_t total_bytes = 0;
+    size_t free_bytes = 0;
+    size_t total_bytes = 0;
     cudaMemGetInfo(&free_bytes, &total_bytes);
-    std::fprintf(stderr,
+    fprintf(stderr,
                  "CUDA allocation error at %s:%d for %s: requested=%zu bytes free=%zu bytes total=%zu bytes error=%s\n",
                  file, line, label, bytes, free_bytes, total_bytes, cudaGetErrorString(status));
     MPI_Abort(MPI_COMM_WORLD, EXIT_FAILURE);
 }
 
-#define CUDA_ALLOC(dst, bytes, label)                                                \
-    do {                                                                             \
-        std::size_t cuda_alloc_bytes = (bytes);                                      \
-        cudaError_t cuda_alloc_status = cudaMalloc((dst), cuda_alloc_bytes);         \
-        check_cuda_alloc(cuda_alloc_status, (label), cuda_alloc_bytes, __FILE__, __LINE__); \
-    } while (0)
-
-void copy_to_device(void** dst, const void* src, std::size_t bytes, const char* label) {
+template <class T>
+void allocate_device(T** pointer, size_t bytes, const char* label) {
     if (bytes == 0) {
-        *dst = nullptr;
+        *pointer = nullptr;
         return;
     }
-    CUDA_ALLOC(dst, bytes, label);
-    CUDA_CHECK(cudaMemcpy(*dst, src, bytes, cudaMemcpyHostToDevice));
+
+    // cudaMalloc is a C API and therefore requires void**.  Keeping the cast
+    // here lets every caller use its natural type, such as double**.
+    cudaError_t status = cudaMalloc(reinterpret_cast<void**>(pointer), bytes);
+    check_cuda_alloc(status, label, bytes, __FILE__, __LINE__);
 }
 
-void allocate_device(void** dst, std::size_t bytes, const char* label) {
-    if (bytes == 0) {
-        *dst = nullptr;
-        return;
+template <class T>
+void copy_to_device(T** device_pointer, const T* host_pointer,
+                    size_t bytes, const char* label) {
+    allocate_device(device_pointer, bytes, label);
+    if (bytes != 0) {
+        CUDA_CHECK(cudaMemcpy(*device_pointer, host_pointer, bytes,
+                              cudaMemcpyHostToDevice));
     }
-    CUDA_ALLOC(dst, bytes, label);
 }
 
 void free_device(void* ptr) {
@@ -401,6 +444,10 @@ void free_device(void* ptr) {
         CUDA_CHECK(cudaFree(ptr));
     }
 }
+
+// -----------------------------------------------------------------------------
+// GPU mathematics: normal distribution, interval EI, GP evaluation, splitting
+// -----------------------------------------------------------------------------
 
 __device__ double erf_approx(double x) {
     double p = 0.3275911;
@@ -482,9 +529,9 @@ __global__ void ei_hi_bounds_kernel(
     const double* alpha,
     const double* L,
     const double* length_scale,
-    std::uint64_t local_n,
-    std::uint64_t n_train,
-    std::uint64_t d,
+    uint64_t local_n,
+    int n_train,
+    int d,
     double sigma_f_2,
     double y_min_scaled,
     double* K_lo,
@@ -492,15 +539,15 @@ __global__ void ei_hi_bounds_kernel(
     double* v_lo,
     double* v_hi,
     double* ei_hi) {
-    for (std::uint64_t row = static_cast<std::uint64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    for (uint64_t row = static_cast<uint64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
          row < local_n;
-         row += static_cast<std::uint64_t>(blockDim.x) * gridDim.x) {
+         row += static_cast<uint64_t>(blockDim.x) * gridDim.x) {
         double mu_lo = 0.0;
         double mu_hi = 0.0;
-        for (std::uint64_t j = 0; j < n_train; ++j) {
+        for (int j = 0; j < n_train; ++j) {
             double dmin_sq = 0.0;
             double dmax_sq = 0.0;
-            for (std::uint64_t dim = 0; dim < d; ++dim) {
+            for (int dim = 0; dim < d; ++dim) {
                 double xi = X_train[j * d + dim];
                 double ell = length_scale[dim];
                 double diff_lo = (boxes_L[row * d + dim] - xi) / ell;
@@ -523,10 +570,10 @@ __global__ void ei_hi_bounds_kernel(
 
         double q_hi = 0.0;
         double q_lo = 0.0;
-        for (std::uint64_t j = 0; j < n_train; ++j) {
+        for (int j = 0; j < n_train; ++j) {
             double sum_lo = 0.0;
             double sum_hi = 0.0;
-            for (std::uint64_t i = 0; i < j; ++i) {
+            for (int i = 0; i < j; ++i) {
                 double Lji = L[j * n_train + i];
                 double prev_lo = v_lo[row * n_train + i];
                 double prev_hi = v_hi[row * n_train + i];
@@ -567,34 +614,34 @@ __global__ void sample_best_kernel(
     const double* L,
     const double* length_scale,
     const double* lhs,
-    std::uint64_t local_n,
-    std::uint64_t n_train,
-    std::uint64_t d,
-    std::uint64_t n_samples,
+    uint64_t local_n,
+    int n_train,
+    int d,
+    uint64_t n_samples,
     double sigma_f_2,
     double y_min_scaled,
     double* v,
     double* best_ei,
     double* best_points) {
-    for (std::uint64_t row = static_cast<std::uint64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    for (uint64_t row = static_cast<uint64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
          row < local_n;
-         row += static_cast<std::uint64_t>(blockDim.x) * gridDim.x) {
+         row += static_cast<uint64_t>(blockDim.x) * gridDim.x) {
         if (mask[row] == 0) {
             best_ei[row] = -INFINITY;
-            for (std::uint64_t dim = 0; dim < d; ++dim) {
+            for (int dim = 0; dim < d; ++dim) {
                 best_points[row * d + dim] = 0.0;
             }
             continue;
         }
 
         double row_best_ei = -INFINITY;
-        std::uint64_t row_best_sample = 0;
-        for (std::uint64_t sample = 0; sample < n_samples; ++sample) {
+        uint64_t row_best_sample = 0;
+        for (uint64_t sample = 0; sample < n_samples; ++sample) {
             double mu = 0.0;
             double q = 0.0;
-            for (std::uint64_t j = 0; j < n_train; ++j) {
+            for (int j = 0; j < n_train; ++j) {
                 double sqdist = 0.0;
-                for (std::uint64_t dim = 0; dim < d; ++dim) {
+                for (int dim = 0; dim < d; ++dim) {
                     double lo = boxes_L[row * d + dim];
                     double hi = boxes_U[row * d + dim];
                     double x = lo + (hi - lo) * lhs[sample * d + dim];
@@ -604,7 +651,7 @@ __global__ void sample_best_kernel(
                 double k = sigma_f_2 * exp(-0.5 * sqdist);
                 mu += k * alpha[j];
                 double sum = 0.0;
-                for (std::uint64_t i = 0; i < j; ++i) {
+                for (int i = 0; i < j; ++i) {
                     sum += L[j * n_train + i] * v[row * n_train + i];
                 }
                 double vj = (k - sum) / L[j * n_train + j];
@@ -620,7 +667,7 @@ __global__ void sample_best_kernel(
         }
 
         best_ei[row] = row_best_ei;
-        for (std::uint64_t dim = 0; dim < d; ++dim) {
+        for (int dim = 0; dim < d; ++dim) {
             double lo = boxes_L[row * d + dim];
             double hi = boxes_U[row * d + dim];
             best_points[row * d + dim] = lo + (hi - lo) * lhs[row_best_sample * d + dim];
@@ -628,17 +675,17 @@ __global__ void sample_best_kernel(
     }
 }
 
-__device__ double normalized_width(const double* boxes_L, const double* boxes_U, const double* domain_width, std::uint64_t row, std::uint64_t d, std::uint64_t dim) {
+__device__ double normalized_width(const double* boxes_L, const double* boxes_U, const double* domain_width, int row, int d, int dim) {
     double width = boxes_U[row * d + dim] - boxes_L[row * d + dim];
     double scale = domain_width[dim];
     return scale != 0.0 ? width / scale : width;
 }
 
-__device__ std::uint64_t split_dim_for_rank(const double* boxes_L, const double* boxes_U, const double* domain_width, std::uint64_t row, std::uint64_t d, std::uint64_t rank) {
-    for (std::uint64_t dim = 0; dim < d; ++dim) {
+__device__ int split_dim_for_rank(const double* boxes_L, const double* boxes_U, const double* domain_width, int row, int d, int rank) {
+    for (int dim = 0; dim < d; ++dim) {
         double score = normalized_width(boxes_L, boxes_U, domain_width, row, d, dim);
-        std::uint64_t order = 0;
-        for (std::uint64_t other = 0; other < d; ++other) {
+        int order = 0;
+        for (int other = 0; other < d; ++other) {
             double other_score = normalized_width(boxes_L, boxes_U, domain_width, row, d, other);
             if (other_score > score || (other_score == score && other < dim)) {
                 ++order;
@@ -655,35 +702,36 @@ __global__ void split_dense_boxes_kernel(
     const double* boxes_L,
     const double* boxes_U,
     const double* domain_width,
-    std::uint64_t parent_count,
-    std::uint64_t d,
-    std::uint64_t stride,
+    int parent_count,
+    int d,
+    int stride,
     double* out_L,
     double* out_U) {
-    for (std::uint64_t pos = static_cast<std::uint64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    for (int pos = blockIdx.x * blockDim.x + threadIdx.x;
          pos < parent_count;
-         pos += static_cast<std::uint64_t>(blockDim.x) * gridDim.x) {
-        const std::uint64_t src = pos;
-        const std::uint64_t out_base = pos * stride;
-        for (std::uint64_t child = 0; child < stride; ++child) {
-            for (std::uint64_t dim = 0; dim < d; ++dim) {
+         pos += blockDim.x * gridDim.x) {
+        const int src = pos;
+        size_t out_base = pos;
+        out_base *= stride;
+        for (int child = 0; child < stride; ++child) {
+            for (int dim = 0; dim < d; ++dim) {
                 out_L[(out_base + child) * d + dim] = boxes_L[src * d + dim];
                 out_U[(out_base + child) * d + dim] = boxes_U[src * d + dim];
             }
         }
-        for (std::uint64_t order = 0; order < d; ++order) {
-            const std::uint64_t dim =
+        for (int order = 0; order < d; ++order) {
+            const int dim =
                 split_dim_for_rank(boxes_L, boxes_U, domain_width, src, d, order);
             const double low = boxes_L[src * d + dim];
             const double high = boxes_U[src * d + dim];
             const double third = (high - low) / 3.0;
             const double lower_third = low + third;
             const double upper_third = high - third;
-            const std::uint64_t lower_row = 2 * order;
-            const std::uint64_t upper_row = lower_row + 1;
+            const int lower_row = 2 * order;
+            const int upper_row = lower_row + 1;
             out_U[(out_base + lower_row) * d + dim] = lower_third;
             out_L[(out_base + upper_row) * d + dim] = upper_third;
-            for (std::uint64_t child = upper_row + 1; child < stride; ++child) {
+            for (int child = upper_row + 1; child < stride; ++child) {
                 out_L[(out_base + child) * d + dim] = lower_third;
                 out_U[(out_base + child) * d + dim] = upper_third;
             }
@@ -691,118 +739,125 @@ __global__ void split_dense_boxes_kernel(
     }
 }
 
+// -----------------------------------------------------------------------------
+// MPI communication helpers
+// -----------------------------------------------------------------------------
+
 void gather_double_rows(
-    const std::vector<double>& local,
-    std::uint64_t local_rows,
-    std::uint64_t cols,
+    const vector<double>& local,
+    uint64_t local_rows,
+    int cols,
     int rank,
     int size,
-    std::vector<double>& all,
-    std::uint64_t& total_rows) {
-    unsigned long long local_rows_ull = static_cast<unsigned long long>(local_rows);
-    std::vector<unsigned long long> rows_per_rank;
+    vector<double>& all,
+    uint64_t& total_rows) {
+    unsigned long long local_rows_ull = local_rows;
+    vector<unsigned long long> rows_per_rank;
     if (rank == 0) {
         rows_per_rank.resize(size);
     }
     MPI_Gather(&local_rows_ull, 1, MPI_UNSIGNED_LONG_LONG,
-               rank == 0 ? rows_per_rank.data() : nullptr, 1, MPI_UNSIGNED_LONG_LONG,
-               0, MPI_COMM_WORLD);
+               rank == 0 ? rows_per_rank.data() : nullptr, 1,
+               MPI_UNSIGNED_LONG_LONG, 0, MPI_COMM_WORLD);
 
-    std::vector<int> counts;
-    std::vector<int> displs;
+    // This function is used only for host-backed generations. The storage
+    // planner already guarantees that their total number of doubles fits in
+    // the 32-bit count and displacement arguments required by MPI_Gatherv.
+    vector<int> counts;
+    vector<int> displacements;
     if (rank == 0) {
         counts.resize(size);
-        displs.resize(size);
+        displacements.resize(size);
         total_rows = 0;
         int offset = 0;
         for (int r = 0; r < size; ++r) {
-            std::uint64_t rows = static_cast<std::uint64_t>(rows_per_rank[r]);
-            std::uint64_t elems = checked_mul(rows, cols, "MPI gather elements");
-            counts[r] = checked_int_count(elems, "MPI gather elements");
-            displs[r] = offset;
+            uint64_t rows = rows_per_rank[r];
+            uint64_t elements = rows * cols;
+            counts[r] = static_cast<int>(elements);
+            displacements[r] = offset;
             offset += counts[r];
             total_rows += rows;
         }
-        all.resize(checked_mul(total_rows, cols, "gathered output elements"));
+        all.resize(total_rows * cols);
     }
-    int send_count = checked_int_count(checked_mul(local_rows, cols, "local gather elements"), "local gather elements");
+
+    int send_count = static_cast<int>(local_rows * cols);
     MPI_Gatherv(local.empty() ? nullptr : local.data(), send_count, MPI_DOUBLE,
                 rank == 0 && !all.empty() ? all.data() : nullptr,
                 rank == 0 ? counts.data() : nullptr,
-                rank == 0 ? displs.data() : nullptr,
+                rank == 0 ? displacements.data() : nullptr,
                 MPI_DOUBLE, 0, MPI_COMM_WORLD);
 }
 
-void broadcast_double_vector(std::vector<double>& values, int rank) {
-    unsigned long long size_ull = rank == 0 ? static_cast<unsigned long long>(values.size()) : 0ULL;
-    MPI_Bcast(&size_ull, 1, MPI_UNSIGNED_LONG_LONG, 0, MPI_COMM_WORLD);
+void broadcast_double_vector(vector<double>& values, int rank) {
+    int count = rank == 0 ? static_cast<int>(values.size()) : 0;
+    MPI_Bcast(&count, 1, MPI_INT, 0, MPI_COMM_WORLD);
     if (rank != 0) {
-        values.resize(static_cast<std::size_t>(size_ull));
+        values.resize(count);
     }
-    if (size_ull != 0) {
-        MPI_Bcast(values.data(), checked_int_count(static_cast<std::uint64_t>(size_ull), "broadcast vector"), MPI_DOUBLE, 0, MPI_COMM_WORLD);
+    if (count > 0) {
+        MPI_Bcast(values.data(), count, MPI_DOUBLE, 0, MPI_COMM_WORLD);
     }
 }
 
-void broadcast_string(std::string& value, int rank) {
-    unsigned long long size_ull =
-        rank == 0 ? static_cast<unsigned long long>(value.size()) : 0ULL;
-    MPI_Bcast(&size_ull, 1, MPI_UNSIGNED_LONG_LONG, 0, MPI_COMM_WORLD);
+void broadcast_string(string& value, int rank) {
+    int count = rank == 0 ? static_cast<int>(value.size()) : 0;
+    MPI_Bcast(&count, 1, MPI_INT, 0, MPI_COMM_WORLD);
     if (rank != 0) {
-        value.resize(static_cast<std::size_t>(size_ull));
+        value.resize(count);
     }
-    if (size_ull != 0) {
-        MPI_Bcast(value.data(),
-                  checked_int_count(static_cast<std::uint64_t>(size_ull),
-                                    "broadcast string"),
-                  MPI_CHAR, 0, MPI_COMM_WORLD);
+    if (count > 0) {
+        MPI_Bcast(value.data(), count, MPI_CHAR, 0, MPI_COMM_WORLD);
     }
 }
 
-std::uint64_t allreduce_sum_u64(std::uint64_t local) {
-    unsigned long long send = static_cast<unsigned long long>(local);
+uint64_t allreduce_sum_u64(uint64_t local) {
+    unsigned long long send = local;
     unsigned long long receive = 0;
     MPI_Allreduce(&send, &receive, 1, MPI_UNSIGNED_LONG_LONG, MPI_SUM, MPI_COMM_WORLD);
-    return static_cast<std::uint64_t>(receive);
+    return receive;
 }
 
-std::uint64_t current_host_box_limit(const Options& options,
+uint64_t current_host_box_limit(const Options& options,
                                      int ranks_on_node) {
-    std::uint64_t local_budget = options.host_box_limit_bytes;
+    uint64_t local_budget = options.host_box_limit_bytes;
     if (local_budget == 0) {
         // Both generations coexist while splitting. Compute the per-rank
         // budget on each node first, then use one world-wide minimum so every
         // rank makes the same storage decision even with uneven node sizes.
         local_budget = tamubo::exactbo::available_host_memory_bytes() / 3;
-        local_budget /= static_cast<std::uint64_t>(
-            std::max(ranks_on_node, 1));
+        local_budget /= max(ranks_on_node, 1);
     }
-    unsigned long long send = static_cast<unsigned long long>(local_budget);
+    unsigned long long send = local_budget;
     unsigned long long receive = 0;
     MPI_Allreduce(&send, &receive, 1, MPI_UNSIGNED_LONG_LONG, MPI_MIN,
                   MPI_COMM_WORLD);
-    return static_cast<std::uint64_t>(receive);
+    return receive;
 }
 
-std::uint64_t exscan_sum_u64(std::uint64_t local, int rank) {
-    unsigned long long send = static_cast<unsigned long long>(local);
+uint64_t exscan_sum_u64(uint64_t local, int rank) {
+    unsigned long long send = local;
     unsigned long long prefix = 0;
     MPI_Exscan(&send, &prefix, 1, MPI_UNSIGNED_LONG_LONG, MPI_SUM, MPI_COMM_WORLD);
-    return rank == 0 ? 0 : static_cast<std::uint64_t>(prefix);
+    return rank == 0 ? 0 : prefix;
 }
 
-std::uint64_t count_mask(const std::vector<unsigned char>& mask) {
-    std::uint64_t count = 0;
+uint64_t count_mask(const vector<unsigned char>& mask) {
+    uint64_t count = 0;
     for (unsigned char value : mask) {
         count += value != 0;
     }
     return count;
 }
 
-std::vector<double> compute_ei_hi_streamed(
+// -----------------------------------------------------------------------------
+// Batched host-to-GPU workflows
+// -----------------------------------------------------------------------------
+
+vector<double> compute_ei_hi_streamed(
     const BoxStore& boxes,
     const PartitionInput& input,
-    std::uint64_t device_batch_rows,
+    int device_batch_rows,
     int rank,
     int size,
     int device) {
@@ -810,46 +865,48 @@ std::vector<double> compute_ei_hi_streamed(
     cudaDeviceProp prop{};
     CUDA_CHECK(cudaGetDeviceProperties(&prop, device));
 
-    const std::uint64_t start = local_start_for_rank(boxes.rows(), rank, size);
-    const std::uint64_t local_n = local_count_for_rank(boxes.rows(), rank, size);
-    std::vector<double> local_ei(local_n);
+    const uint64_t start = local_start_for_rank(boxes.rows(), rank, size);
+    const uint64_t local_n = local_count_for_rank(boxes.rows(), rank, size);
+    vector<double> local_ei(local_n);
 
     double *d_X = nullptr, *d_alpha = nullptr, *d_L = nullptr, *d_length = nullptr;
     if (local_n != 0) {
-        copy_to_device(reinterpret_cast<void**>(&d_X), input.X_train.data(),
+        copy_to_device(&d_X, input.X_train.data(),
                        input.X_train.size() * sizeof(double), "d_X_train");
-        copy_to_device(reinterpret_cast<void**>(&d_alpha), input.alpha.data(),
+        copy_to_device(&d_alpha, input.alpha.data(),
                        input.alpha.size() * sizeof(double), "d_alpha");
-        copy_to_device(reinterpret_cast<void**>(&d_L), input.L.data(),
+        copy_to_device(&d_L, input.L.data(),
                        input.L.size() * sizeof(double), "d_cholesky_L");
-        copy_to_device(reinterpret_cast<void**>(&d_length), input.length_scale.data(),
+        copy_to_device(&d_length, input.length_scale.data(),
                        input.length_scale.size() * sizeof(double), "d_length_scale");
     }
 
-    for (std::uint64_t offset = 0; offset < local_n; offset += device_batch_rows) {
-        const std::uint64_t rows = std::min(device_batch_rows, local_n - offset);
-        const std::size_t box_elements = checked_mul(rows, input.d, "EI batch box elements");
-        const std::size_t work_elements = checked_mul(rows, input.n_train, "EI batch work elements");
-        std::vector<double> host_L(box_elements);
-        std::vector<double> host_U(box_elements);
+    for (uint64_t offset = 0; offset < local_n; offset += device_batch_rows) {
+        const int rows = static_cast<int>(min<uint64_t>(device_batch_rows, local_n - offset));
+        size_t box_elements = rows;
+        box_elements *= input.d;
+        size_t work_elements = rows;
+        work_elements *= input.n_train;
+        vector<double> host_L(box_elements);
+        vector<double> host_U(box_elements);
         boxes.read_rows(start + offset, rows, host_L.data(), host_U.data());
 
         double *d_boxes_L = nullptr, *d_boxes_U = nullptr;
         double *d_Klo = nullptr, *d_Khi = nullptr, *d_vlo = nullptr, *d_vhi = nullptr;
         double* d_ei = nullptr;
-        copy_to_device(reinterpret_cast<void**>(&d_boxes_L), host_L.data(),
+        copy_to_device(&d_boxes_L, host_L.data(),
                        box_elements * sizeof(double), "d_boxes_L");
-        copy_to_device(reinterpret_cast<void**>(&d_boxes_U), host_U.data(),
+        copy_to_device(&d_boxes_U, host_U.data(),
                        box_elements * sizeof(double), "d_boxes_U");
-        allocate_device(reinterpret_cast<void**>(&d_Klo), work_elements * sizeof(double), "d_Klo");
-        allocate_device(reinterpret_cast<void**>(&d_Khi), work_elements * sizeof(double), "d_Khi");
-        allocate_device(reinterpret_cast<void**>(&d_vlo), work_elements * sizeof(double), "d_vlo");
-        allocate_device(reinterpret_cast<void**>(&d_vhi), work_elements * sizeof(double), "d_vhi");
-        allocate_device(reinterpret_cast<void**>(&d_ei), rows * sizeof(double), "d_ei");
+        allocate_device(&d_Klo, work_elements * sizeof(double), "d_Klo");
+        allocate_device(&d_Khi, work_elements * sizeof(double), "d_Khi");
+        allocate_device(&d_vlo, work_elements * sizeof(double), "d_vlo");
+        allocate_device(&d_vhi, work_elements * sizeof(double), "d_vhi");
+        allocate_device(&d_ei, rows * sizeof(double), "d_ei");
 
         const int block = 128;
-        const int grid = std::max(
-            1, std::min(static_cast<int>((rows + block - 1) / block), prop.maxGridSize[0]));
+        const int grid = max(
+            1, min((rows + block - 1) / block, prop.maxGridSize[0]));
         ei_hi_bounds_kernel<<<grid, block>>>(
             d_boxes_L, d_boxes_U, d_X, d_alpha, d_L, d_length,
             rows, input.n_train, input.d, input.sigma_f_2, input.y_min_scaled,
@@ -877,10 +934,10 @@ std::vector<double> compute_ei_hi_streamed(
 
 BestSample sample_best_streamed(
     const BoxStore& boxes,
-    const std::vector<unsigned char>& local_mask,
-    const std::vector<double>& lhs,
+    const vector<unsigned char>& local_mask,
+    const vector<double>& lhs,
     const PartitionInput& input,
-    std::uint64_t device_batch_rows,
+    int device_batch_rows,
     int rank,
     int size,
     int device) {
@@ -888,61 +945,61 @@ BestSample sample_best_streamed(
     cudaDeviceProp prop{};
     CUDA_CHECK(cudaGetDeviceProperties(&prop, device));
 
-    const std::uint64_t n_samples = 1ULL << input.d;
-    const std::uint64_t start = local_start_for_rank(boxes.rows(), rank, size);
-    const std::uint64_t local_n = local_count_for_rank(boxes.rows(), rank, size);
+    const uint64_t n_samples = 1ULL << input.d;
+    const uint64_t start = local_start_for_rank(boxes.rows(), rank, size);
+    const uint64_t local_n = local_count_for_rank(boxes.rows(), rank, size);
     if (local_mask.size() != local_n) {
-        throw std::runtime_error("local sample mask has the wrong size");
+        throw runtime_error("local sample mask has the wrong size");
     }
 
     double *d_X = nullptr, *d_alpha = nullptr, *d_L = nullptr;
     double *d_length = nullptr, *d_lhs = nullptr;
     if (local_n != 0) {
-        copy_to_device(reinterpret_cast<void**>(&d_X), input.X_train.data(),
+        copy_to_device(&d_X, input.X_train.data(),
                        input.X_train.size() * sizeof(double), "d_X_train");
-        copy_to_device(reinterpret_cast<void**>(&d_alpha), input.alpha.data(),
+        copy_to_device(&d_alpha, input.alpha.data(),
                        input.alpha.size() * sizeof(double), "d_alpha");
-        copy_to_device(reinterpret_cast<void**>(&d_L), input.L.data(),
+        copy_to_device(&d_L, input.L.data(),
                        input.L.size() * sizeof(double), "d_cholesky_L");
-        copy_to_device(reinterpret_cast<void**>(&d_length), input.length_scale.data(),
+        copy_to_device(&d_length, input.length_scale.data(),
                        input.length_scale.size() * sizeof(double), "d_length_scale");
-        copy_to_device(reinterpret_cast<void**>(&d_lhs), lhs.data(),
+        copy_to_device(&d_lhs, lhs.data(),
                        lhs.size() * sizeof(double), "d_lhs");
     }
 
     BestSample local_best;
     local_best.x.assign(input.d, 0.0);
-    for (std::uint64_t offset = 0; offset < local_n; offset += device_batch_rows) {
-        const std::uint64_t rows = std::min(device_batch_rows, local_n - offset);
-        const std::size_t box_elements =
-            checked_mul(rows, input.d, "sample batch box elements");
-        const std::size_t work_elements =
-            checked_mul(rows, input.n_train, "sample batch work elements");
-        std::vector<double> host_L(box_elements);
-        std::vector<double> host_U(box_elements);
-        std::vector<double> batch_ei(rows);
-        std::vector<double> batch_points(box_elements);
+    for (uint64_t offset = 0; offset < local_n; offset += device_batch_rows) {
+        const int rows = static_cast<int>(min<uint64_t>(device_batch_rows, local_n - offset));
+        size_t box_elements = rows;
+        box_elements *= input.d;
+        size_t work_elements = rows;
+        work_elements *= input.n_train;
+        vector<double> host_L(box_elements);
+        vector<double> host_U(box_elements);
+        vector<double> batch_ei(rows);
+        vector<double> batch_points(box_elements);
         boxes.read_rows(start + offset, rows, host_L.data(), host_U.data());
 
         double *d_boxes_L = nullptr, *d_boxes_U = nullptr, *d_v = nullptr;
         double *d_best_ei = nullptr, *d_best_points = nullptr;
         unsigned char* d_mask = nullptr;
-        copy_to_device(reinterpret_cast<void**>(&d_boxes_L), host_L.data(),
+        copy_to_device(&d_boxes_L, host_L.data(),
                        box_elements * sizeof(double), "d_boxes_L");
-        copy_to_device(reinterpret_cast<void**>(&d_boxes_U), host_U.data(),
+        copy_to_device(&d_boxes_U, host_U.data(),
                        box_elements * sizeof(double), "d_boxes_U");
-        copy_to_device(reinterpret_cast<void**>(&d_mask), local_mask.data() + offset,
+        copy_to_device(&d_mask, local_mask.data() + offset,
                        rows * sizeof(unsigned char), "d_mask");
-        allocate_device(reinterpret_cast<void**>(&d_v),
+        allocate_device(&d_v,
                         work_elements * sizeof(double), "d_v");
-        allocate_device(reinterpret_cast<void**>(&d_best_ei),
+        allocate_device(&d_best_ei,
                         rows * sizeof(double), "d_best_ei");
-        allocate_device(reinterpret_cast<void**>(&d_best_points),
+        allocate_device(&d_best_points,
                         box_elements * sizeof(double), "d_best_points");
 
         const int block = 128;
-        const int grid = std::max(
-            1, std::min(static_cast<int>((rows + block - 1) / block), prop.maxGridSize[0]));
+        const int grid = max(
+            1, min((rows + block - 1) / block, prop.maxGridSize[0]));
         sample_best_kernel<<<grid, block>>>(
             d_boxes_L, d_boxes_U, d_mask, d_X, d_alpha, d_L, d_length, d_lhs,
             rows, input.n_train, input.d, n_samples, input.sigma_f_2,
@@ -954,11 +1011,11 @@ BestSample sample_best_streamed(
         CUDA_CHECK(cudaMemcpy(batch_points.data(), d_best_points,
                               box_elements * sizeof(double), cudaMemcpyDeviceToHost));
 
-        for (std::uint64_t i = 0; i < rows; ++i) {
+        for (int i = 0; i < rows; ++i) {
             if (batch_ei[i] > local_best.ei) {
                 local_best.ei = batch_ei[i];
                 local_best.box_idx = static_cast<long long>(start + offset + i);
-                std::copy_n(batch_points.data() + i * input.d, input.d,
+                copy_n(batch_points.data() + i * input.d, input.d,
                             local_best.x.data());
             }
         }
@@ -985,32 +1042,36 @@ BestSample sample_best_streamed(
                   MPI_MAXLOC, MPI_COMM_WORLD);
     if (rank != winner.rank) {
         local_best.box_idx = -1;
-        std::fill(local_best.x.begin(), local_best.x.end(), 0.0);
+        fill(local_best.x.begin(), local_best.x.end(), 0.0);
     }
     MPI_Bcast(&local_best.box_idx, 1, MPI_LONG_LONG, winner.rank, MPI_COMM_WORLD);
-    MPI_Bcast(local_best.x.data(), checked_int_count(input.d, "best point dimension"),
+    MPI_Bcast(local_best.x.data(), input.d,
               MPI_DOUBLE, winner.rank, MPI_COMM_WORLD);
     local_best.ei = winner.value;
     return local_best;
 }
 
+// -----------------------------------------------------------------------------
+// Convergence and memory planning
+// -----------------------------------------------------------------------------
+
 bool global_box_is_narrow(
     const BoxStore& boxes,
     long long box_idx,
-    const std::vector<double>& epsilon_x,
+    const vector<double>& epsilon_x,
     int rank,
     int size) {
     int local_narrow = 0;
     if (box_idx >= 0) {
-        const std::uint64_t start = local_start_for_rank(boxes.rows(), rank, size);
-        const std::uint64_t local_n = local_count_for_rank(boxes.rows(), rank, size);
-        const std::uint64_t index = static_cast<std::uint64_t>(box_idx);
+        const uint64_t start = local_start_for_rank(boxes.rows(), rank, size);
+        const uint64_t local_n = local_count_for_rank(boxes.rows(), rank, size);
+        const uint64_t index = static_cast<uint64_t>(box_idx);
         if (index >= start && index < start + local_n) {
-            std::vector<double> lower(boxes.dims());
-            std::vector<double> upper(boxes.dims());
+            vector<double> lower(boxes.dims());
+            vector<double> upper(boxes.dims());
             boxes.read_rows(index, 1, lower.data(), upper.data());
             local_narrow = 1;
-            for (std::uint64_t dim = 0; dim < boxes.dims(); ++dim) {
+            for (uint64_t dim = 0; dim < boxes.dims(); ++dim) {
                 if (!(upper[dim] - lower[dim] < epsilon_x[dim])) {
                     local_narrow = 0;
                     break;
@@ -1036,10 +1097,10 @@ int ranks_sharing_device(int device) {
     return count;
 }
 
-std::uint64_t choose_split_batch_parents(
-    std::uint64_t local_targets,
-    std::uint64_t d,
-    std::uint64_t requested,
+int choose_split_batch_parents(
+    uint64_t local_targets,
+    int d,
+    int requested,
     int ranks_per_device,
     int ranks_on_node,
     int device) {
@@ -1048,31 +1109,30 @@ std::uint64_t choose_split_batch_parents(
     }
 
     CUDA_CHECK(cudaSetDevice(device));
-    std::size_t free_bytes = 0;
-    std::size_t total_bytes = 0;
+    size_t free_bytes = 0;
+    size_t total_bytes = 0;
     CUDA_CHECK(cudaMemGetInfo(&free_bytes, &total_bytes));
-    const std::uint64_t one_gib = 1ULL << 30;
-    const std::uint64_t device_reserve =
-        std::max<std::uint64_t>(
-            one_gib, static_cast<std::uint64_t>(total_bytes) / 10);
-    std::uint64_t device_usable =
-        static_cast<std::uint64_t>(free_bytes) > device_reserve
-            ? static_cast<std::uint64_t>(free_bytes) - device_reserve
+    const uint64_t one_gib = 1ULL << 30;
+    const uint64_t device_reserve =
+        max<uint64_t>(
+            one_gib, total_bytes / 10);
+    uint64_t device_usable =
+        free_bytes > device_reserve
+            ? free_bytes - device_reserve
             : 0;
     device_usable /=
-        static_cast<std::uint64_t>(std::max(ranks_per_device, 1));
+        max(ranks_per_device, 1);
 
-    const std::uint64_t host_available =
+    const uint64_t host_available =
         tamubo::exactbo::available_host_memory_bytes() /
-        static_cast<std::uint64_t>(std::max(ranks_on_node, 1));
-    const std::uint64_t host_reserve =
-        std::max<std::uint64_t>(256ULL << 20, host_available / 10);
-    const std::uint64_t host_usable =
+        max(ranks_on_node, 1);
+    const uint64_t host_reserve =
+        max<uint64_t>(256ULL << 20, host_available / 10);
+    const uint64_t host_usable =
         host_available > host_reserve ? host_available - host_reserve : 0;
 
-    const std::uint64_t host_bytes_per_parent =
-        checked_mul(32, checked_mul(d, d + 1, "split parent dimensions"),
-                    "split bytes per parent");
+    const uint64_t host_bytes_per_parent =
+        32 * d * (d + 1);
     cudaDeviceProp prop{};
     CUDA_CHECK(cudaGetDeviceProperties(&prop, device));
     int uses_host_page_tables = 0;
@@ -1081,36 +1141,34 @@ std::uint64_t choose_split_batch_parents(
         cudaDevAttrPageableMemoryAccessUsesHostPageTables, device));
     const bool shared_physical_memory =
         prop.integrated || uses_host_page_tables != 0;
-    const std::uint64_t device_bytes_per_parent =
+    const uint64_t device_bytes_per_parent =
         shared_physical_memory
-            ? checked_mul(host_bytes_per_parent, 2,
-                          "unified split bytes per parent")
+            ? host_bytes_per_parent * 2
             : host_bytes_per_parent;
-    const std::uint64_t device_slack = 64ULL << 20;
+    const uint64_t device_slack = 64ULL << 20;
     if (device_usable <= device_slack ||
         device_usable - device_slack < device_bytes_per_parent ||
         host_usable < host_bytes_per_parent) {
-        throw std::runtime_error(
+        throw runtime_error(
             "not enough host/device memory for one compact split parent");
     }
 
-    std::uint64_t batch =
+    uint64_t batch =
         (device_usable - device_slack) / device_bytes_per_parent;
-    batch = std::min(batch, host_usable / host_bytes_per_parent);
-    batch = std::min<std::uint64_t>(batch, 1ULL << 20);
-    if (requested != 0) {
-        batch = std::min(batch, requested);
+    batch = min(batch, host_usable / host_bytes_per_parent);
+    batch = min<uint64_t>(batch, 1ULL << 20);
+    if (requested != 0 && batch > requested) {
+        batch = requested;
     }
-    return std::max<std::uint64_t>(
-        1, std::min(batch, local_targets));
+    return static_cast<int>(max<uint64_t>(1, min(batch, local_targets)));
 }
 
 bool use_file_for_next_store(
     const BoxStore& current,
-    std::uint64_t output_rows,
-    std::uint64_t d,
+    uint64_t output_rows,
+    int d,
     const Options& options,
-    std::uint64_t host_limit_bytes) {
+    uint64_t host_limit_bytes) {
     if (options.box_storage == "file") {
         return true;
     }
@@ -1120,28 +1178,32 @@ bool use_file_for_next_store(
     if (current.file_backed()) {
         return true;
     }
-    const std::uint64_t current_bytes =
+    const uint64_t current_bytes =
         tamubo::exactbo::box_data_bytes(current.rows(), d);
-    const std::uint64_t output_bytes =
+    const uint64_t output_bytes =
         tamubo::exactbo::box_data_bytes(output_rows, d);
     if (current_bytes > host_limit_bytes ||
-        output_bytes > host_limit_bytes - std::min(current_bytes, host_limit_bytes)) {
+        output_bytes > host_limit_bytes - min(current_bytes, host_limit_bytes)) {
         return true;
     }
-    const std::uint64_t output_elements =
-        checked_mul(output_rows, d, "host output elements");
+    const uint64_t output_elements =
+        output_rows * d;
     return output_elements >
-           static_cast<std::uint64_t>(std::numeric_limits<int>::max());
+           numeric_limits<int>::max();
 }
 
-std::unique_ptr<BoxStore> split_selected_streamed(
+// -----------------------------------------------------------------------------
+// Batched splitting into either host RAM or a shared spill file
+// -----------------------------------------------------------------------------
+
+unique_ptr<BoxStore> split_selected_streamed(
     const BoxStore& boxes,
-    const std::vector<unsigned char>& local_target_mask,
+    const vector<unsigned char>& local_target_mask,
     const PartitionInput& input,
     const Options& options,
-    std::uint64_t host_limit_bytes,
-    const std::filesystem::path& spill_run_dir,
-    std::uint64_t generation,
+    uint64_t host_limit_bytes,
+    const fs::path& spill_run_dir,
+    uint64_t generation,
     int rank,
     int size,
     int device,
@@ -1151,31 +1213,31 @@ std::unique_ptr<BoxStore> split_selected_streamed(
     cudaDeviceProp prop{};
     CUDA_CHECK(cudaGetDeviceProperties(&prop, device));
 
-    const std::uint64_t start = local_start_for_rank(boxes.rows(), rank, size);
-    const std::uint64_t local_n = local_count_for_rank(boxes.rows(), rank, size);
+    const uint64_t start = local_start_for_rank(boxes.rows(), rank, size);
+    const uint64_t local_n = local_count_for_rank(boxes.rows(), rank, size);
     if (local_target_mask.size() != local_n) {
-        throw std::runtime_error("local target mask has the wrong size");
+        throw runtime_error("local target mask has the wrong size");
     }
-    const std::uint64_t stride = 2 * input.d + 1;
-    const std::uint64_t local_targets = count_mask(local_target_mask);
-    const std::uint64_t global_targets = allreduce_sum_u64(local_targets);
-    const std::uint64_t output_rows =
-        checked_mul(global_targets, stride, "split output rows");
-    const std::uint64_t local_output_rows =
-        checked_mul(local_targets, stride, "local split output rows");
-    const std::uint64_t target_prefix = exscan_sum_u64(local_targets, rank);
-    const std::uint64_t output_start =
-        checked_mul(target_prefix, stride, "split output start");
+    const int stride = 2 * input.d + 1;
+    const uint64_t local_targets = count_mask(local_target_mask);
+    const uint64_t global_targets = allreduce_sum_u64(local_targets);
+    const uint64_t output_rows =
+        global_targets * stride;
+    const uint64_t local_output_rows =
+        local_targets * stride;
+    const uint64_t target_prefix = exscan_sum_u64(local_targets, rank);
+    const uint64_t output_start =
+        target_prefix * stride;
 
     bool file_output =
         use_file_for_next_store(boxes, output_rows, input.d, options,
                                 host_limit_bytes);
-    const std::uint64_t output_elements =
-        checked_mul(output_rows, input.d, "split output elements");
+    const uint64_t output_elements =
+        output_rows * input.d;
     if (!file_output &&
-        output_elements > static_cast<std::uint64_t>(std::numeric_limits<int>::max())) {
+        output_elements > numeric_limits<int>::max()) {
         if (options.box_storage == "host") {
-            throw std::runtime_error(
+            throw runtime_error(
                 "forced host box storage exceeds MPI int-count limits; use file storage");
         }
         file_output = true;
@@ -1190,27 +1252,27 @@ std::unique_ptr<BoxStore> split_selected_streamed(
                   MPI_COMM_WORLD);
     file_output = global_file_output != 0;
 
-    std::filesystem::path partial_path;
-    std::filesystem::path final_path;
+    fs::path partial_path;
+    fs::path final_path;
     if (file_output) {
         partial_path = spill_run_dir /
-            ("boxes_" + std::to_string(generation) + ".partial");
+            ("boxes_" + to_string(generation) + ".partial");
         final_path = spill_run_dir /
-            ("boxes_" + std::to_string(generation) + ".box");
+            ("boxes_" + to_string(generation) + ".box");
         if (rank == 0) {
-            std::filesystem::create_directories(spill_run_dir);
-            const std::uint64_t required =
+            fs::create_directories(spill_run_dir);
+            const uint64_t required =
                 tamubo::exactbo::box_data_bytes(output_rows, input.d) + 4096;
-            const std::uint64_t available =
+            const uint64_t available =
                 tamubo::exactbo::available_filesystem_bytes(spill_run_dir.string());
-            const std::uint64_t reserve =
-                std::min<std::uint64_t>(1ULL << 30, available / 10);
+            const uint64_t reserve =
+                min<uint64_t>(1ULL << 30, available / 10);
             if (available < required ||
                 available - required < reserve) {
-                throw std::runtime_error(
+                throw runtime_error(
                     "insufficient spill filesystem space: required=" +
-                    std::to_string(required) + " available=" +
-                    std::to_string(available));
+                    to_string(required) + " available=" +
+                    to_string(available));
             }
             tamubo::exactbo::initialize_box_file(
                 partial_path.string(), output_rows, input.d);
@@ -1219,76 +1281,73 @@ std::unique_ptr<BoxStore> split_selected_streamed(
     }
 
     if (rank == 0 && options.verbose) {
-        std::cout << "  split_store=" << (file_output ? "file" : "host")
+        cout << "  split_store=" << (file_output ? "file" : "host")
                   << " output_boxes=" << output_rows
                   << " output_bytes="
-                  << format_bytes(static_cast<std::size_t>(
-                         tamubo::exactbo::box_data_bytes(output_rows, input.d)));
+                  << format_bytes(tamubo::exactbo::box_data_bytes(output_rows, input.d));
         if (file_output) {
-            std::cout << " spill=\"" << final_path.string() << "\"";
+            cout << " spill=\"" << final_path.string() << "\"";
         }
-        std::cout << "\n";
+        cout << "\n";
     }
 
-    const std::uint64_t split_batch = choose_split_batch_parents(
+    const int split_batch = choose_split_batch_parents(
         local_targets, input.d, options.split_batch_parents,
         ranks_per_device, ranks_on_node, device);
-    std::vector<double> domain_width(input.d);
-    for (std::uint64_t dim = 0; dim < input.d; ++dim) {
+    vector<double> domain_width(input.d);
+    for (int dim = 0; dim < input.d; ++dim) {
         domain_width[dim] = input.domain_U[dim] - input.domain_L[dim];
     }
 
-    const std::uint64_t parent_capacity_elements =
-        checked_mul(split_batch, input.d, "split parent capacity");
-    const std::uint64_t child_capacity_rows =
-        checked_mul(split_batch, stride, "split child capacity rows");
-    const std::uint64_t child_capacity_elements =
-        checked_mul(child_capacity_rows, input.d, "split child capacity");
-    std::vector<double> parent_L(parent_capacity_elements);
-    std::vector<double> parent_U(parent_capacity_elements);
-    std::vector<double> child_L(child_capacity_elements);
-    std::vector<double> child_U(child_capacity_elements);
-    std::vector<double> local_output_L;
-    std::vector<double> local_output_U;
+    size_t parent_capacity_elements = split_batch;
+    parent_capacity_elements *= input.d;
+    size_t child_capacity_rows = split_batch;
+    child_capacity_rows *= stride;
+    size_t child_capacity_elements = child_capacity_rows;
+    child_capacity_elements *= input.d;
+    vector<double> parent_L(parent_capacity_elements);
+    vector<double> parent_U(parent_capacity_elements);
+    vector<double> child_L(child_capacity_elements);
+    vector<double> child_U(child_capacity_elements);
+    vector<double> local_output_L;
+    vector<double> local_output_U;
     if (!file_output) {
-        const std::uint64_t local_elements =
-            checked_mul(local_output_rows, input.d, "local split elements");
+        const size_t local_elements = local_output_rows * input.d;
         local_output_L.reserve(local_elements);
         local_output_U.reserve(local_elements);
     }
 
-    std::unique_ptr<FileBoxWriter> file_writer;
+    unique_ptr<FileBoxWriter> file_writer;
     if (file_output) {
-        file_writer = std::make_unique<FileBoxWriter>(partial_path.string());
+        file_writer = make_unique<FileBoxWriter>(partial_path.string());
     }
 
     double *d_parent_L = nullptr, *d_parent_U = nullptr;
     double *d_domain_width = nullptr, *d_child_L = nullptr, *d_child_U = nullptr;
     if (local_targets != 0) {
-        allocate_device(reinterpret_cast<void**>(&d_parent_L),
+        allocate_device(&d_parent_L,
                         parent_capacity_elements * sizeof(double), "d_split_parent_L");
-        allocate_device(reinterpret_cast<void**>(&d_parent_U),
+        allocate_device(&d_parent_U,
                         parent_capacity_elements * sizeof(double), "d_split_parent_U");
-        copy_to_device(reinterpret_cast<void**>(&d_domain_width), domain_width.data(),
+        copy_to_device(&d_domain_width, domain_width.data(),
                        domain_width.size() * sizeof(double), "d_domain_width");
-        allocate_device(reinterpret_cast<void**>(&d_child_L),
+        allocate_device(&d_child_L,
                         child_capacity_elements * sizeof(double), "d_split_child_L");
-        allocate_device(reinterpret_cast<void**>(&d_child_U),
+        allocate_device(&d_child_U,
                         child_capacity_elements * sizeof(double), "d_split_child_U");
     }
 
-    std::uint64_t pending = 0;
-    std::uint64_t written_rows = 0;
+    int pending = 0;
+    uint64_t written_rows = 0;
     auto flush = [&]() {
         if (pending == 0) {
             return;
         }
-        const std::uint64_t parent_elements =
-            checked_mul(pending, input.d, "split batch parent elements");
-        const std::uint64_t child_rows =
-            checked_mul(pending, stride, "split batch child rows");
-        const std::uint64_t child_elements =
-            checked_mul(child_rows, input.d, "split batch child elements");
+        size_t parent_elements = pending;
+        parent_elements *= input.d;
+        const int child_rows = pending * stride;
+        size_t child_elements = child_rows;
+        child_elements *= input.d;
         CUDA_CHECK(cudaMemcpy(d_parent_L, parent_L.data(),
                               parent_elements * sizeof(double),
                               cudaMemcpyHostToDevice));
@@ -1296,9 +1355,8 @@ std::unique_ptr<BoxStore> split_selected_streamed(
                               parent_elements * sizeof(double),
                               cudaMemcpyHostToDevice));
         const int block = 128;
-        const int grid = std::max(
-            1, std::min(static_cast<int>((pending + block - 1) / block),
-                        prop.maxGridSize[0]));
+        const int grid = max(
+            1, min((pending + block - 1) / block, prop.maxGridSize[0]));
         split_dense_boxes_kernel<<<grid, block>>>(
             d_parent_L, d_parent_U, d_domain_width, pending, input.d,
             stride, d_child_L, d_child_U);
@@ -1323,20 +1381,23 @@ std::unique_ptr<BoxStore> split_selected_streamed(
         pending = 0;
     };
 
-    const std::uint64_t scan_rows =
-        std::max<std::uint64_t>(1, std::min(options.device_batch_rows, local_n));
-    std::vector<double> scan_L(checked_mul(scan_rows, input.d, "split scan elements"));
-    std::vector<double> scan_U(scan_L.size());
-    for (std::uint64_t offset = 0; offset < local_n; offset += scan_rows) {
-        const std::uint64_t rows = std::min(scan_rows, local_n - offset);
+    const int scan_rows = local_n == 0
+        ? 1
+        : static_cast<int>(min<uint64_t>(options.device_batch_rows, local_n));
+    size_t scan_elements = scan_rows;
+    scan_elements *= input.d;
+    vector<double> scan_L(scan_elements);
+    vector<double> scan_U(scan_L.size());
+    for (uint64_t offset = 0; offset < local_n; offset += scan_rows) {
+        const int rows = static_cast<int>(min<uint64_t>(scan_rows, local_n - offset));
         boxes.read_rows(start + offset, rows, scan_L.data(), scan_U.data());
-        for (std::uint64_t row = 0; row < rows; ++row) {
+        for (int row = 0; row < rows; ++row) {
             if (local_target_mask[offset + row] == 0) {
                 continue;
             }
-            std::copy_n(scan_L.data() + row * input.d, input.d,
+            copy_n(scan_L.data() + row * input.d, input.d,
                         parent_L.data() + pending * input.d);
-            std::copy_n(scan_U.data() + row * input.d, input.d,
+            copy_n(scan_U.data() + row * input.d, input.d,
                         parent_U.data() + pending * input.d);
             ++pending;
             if (pending == split_batch) {
@@ -1353,7 +1414,7 @@ std::unique_ptr<BoxStore> split_selected_streamed(
     free_device(d_parent_L);
 
     if (written_rows != local_output_rows) {
-        throw std::runtime_error("split writer produced the wrong local row count");
+        throw runtime_error("split writer produced the wrong local row count");
     }
 
     if (file_output) {
@@ -1365,36 +1426,43 @@ std::unique_ptr<BoxStore> split_selected_streamed(
                 partial_path.string(), final_path.string());
         }
         MPI_Barrier(MPI_COMM_WORLD);
-        return std::make_unique<FileBoxStore>(final_path.string());
+        return make_unique<FileBoxStore>(final_path.string());
     }
 
-    std::vector<double> gathered_L;
-    std::vector<double> gathered_U;
-    std::uint64_t total_L = 0;
-    std::uint64_t total_U = 0;
+    vector<double> gathered_L;
+    vector<double> gathered_U;
+    uint64_t total_L = 0;
+    uint64_t total_U = 0;
     gather_double_rows(local_output_L, local_output_rows, input.d,
                        rank, size, gathered_L, total_L);
     gather_double_rows(local_output_U, local_output_rows, input.d,
                        rank, size, gathered_U, total_U);
     if (rank == 0 && (total_L != output_rows || total_U != output_rows)) {
-        throw std::runtime_error("host split gather produced the wrong row count");
+        throw runtime_error("host split gather produced the wrong row count");
     }
     broadcast_double_vector(gathered_L, rank);
     broadcast_double_vector(gathered_U, rank);
-    return std::make_unique<HostBoxStore>(
-        output_rows, input.d, std::move(gathered_L), std::move(gathered_U));
+    return make_unique<HostBoxStore>(
+        output_rows, input.d, move(gathered_L), move(gathered_U));
 }
 
 }  // namespace
 
+// -----------------------------------------------------------------------------
+// Program entry point and ExactBO partition loop
+// -----------------------------------------------------------------------------
+
 int main(int argc, char** argv) {
     MPI_Init(&argc, &argv);
+    // Flush native messages immediately while Python tees the pipe to a log.
+    cout.setf(ios::unitbuf);
+    cerr.setf(ios::unitbuf);
     int rank = 0;
     int size = 0;
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
     MPI_Comm_size(MPI_COMM_WORLD, &size);
 
-    std::filesystem::path spill_run_dir;
+    fs::path spill_run_dir;
     Options options;
     try {
         options = parse_args(argc, argv);
@@ -1403,7 +1471,7 @@ int main(int argc, char** argv) {
         int device_count = 0;
         CUDA_CHECK(cudaGetDeviceCount(&device_count));
         if (device_count == 0) {
-            throw std::runtime_error("no CUDA devices visible");
+            throw runtime_error("no CUDA devices visible");
         }
         const int local_rank = local_rank_on_node();
         const int device = local_rank % device_count;
@@ -1413,33 +1481,33 @@ int main(int argc, char** argv) {
         const int ranks_per_device = ranks_sharing_device(device);
         const int ranks_on_node = local_size_on_node();
 
-        std::uint64_t host_limit =
+        uint64_t host_limit =
             current_host_box_limit(options, ranks_on_node);
 
-        std::string spill_run_path;
+        string spill_run_path;
         if (rank == 0) {
-            std::filesystem::path spill_base;
+            fs::path spill_base;
             if (!options.spill_dir.empty()) {
                 spill_base = options.spill_dir;
             } else {
-                std::filesystem::path output_path(options.output_path);
+                fs::path output_path(options.output_path);
                 spill_base = output_path.has_parent_path()
                     ? output_path.parent_path() / ".exactbo-spill"
-                    : std::filesystem::path(".exactbo-spill");
+                    : fs::path(".exactbo-spill");
             }
-            std::filesystem::create_directories(spill_base);
-            spill_base = std::filesystem::absolute(spill_base);
-            const std::filesystem::path run_template =
+            fs::create_directories(spill_base);
+            spill_base = fs::absolute(spill_base);
+            const fs::path run_template =
                 spill_base / "run_XXXXXX";
-            const std::string template_text = run_template.string();
-            std::vector<char> mutable_template(
+            const string template_text = run_template.string();
+            vector<char> mutable_template(
                 template_text.begin(), template_text.end());
             mutable_template.push_back('\0');
             char* created = ::mkdtemp(mutable_template.data());
             if (created == nullptr) {
-                throw std::runtime_error(
+                throw runtime_error(
                     "failed to create unique spill directory: " +
-                    std::string(std::strerror(errno)));
+                    string(strerror(errno)));
             }
             spill_run_path = created;
         }
@@ -1447,7 +1515,7 @@ int main(int argc, char** argv) {
         spill_run_dir = spill_run_path;
 
         if (rank == 0) {
-            std::cout << "exactbo_partitioning: mpi_size=" << size
+            cout << "exactbo_partitioning: mpi_size=" << size
                       << " device_count=" << device_count
                       << " input=\"" << options.input_path << "\""
                       << " output=\"" << options.output_path << "\""
@@ -1458,50 +1526,53 @@ int main(int argc, char** argv) {
                       << " split_batch_parents=" << options.split_batch_parents
                       << " box_storage=" << options.box_storage
                       << " host_box_limit=" << format_bytes(
-                             static_cast<std::size_t>(host_limit))
+                             host_limit)
                       << " epsilon_ei=" << input.epsilon_ei << "\n";
         }
-        std::cout << "rank " << rank << " local_rank=" << local_rank
+        cout << "rank " << rank << " local_rank=" << local_rank
                   << " using gpu_device=" << device
                   << " ranks_on_device=" << ranks_per_device
                   << " gpu_name=\"" << prop.name << "\""
                   << " launch_cpu=" << current_cpu() << "\n";
         print_device_memory(rank, "startup");
 
-        std::unique_ptr<BoxStore> boxes = std::make_unique<HostBoxStore>(
+        unique_ptr<BoxStore> boxes = make_unique<HostBoxStore>(
             1, input.d, input.domain_L, input.domain_U);
-        const std::uint64_t n_samples = 1ULL << input.d;
-        const std::uint64_t stride = 2 * input.d + 1;
-        const std::vector<double> lhs =
+        const uint64_t n_samples = 1ULL << input.d;
+        const int stride = 2 * input.d + 1;
+        const vector<double> lhs =
             centered_latin_hypercube_unit(n_samples, input.d);
         BestSample best;
         best.x.assign(input.d, 0.0);
-        std::uint64_t partitions_done = 0;
+        uint64_t partitions_done = 0;
         int converged = 0;
-        std::uint64_t preserved_start = 0;
-        std::uint64_t preserved_count = 1;
+        uint64_t preserved_start = 0;
+        uint64_t preserved_count = 1;
 
-        for (std::uint64_t partition = 0;
+        for (int partition = 0;
              partition < input.max_partitions; ++partition) {
-            const std::uint64_t n_boxes = boxes->rows();
-            const std::uint64_t start =
+            const uint64_t n_boxes = boxes->rows();
+            const uint64_t start =
                 local_start_for_rank(n_boxes, rank, size);
-            const std::uint64_t local_n =
+            const uint64_t local_n =
                 local_count_for_rank(n_boxes, rank, size);
-            std::vector<double> local_ei = compute_ei_hi_streamed(
+            // Upper bound: the best EI that each box could possibly contain.
+            vector<double> local_ei = compute_ei_hi_streamed(
                 *boxes, input, options.device_batch_rows, rank, size, device);
 
-            double local_max = -std::numeric_limits<double>::infinity();
+            double local_max = -numeric_limits<double>::infinity();
             for (double value : local_ei) {
-                local_max = std::max(local_max, value);
+                local_max = max(local_max, value);
             }
             double max_ei_hi = 0.0;
             MPI_Allreduce(&local_max, &max_ei_hi, 1, MPI_DOUBLE,
                           MPI_MAX, MPI_COMM_WORLD);
 
-            std::vector<unsigned char> analyze_mask(local_n, 0);
-            for (std::uint64_t i = 0; i < local_n; ++i) {
-                const std::uint64_t global_i = start + i;
+            // First sample boxes near the largest upper bound, plus the children
+            // of the best box from the previous partition.
+            vector<unsigned char> analyze_mask(local_n, 0);
+            for (uint64_t i = 0; i < local_n; ++i) {
+                const uint64_t global_i = start + i;
                 const bool preserve =
                     global_i >= preserved_start &&
                     global_i < preserved_start + preserved_count;
@@ -1509,27 +1580,30 @@ int main(int argc, char** argv) {
                     local_ei[i] >= (max_ei_hi - input.epsilon_ei) ||
                     preserve;
             }
-            const std::uint64_t n_analyze =
+            const uint64_t n_analyze =
                 allreduce_sum_u64(count_mask(analyze_mask));
             if (rank == 0 && options.verbose) {
-                std::cout << "partition " << partition
+                cout << "partition " << partition
                           << " boxes=" << n_boxes
                           << " max_ei_hi=" << max_ei_hi
                           << " analyze=" << n_analyze << "\n";
             }
 
+            // Feasible lower bound: EI at an actual point in an analyzed box.
             BestSample best_analyze = sample_best_streamed(
                 *boxes, analyze_mask, lhs, input,
                 options.device_batch_rows, rank, size, device);
             best = best_analyze;
 
-            std::vector<unsigned char> active_mask(local_n, 0);
-            for (std::uint64_t i = 0; i < local_n; ++i) {
+            // A box is active if its upper bound can beat the sampled point by
+            // more than epsilon_ei.
+            vector<unsigned char> active_mask(local_n, 0);
+            for (uint64_t i = 0; i < local_n; ++i) {
                 active_mask[i] =
                     local_ei[i] >
                     (best_analyze.ei + input.epsilon_ei);
             }
-            const std::uint64_t n_active =
+            const uint64_t n_active =
                 allreduce_sum_u64(count_mask(active_mask));
             int stop =
                 n_active == 0 &&
@@ -1541,25 +1615,27 @@ int main(int argc, char** argv) {
                 break;
             }
             if (best_analyze.box_idx >= 0) {
-                const std::uint64_t best_idx =
-                    static_cast<std::uint64_t>(best_analyze.box_idx);
+                const uint64_t best_idx =
+                    static_cast<uint64_t>(best_analyze.box_idx);
                 if (best_idx >= start && best_idx < start + local_n) {
                     active_mask[best_idx - start] = 1;
                 }
             }
 
+            // Resample the full active set to improve the feasible lower bound.
             BestSample best_active = sample_best_streamed(
                 *boxes, active_mask, lhs, input,
                 options.device_batch_rows, rank, size, device);
             best = best_active;
 
-            std::vector<unsigned char> target_mask(local_n, 0);
-            for (std::uint64_t i = 0; i < local_n; ++i) {
+            // Only target boxes still capable of a meaningful EI improvement.
+            vector<unsigned char> target_mask(local_n, 0);
+            for (uint64_t i = 0; i < local_n; ++i) {
                 target_mask[i] =
                     local_ei[i] >
                     (best_active.ei + input.epsilon_ei);
             }
-            const std::uint64_t n_target_before_force =
+            const uint64_t n_target_before_force =
                 allreduce_sum_u64(count_mask(target_mask));
             stop =
                 n_target_before_force == 0 &&
@@ -1571,28 +1647,29 @@ int main(int argc, char** argv) {
                 break;
             }
 
-            const std::uint64_t best_idx =
-                static_cast<std::uint64_t>(best_active.box_idx);
+            const uint64_t best_idx =
+                static_cast<uint64_t>(best_active.box_idx);
             if (best_active.box_idx >= 0 &&
                 best_idx >= start && best_idx < start + local_n) {
                 target_mask[best_idx - start] = 1;
             }
-            std::uint64_t local_targets_before_best = 0;
-            for (std::uint64_t i = 0; i < local_n; ++i) {
+            uint64_t local_targets_before_best = 0;
+            for (uint64_t i = 0; i < local_n; ++i) {
                 if (start + i >= best_idx) {
                     break;
                 }
                 local_targets_before_best += target_mask[i] != 0;
             }
+            // Children are written in parent order.  Remember the child range
+            // produced by the best parent so it is analyzed next time.
             preserved_start =
-                checked_mul(allreduce_sum_u64(local_targets_before_best),
-                            stride, "preserved child start");
+                allreduce_sum_u64(local_targets_before_best) * stride;
             preserved_count = stride;
 
-            const std::uint64_t n_target =
+            const uint64_t n_target =
                 allreduce_sum_u64(count_mask(target_mask));
             if (rank == 0 && options.verbose) {
-                std::cout << "  best_ei=" << best_active.ei
+                cout << "  best_ei=" << best_active.ei
                           << " best_box=" << best_active.box_idx
                           << " target=" << n_target << "\n";
             }
@@ -1602,23 +1679,24 @@ int main(int argc, char** argv) {
                 break;
             }
 
-            const std::string old_file =
-                boxes->file_backed() ? boxes->path() : std::string();
+            const string old_file =
+                boxes->file_backed() ? boxes->path() : string();
             // Re-evaluate auto mode against current cgroup/node pressure.
             host_limit = current_host_box_limit(options, ranks_on_node);
-            std::unique_ptr<BoxStore> next = split_selected_streamed(
+            // Generate the next box population in RAM or in a spill file.
+            unique_ptr<BoxStore> next = split_selected_streamed(
                 *boxes, target_mask, input, options, host_limit,
                 spill_run_dir, partition, rank, size, device,
                 ranks_per_device, ranks_on_node);
-            boxes = std::move(next);
+            boxes = move(next);
 
             MPI_Barrier(MPI_COMM_WORLD);
             if (rank == 0 && !old_file.empty() &&
                 !options.keep_spill_files) {
-                std::error_code error;
-                std::filesystem::remove(old_file, error);
+                error_code error;
+                fs::remove(old_file, error);
                 if (error) {
-                    throw std::runtime_error(
+                    throw runtime_error(
                         "failed to remove old spill file " + old_file +
                         ": " + error.message());
                 }
@@ -1629,7 +1707,7 @@ int main(int argc, char** argv) {
         if (rank == 0) {
             write_output(options.output_path, best, input.d,
                          partitions_done, boxes->rows(), converged);
-            std::cout << "rank 0 wrote exactbo_partitioning output to "
+            cout << "rank 0 wrote exactbo_partitioning output to "
                       << options.output_path
                       << " best_ei_scaled=" << best.ei
                       << " converged=" << converged
@@ -1637,28 +1715,28 @@ int main(int argc, char** argv) {
                       << " n_boxes_final=" << boxes->rows() << "\n";
         }
 
-        const std::string final_file =
-            boxes->file_backed() ? boxes->path() : std::string();
+        const string final_file =
+            boxes->file_backed() ? boxes->path() : string();
         boxes.reset();
         MPI_Barrier(MPI_COMM_WORLD);
         if (rank == 0) {
-            std::error_code error;
+            error_code error;
             if (!options.keep_spill_files && !final_file.empty()) {
-                std::filesystem::remove(final_file, error);
+                fs::remove(final_file, error);
                 if (error) {
-                    throw std::runtime_error(
+                    throw runtime_error(
                         "failed to remove final spill file " + final_file +
                         ": " + error.message());
                 }
             }
             if (!options.keep_spill_files || final_file.empty()) {
                 error.clear();
-                std::filesystem::remove(spill_run_dir, error);
+                fs::remove(spill_run_dir, error);
             }
         }
         MPI_Barrier(MPI_COMM_WORLD);
-    } catch (const std::exception& exc) {
-        std::cerr << "rank " << rank
+    } catch (const exception& exc) {
+        cerr << "rank " << rank
                   << " exactbo_partitioning: " << exc.what() << "\n";
         MPI_Abort(MPI_COMM_WORLD, EXIT_FAILURE);
     }
@@ -1667,3 +1745,32 @@ int main(int argc, char** argv) {
     MPI_Finalize();
     return EXIT_SUCCESS;
 }
+
+/*
+Beginner-readability changes made in this revision
+--------------------------------------------------
+1. Imported frequently used standard-library names with `using std::...` and
+   introduced the short `fs` alias for `std::filesystem`.
+2. Added section dividers and comments around the main ExactBO decisions.
+3. Inlined the binary input reads so the Python/C++ file layout is visible in
+   one place. Removed read_value(), read_doubles(), and the optional trailing-
+   byte helper.
+4. Replaced checked_mul() calls with direct arithmetic. Runtime allocation and
+   file-space failures are still reported, but malformed inputs that overflow a
+   64-bit product are no longer handled as a separate special case.
+5. Removed mpi_count(). Host-backed collectives now use direct int counts;
+   global box totals and file-backed offsets remain 64-bit.
+6. Replaced untyped CUDA allocation helpers with typed templates. This removes
+   repeated reinterpret_cast<void**>() expressions from every call site; the
+   one cast required by the C cudaMalloc API is now contained in one function.
+7. Removed redundant numeric casts. Casts remain only where binary streams,
+   CUDA indexing, MPI, or an intentional narrowing conversion requires them.
+8. Changed training size, dimension, partition limit, device_batch_rows,
+   split_batch_parents, and per-batch loop counters to ordinary int values.
+   Kept uint64_t for on-disk fields, total/local box populations, global box
+   indexes, memory totals, prefix sums, and spill-file offsets.
+9. The GP mathematics, EI criteria, splitting geometry, MPI ownership, storage
+   policy, and output format were intentionally left unchanged.
+10. Enabled immediate native stdout/stderr flushing so Python can tee live output
+    to the terminal and the run log.
+*/

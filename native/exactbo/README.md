@@ -145,7 +145,8 @@ envs/venvTrial/bin/python native/exactbo/scripts/exactbo_workflow.py \
   --mpi-ranks 1 \
   --max-iters 3 \
   --max-partitions 6 \
-  --device-batch-rows 4096
+  --device-batch-rows 4096 \
+  --log-file native/exactbo/data/exactbo_workflow/stress.log
 ```
 
 Run a custom problem by providing an objective and `.npy` data files:
@@ -162,6 +163,8 @@ envs/venvTrial/bin/python native/exactbo/scripts/exactbo_workflow.py \
 ```
 
 The objective must accept an array shaped `(n, d)` and return one value per row. `bounds.npy` must have shape `(d, 2)`. If initial objective values are already available, pass `--y0 path/to/y0.npy`; otherwise the script evaluates `objective(X0)`.
+
+Every CLI run tees Python output plus native stdout/stderr to both the terminal and a log file. By default the file is `<workdir>/exactbo_run.log`; use `--log-file PATH` to choose another location. The log begins with the exact command, all parsed arguments including defaults, the start time, and working directory, and ends with the run status and finish time. The selected path is also recorded in `manifest.json`.
 
 
 ## Memory control

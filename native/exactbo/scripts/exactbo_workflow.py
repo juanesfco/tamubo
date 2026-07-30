@@ -13,11 +13,16 @@ Python responsibilities:
 from __future__ import annotations
 
 import argparse
+from contextlib import redirect_stderr, redirect_stdout
+from datetime import datetime
 import importlib
 import importlib.util
 import json
+import shlex
 import struct
 import subprocess
+import sys
+import traceback
 from pathlib import Path
 from typing import Callable
 
@@ -28,6 +33,29 @@ from sklearn.gaussian_process.kernels import ConstantKernel, RBF, WhiteKernel
 PARTITION_INPUT_MAGIC = b"TPARIN1!"
 PARTITION_OUTPUT_MAGIC = b"TPAROU1!"
 
+
+class TeeStream:
+    """Write each message to the terminal and to the run log."""
+
+    def __init__(self, terminal, log_file):
+        self.terminal = terminal
+        self.log_file = log_file
+
+    def write(self, text):
+        self.terminal.write(text)
+        self.log_file.write(text)
+        return len(text)
+
+    def flush(self):
+        self.terminal.flush()
+        self.log_file.flush()
+
+    def isatty(self):
+        return self.terminal.isatty()
+
+
+def current_timestamp():
+    return datetime.now().astimezone().isoformat(timespec="seconds")
 
 def load_problem_from_args(args):
     if args.example == "minimization_2d":
@@ -215,8 +243,29 @@ def launch_native(
         cmd.append("--keep-spill-files")
     if verbose:
         cmd.append("--verbose")
-    print("launch:", " ".join(cmd), flush=True)
-    subprocess.run(cmd, check=True)
+    print("launch:", shlex.join(cmd), flush=True)
+    process = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        bufsize=1,
+    )
+    try:
+        for line in process.stdout:
+            print(line, end="", flush=True)
+    except BaseException:
+        process.terminate()
+        process.wait()
+        raise
+    finally:
+        process.stdout.close()
+
+    return_code = process.wait()
+    if return_code != 0:
+        raise subprocess.CalledProcessError(return_code, cmd)
 
 
 def read_partition_output(path):
@@ -269,6 +318,7 @@ def run_native_exactbo(
     host_box_limit_bytes=0,
     spill_dir=None,
     keep_spill_files=False,
+    log_file=None,
     verbose=False,
 ):
     """Run BO iterations with native ExactBO partitioning as acquisition.
@@ -393,6 +443,7 @@ def run_native_exactbo(
         "host_box_limit_bytes": int(host_box_limit_bytes),
         "spill_dir": None if spill_dir is None else str(spill_dir),
         "keep_spill_files": bool(keep_spill_files),
+        "log_file": None if log_file is None else str(log_file),
         "mpi_ranks": int(mpi_ranks),
         "executable": str(exe),
         "best_x": X[best_idx],
@@ -419,7 +470,9 @@ def run_native_exactbo(
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Run BO with native ExactBO partitioning as acquisition.")
+    parser = argparse.ArgumentParser(
+        description="Run BO with native ExactBO partitioning as acquisition."
+    )
     parser.add_argument("--example", choices=["minimization_2d", "none"], default="minimization_2d")
     parser.add_argument("--objective", default=None, help="Objective as module:function or /path/file.py:function.")
     parser.add_argument("--x0", default=None, help=".npy file with initial X, shape (n0, d).")
@@ -433,43 +486,92 @@ def main():
     parser.add_argument("--max-partitions", type=int, default=6)
     parser.add_argument("--epsilon-x", type=float, default=1e-5)
     parser.add_argument("--epsilon-ei", type=float, default=1e-2)
-    parser.add_argument("--device-batch-rows", type=int, default=4096,
-                        help="Maximum boxes in one CUDA allocation/launch batch.")
-    parser.add_argument("--split-batch-parents", type=int, default=0,
-                        help="Selected parents per CUDA split batch; 0 chooses automatically.")
+    parser.add_argument(
+        "--device-batch-rows", type=int, default=4096,
+        help="Maximum boxes in one CUDA allocation/launch batch.",
+    )
+    parser.add_argument(
+        "--split-batch-parents", type=int, default=0,
+        help="Selected parents per CUDA split batch; 0 chooses automatically.",
+    )
     parser.add_argument("--box-storage", choices=["auto", "host", "file"], default="auto")
     parser.add_argument("--host-box-limit-bytes", type=int, default=0)
-    parser.add_argument("--spill-dir", default=None,
-                        help="Shared filesystem directory for temporary box stores.")
+    parser.add_argument(
+        "--spill-dir", default=None,
+        help="Shared filesystem directory for temporary box stores.",
+    )
     parser.add_argument("--keep-spill-files", action="store_true")
+    parser.add_argument(
+        "--log-file", default=None,
+        help="Terminal/native output log; defaults to <workdir>/exactbo_run.log.",
+    )
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args()
 
-    f, X0, bounds, y0 = load_problem_from_args(args)
-    result = run_native_exactbo(
-        f,
-        X0,
-        bounds,
-        y0=y0,
-        workdir=args.workdir,
-        native_build_dir=args.native_build_dir,
-        partitioning_exe=args.partitioning_exe,
-        mpi_ranks=args.mpi_ranks,
-        max_iters=args.max_iters,
-        max_partitions=args.max_partitions,
-        epsilon_x=args.epsilon_x,
-        epsilon_ei=args.epsilon_ei,
-        device_batch_rows=args.device_batch_rows,
-        split_batch_parents=args.split_batch_parents,
-        box_storage=args.box_storage,
-        host_box_limit_bytes=args.host_box_limit_bytes,
-        spill_dir=args.spill_dir,
-        keep_spill_files=args.keep_spill_files,
-        verbose=args.verbose,
-    )
-    print(f"final_best_x={result['best_x']}")
-    print(f"final_best_y={result['best_y']}")
+    workdir = Path(args.workdir)
+    workdir.mkdir(parents=True, exist_ok=True)
+    log_path = Path(args.log_file) if args.log_file else workdir / "exactbo_run.log"
+    log_path = log_path.expanduser().resolve()
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+
+    with log_path.open("w", encoding="utf-8", buffering=1) as log_handle:
+        terminal_out = sys.stdout
+        terminal_err = sys.stderr
+        tee_out = TeeStream(terminal_out, log_handle)
+        tee_err = TeeStream(terminal_err, log_handle)
+
+        with redirect_stdout(tee_out), redirect_stderr(tee_err):
+            effective_arguments = vars(args).copy()
+            effective_arguments["log_file"] = str(log_path)
+
+            print("=" * 80, flush=True)
+            print("ExactBO run log", flush=True)
+            print(f"started_at={current_timestamp()}", flush=True)
+            print(f"working_directory={Path.cwd()}", flush=True)
+            print(
+                "command=" + shlex.join([sys.executable, *sys.argv]),
+                flush=True,
+            )
+            print("arguments=" + json.dumps(effective_arguments, indent=2), flush=True)
+            print("=" * 80, flush=True)
+
+            try:
+                f, X0, bounds, y0 = load_problem_from_args(args)
+                result = run_native_exactbo(
+                    f,
+                    X0,
+                    bounds,
+                    y0=y0,
+                    workdir=args.workdir,
+                    native_build_dir=args.native_build_dir,
+                    partitioning_exe=args.partitioning_exe,
+                    mpi_ranks=args.mpi_ranks,
+                    max_iters=args.max_iters,
+                    max_partitions=args.max_partitions,
+                    epsilon_x=args.epsilon_x,
+                    epsilon_ei=args.epsilon_ei,
+                    device_batch_rows=args.device_batch_rows,
+                    split_batch_parents=args.split_batch_parents,
+                    box_storage=args.box_storage,
+                    host_box_limit_bytes=args.host_box_limit_bytes,
+                    spill_dir=args.spill_dir,
+                    keep_spill_files=args.keep_spill_files,
+                    log_file=log_path,
+                    verbose=args.verbose,
+                )
+                print(f"final_best_x={result['best_x']}", flush=True)
+                print(f"final_best_y={result['best_y']}", flush=True)
+            except BaseException:
+                print("run_status=failed", flush=True)
+                traceback.print_exc()
+                print(f"finished_at={current_timestamp()}", flush=True)
+                return 1
+
+            print("run_status=success", flush=True)
+            print(f"finished_at={current_timestamp()}", flush=True)
+            print(f"log_file={log_path}", flush=True)
+            return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
