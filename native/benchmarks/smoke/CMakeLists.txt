@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(tamubo_exactbo LANGUAGES CXX CUDA)
+project(tamubo_smoke_benchmarks LANGUAGES CXX CUDA)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(CMAKE_CXX_STANDARD 17)
@@ -15,8 +15,12 @@ endif()
 find_package(MPI REQUIRED)
 find_package(CUDAToolkit REQUIRED)
 
-add_library(tamubo_exactbo_native STATIC src/box_store.cpp)
-target_include_directories(tamubo_exactbo_native PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
+add_executable(cuda_smoke src/cuda_smoke.cu)
 
-add_executable(exactbo_partitioning src/partitioning.cu)
-target_link_libraries(exactbo_partitioning PRIVATE MPI::MPI_CXX tamubo_exactbo_native)
+add_executable(mpi_smoke src/mpi_smoke.cpp)
+target_link_libraries(mpi_smoke PRIVATE MPI::MPI_CXX)
+
+add_executable(cuda_mpi_smoke src/cuda_mpi_smoke.cu)
+target_link_libraries(cuda_mpi_smoke PRIVATE MPI::MPI_CXX)
+
+add_executable(unified_memory_query src/unified_memory_query.cu)

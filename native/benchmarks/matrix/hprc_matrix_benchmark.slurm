@@ -9,7 +9,7 @@
 #SBATCH --gres=gpu:2
 #SBATCH --mem=16G
 #SBATCH --time=01:30:00
-#SBATCH --output=native/benchmarks/jobs/slurm-%x-%j.out
+#SBATCH --output=native/benchmarks/matrix/logs/slurm-%x-%j.out
 #SBATCH --mail-type=END,FAIL
 #SBATCH --mail-user=juan.florez@tamu.edu
 
@@ -25,7 +25,7 @@ export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-1}"
 # Slurm/HPRC-specific defaults. Generic benchmark defaults live in run_matrix_benchmark.sh.
 export MPI_RANKS="${MPI_RANKS:-${SLURM_NTASKS:-2}}"
 export CUDA_ARCHITECTURES="${CUDA_ARCHITECTURES:-75}"
-export DATA_DIR="${DATA_DIR:-${PWD}/native/benchmarks/data/matrix_benchmark_${SLURM_JOB_ID}}"
+export DATA_DIR="${DATA_DIR:-${PWD}/native/benchmarks/matrix/data/matrix_benchmark_${SLURM_JOB_ID}}"
 
 echo "job_id=${SLURM_JOB_ID}"
 echo "host=$(hostname)"
@@ -46,4 +46,4 @@ which ninja
 ninja --version
 nvidia-smi -L
 
-bash ./native/benchmarks/executables/matrix/run_matrix_benchmark.sh
+bash ./native/benchmarks/matrix/run_matrix_benchmark.sh

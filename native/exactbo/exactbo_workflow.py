@@ -381,7 +381,7 @@ def run_native_exactbo(
     y0=None,
     gp: GaussianProcessRegressor | None = None,
     workdir="native/exactbo/data/exactbo_workflow",
-    native_build_dir="native/build",
+    native_build_dir="native/exactbo/executables",
     partitioning_exe=None,
     mpi_ranks=1,
     max_iters=3,
@@ -559,7 +559,7 @@ def main():
     parser.add_argument("--y0", default=None, help="Optional .npy file with initial y, shape (n0,).")
     parser.add_argument("--bounds", default=None, help=".npy file with bounds, shape (d, 2).")
     parser.add_argument("--workdir", default="native/exactbo/data/exactbo_workflow")
-    parser.add_argument("--native-build-dir", default="native/build")
+    parser.add_argument("--native-build-dir", default="native/exactbo/executables")
     parser.add_argument("--partitioning-exe", default=None)
     parser.add_argument("--mpi-ranks", type=int, default=1)
     parser.add_argument("--max-iters", type=int, default=3)

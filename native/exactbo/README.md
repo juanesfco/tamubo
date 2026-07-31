@@ -8,140 +8,31 @@ Start with [IMPLEMENTATION.md](IMPLEMENTATION.md) for the Python-to-native funct
 
 ```text
 native/exactbo/
-  executables/   CUDA/MPI programs that are built into native executables
-  scripts/       Python orchestration scripts
+  exactbo_workflow.py  Python BO orchestration
+  executables/   the CUDA/MPI ExactBO partitioning executable
   data/          generated workflow inputs/outputs, ignored except .gitkeep
-  kernels/       reserved for reusable device kernels
+  include/       reusable native declarations
   src/           reusable host/file box-storage implementation
 ```
 
-## Bounds Workflow
-
-`bounds_workflow.py` starts from the same simple 2D example data, trains the sklearn GPR, exports the trained parameters and box bounds, launches the native kernels, and reads back final `ei_lo` / `ei_hi` arrays for each box.
-
-Build the native executables:
-
-```bash
-cmake -S native -B native/build
-cmake --build native/build --target exactbo_rbf_k_bounds exactbo_mu_bounds exactbo_sigma_bounds exactbo_ei_bounds
-```
-
-Run the workflow:
-
-```bash
-envs/venvTrial/bin/python native/exactbo/scripts/bounds_workflow.py \
-  --workdir native/exactbo/data/bounds_workflow \
-  --native-build-dir native/build \
-  --mpi-ranks 1
-```
-
-The workflow writes training data, GP parameters, native binary inputs/outputs, and these final NumPy arrays:
-
-```text
-K_lo.npy
-K_hi.npy
-mu_lo.npy
-mu_hi.npy
-sig_lo.npy
-sig_hi.npy
-ei_lo.npy
-ei_hi.npy
-manifest.json
-```
-
-To use a different black-box function and initial design, import `run_workflow(...)` from `bounds_workflow.py` and pass your own `f`, `X0`, domain bounds, and box bounds.
-
-## DIRECT-Style Box Splitting
-
-`exactbo_split_boxes` reads a list of boxes, an active-box mask, and domain widths. It applies the DIRECT-style split rule to each active box on the GPU. MPI splits the input rows across ranks, so multiple visible GPUs can process separate batches. Active split boxes are written first in `2*d + 1` blocks, followed by inactive boxes when `keep_inactive` is enabled.
-
-Build the split executable:
-
-```bash
-cmake --build native/build --target exactbo_split_boxes
-```
-
-Run the small example workflow:
-
-```bash
-envs/venvTrial/bin/python native/exactbo/scripts/split_boxes_workflow.py \
-  --workdir native/exactbo/data/split_boxes_workflow \
-  --native-build-dir native/build \
-  --mpi-ranks 1 \
-  --split-batch-parents 0
-```
-
-Use `--mpi-ranks 2` or higher when the job has multiple MPI ranks/GPUs available.
-The default `--split-batch-parents 0` derives a conservative batch from free
-CUDA memory and the number of ranks sharing a device. The standalone executable
-writes active children and retained inactive rows directly into their final
-planar output offsets with MPI-IO; it no longer gathers a complete child
-population on rank zero. Its diagnostic input file is still read completely by
-each rank.
-
-The repeated all-active stress workflow is also bounded by default:
-
-```bash
-envs/venvTrial/bin/python native/exactbo/scripts/partition_all_boxes_workflow.py \
-  --workdir /tmp/exactbo-split-stress \
-  --native-build-dir native/build \
-  --steps 8 \
-  --split-batch-parents 0
-```
-
-It keeps one rolling input/output generation, copies planar bounds in 64 MiB
-chunks, and retains only the final native output. Add `--debug-save-numpy` only
-for small runs where per-step arrays are useful.
-
-## Native ExactBO Partitioning
-
-`exactbo_partitioning` is the first native translation of `exactbo_partitioning(...)` from `src/tamubo/exactbo/run.py`. Python still trains the sklearn GP and exports its fitted state, but the partition loop itself runs in C++/MPI/CUDA: EI upper-bound pruning, deterministic LHS sample scoring, and DIRECT-style box splitting. MPI divides the current box list by contiguous row batches; each rank maps its node-local MPI rank to a visible GPU.
-
-Build it:
-
-```bash
-cmake --build native/build --target exactbo_partitioning
-```
-
-Run the example workflow:
-
-```bash
-envs/venvTrial/bin/python native/exactbo/scripts/partitioning_workflow.py \
-  --workdir native/exactbo/data/partitioning_workflow \
-  --native-build-dir native/build \
-  --mpi-ranks 1 \
-  --max-partitions 6 \
-  --device-batch-rows 4096
-```
-
-Use more MPI ranks when multiple GPUs are visible:
-
-```bash
-envs/venvTrial/bin/python native/exactbo/scripts/partitioning_workflow.py \
-  --workdir native/exactbo/data/partitioning_workflow \
-  --native-build-dir native/build \
-  --mpi-ranks 2 \
-  --max-partitions 6 \
-  --device-batch-rows 4096
-```
-
-## Full Native-Acquisition BO Workflow
+## Native-acquisition BO workflow
 
 `exactbo_workflow.py` is the Python orchestrator for the full Bayesian optimization loop. Python receives the problem and data, evaluates the black-box function, fits the sklearn GP, and launches the native `exactbo_partitioning` executable each BO iteration to propose the next point.
 
 Build the native acquisition executable:
 
 ```bash
-cmake -S native -B native/build
-cmake --build native/build --target exactbo_partitioning
+cmake -S native/exactbo -B native/exactbo/build
+cmake --build native/exactbo/build --target exactbo_partitioning
 ```
 
-Run the built-in 2D example:
+Run a built-in example (`minimization_2d`, `problem5d`, or `problem10d`):
 
 ```bash
-envs/venvTrial/bin/python native/exactbo/scripts/exactbo_workflow.py \
+envs/venvTrial/bin/python native/exactbo/exactbo_workflow.py \
+  --example minimization_2d \
   --workdir native/exactbo/data/exactbo_workflow \
-  --native-build-dir native/build \
+  --native-build-dir native/exactbo/executables \
   --mpi-ranks 1 \
   --max-iters 3 \
   --max-partitions 6 \
@@ -152,13 +43,13 @@ envs/venvTrial/bin/python native/exactbo/scripts/exactbo_workflow.py \
 Run a custom problem by providing an objective and `.npy` data files:
 
 ```bash
-envs/venvTrial/bin/python native/exactbo/scripts/exactbo_workflow.py \
+envs/venvTrial/bin/python native/exactbo/exactbo_workflow.py \
   --example none \
   --objective path/to/problem.py:objective \
   --x0 path/to/X0.npy \
   --bounds path/to/bounds.npy \
   --workdir native/exactbo/data/custom_bo_workflow \
-  --native-build-dir native/build \
+  --native-build-dir native/exactbo/executables \
   --mpi-ranks 2
 ```
 

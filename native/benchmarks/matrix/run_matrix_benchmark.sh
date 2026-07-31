@@ -2,9 +2,9 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-NATIVE_DIR="$(cd -- "${SCRIPT_DIR}/../../.." && pwd)"
-BUILD_DIR="${NATIVE_DIR}/build"
-DATA_DIR="${DATA_DIR:-${NATIVE_DIR}/benchmarks/data/matrix_benchmark}"
+BUILD_DIR="${BUILD_DIR:-${SCRIPT_DIR}/build}"
+EXECUTABLE_DIR="${EXECUTABLE_DIR:-${SCRIPT_DIR}/executables}"
+DATA_DIR="${DATA_DIR:-${SCRIPT_DIR}/data}"
 
 MATRIX_N="${MATRIX_N:-1024}"
 MPI_RANKS="${MPI_RANKS:-1}"
@@ -33,7 +33,7 @@ fi
 
 mkdir -p "${DATA_DIR}"
 
-cmake_args=(-S "${NATIVE_DIR}" -B "${BUILD_DIR}" -G "${CMAKE_GENERATOR}")
+cmake_args=(-S "${SCRIPT_DIR}" -B "${BUILD_DIR}" -G "${CMAKE_GENERATOR}")
 if [ -n "${CUDA_ARCHITECTURES}" ]; then
   cmake_args+=("-DCMAKE_CUDA_ARCHITECTURES=${CUDA_ARCHITECTURES}")
 fi
@@ -53,9 +53,9 @@ TILED_LOG="${DATA_DIR}/matrix_products_tiled.out"
 CUBLAS_LOG="${DATA_DIR}/matrix_products_cublas.out"
 COMPARE_LOG="${DATA_DIR}/matrix_compare.out"
 
-"${BUILD_DIR}/matrix_make_inputs" "${MATRIX_N}" "${A_PATH}" "${B_PATH}"
+"${EXECUTABLE_DIR}/matrix_make_inputs" "${MATRIX_N}" "${A_PATH}" "${B_PATH}"
 
-mpirun -np "${MPI_RANKS}" "${BUILD_DIR}/matrix_products_mpi" \
+mpirun -np "${MPI_RANKS}" "${EXECUTABLE_DIR}/matrix_products_mpi" \
   --a "${A_PATH}" \
   --b "${B_PATH}" \
   --out-ab "${TILED_AB}" \
@@ -65,7 +65,7 @@ mpirun -np "${MPI_RANKS}" "${BUILD_DIR}/matrix_products_mpi" \
   --hold-ms "${HOLD_MS}" \
   | tee "${TILED_LOG}"
 
-mpirun -np "${MPI_RANKS}" "${BUILD_DIR}/matrix_products_cublas_mpi" \
+mpirun -np "${MPI_RANKS}" "${EXECUTABLE_DIR}/matrix_products_cublas_mpi" \
   --a "${A_PATH}" \
   --b "${B_PATH}" \
   --out-ab "${CUBLAS_AB}" \
@@ -76,13 +76,13 @@ mpirun -np "${MPI_RANKS}" "${BUILD_DIR}/matrix_products_cublas_mpi" \
   | tee "${CUBLAS_LOG}"
 
 {
-  "${BUILD_DIR}/matrix_compare" \
+  "${EXECUTABLE_DIR}/matrix_compare" \
     --expected "${TILED_AB}" \
     --actual "${CUBLAS_AB}" \
     --atol "${ATOL}" \
     --rtol "${RTOL}"
 
-  "${BUILD_DIR}/matrix_compare" \
+  "${EXECUTABLE_DIR}/matrix_compare" \
     --expected "${TILED_BA}" \
     --actual "${CUBLAS_BA}" \
     --atol "${ATOL}" \

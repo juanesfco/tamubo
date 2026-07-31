@@ -18,9 +18,9 @@ The native executable owns one ExactBO acquisition/partitioning step. MPI gives
 each rank a contiguous slice of the current box list. Each rank chooses a GPU
 from its node-local MPI rank, not its global rank.
 
-The standalone bounds and split executables are diagnostic programs. The full
-BO loop only launches `exactbo_partitioning`, which contains the same formulas
-and split kernel internally.
+The repository keeps only this integrated native executable. Bounds, sampling,
+and splitting are implemented directly in `partitioning.cu`; the Python BO loop
+does not launch separate stage executables.
 
 ## Data model
 
@@ -170,31 +170,33 @@ Use a fresh build directory if an existing CMake cache was created at another
 absolute path:
 
 ```bash
-cmake -S native -B native/build
-cmake --build native/build --target exactbo_partitioning exactbo_split_boxes
+cmake -S native/exactbo -B native/exactbo/build
+cmake --build native/exactbo/build --target exactbo_partitioning
 ```
 
 Force the two opposite memory paths:
 
 ```bash
-envs/venvTrial/bin/python native/exactbo/scripts/partitioning_workflow.py \
-  --native-build-dir native/build --workdir /tmp/exactbo-host \
+envs/venvTrial/bin/python native/exactbo/exactbo_workflow.py \
+  --example minimization_2d --max-iters 1 \
+  --native-build-dir native/exactbo/executables --workdir /tmp/exactbo-host \
   --max-partitions 8 --device-batch-rows 4096 \
   --split-batch-parents 4096 --box-storage host
 
-envs/venvTrial/bin/python native/exactbo/scripts/partitioning_workflow.py \
-  --native-build-dir native/build --workdir /tmp/exactbo-file \
+envs/venvTrial/bin/python native/exactbo/exactbo_workflow.py \
+  --example minimization_2d --max-iters 1 \
+  --native-build-dir native/exactbo/executables --workdir /tmp/exactbo-file \
   --max-partitions 8 --device-batch-rows 2 \
   --split-batch-parents 1 --box-storage file \
   --host-box-limit-bytes 1 --spill-dir /tmp/exactbo-spill
 
-cmp /tmp/exactbo-host/partitioning_output.bin \
-    /tmp/exactbo-file/partitioning_output.bin
+cmp /tmp/exactbo-host/iteration_000/partitioning_output.bin \
+    /tmp/exactbo-file/iteration_000/partitioning_output.bin
 ```
 
 The comparison must be byte-identical. Repeat the file-backed command with
 `--mpi-ranks 2` and compare again to exercise rank-boundary target runs and
 `MPI_Exscan` child offsets. On multiple nodes, choose a shared spill directory.
 
-Use `bounds_workflow.py` and `split_boxes_workflow.py` when isolating a discrepancy
-in interval math or child-box ordering.
+When isolating a discrepancy, run one BO iteration with `--verbose` and compare
+the complete partition trace and binary output across storage and batch modes.
