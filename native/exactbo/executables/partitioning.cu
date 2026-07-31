@@ -1773,4 +1773,42 @@ Beginner-readability changes made in this revision
    policy, and output format were intentionally left unchanged.
 10. Enabled immediate native stdout/stderr flushing so Python can tee live output
     to the terminal and the run log.
+
+Future performance work recorded after the 8M/16M batch comparison
+------------------------------------------------------------------
+1. Add measurements before changing the algorithm. Record wall-clock and CUDA-
+   event timings for EI bounds, EI sampling, mask construction, splitting,
+   allocations, copies, and file I/O. Also log the number of batches and the
+   process/device memory high-water marks. nvtop can miss short kernels, so its
+   utilization display is useful context but is not a phase-level profiler.
+2. Reuse persistent CUDA work buffers sized for the largest required batch
+   instead of calling cudaMalloc() and cudaFree() for every batch. Grow a buffer
+   only when necessary and release it after the complete partitioning run.
+3. Use asynchronous copies and at least two CUDA streams to double-buffer work:
+   while the GPU evaluates batch N, the host can read/prepare batch N+1 and copy
+   it into the other buffer. Benchmark pinned, mapped, and ordinary host memory
+   on GB10 because its CPU and GPU share physical memory.
+4. Construct analyze, active, and target masks on the GPU and compute their
+   counts with device reductions. This avoids repeated full scans of local_ei
+   on the CPU and repeated host/device synchronization.
+5. Compact sparse analyze/active masks before EI sampling. The current sampling
+   path launches over and copies results for every box even when only a few
+   boxes are selected. A device prefix sum or selected-index array should make
+   sampling proportional to the selected population.
+6. Reduce sampled EI and its best point on the GPU. Copy one winning candidate
+   per batch back to the host instead of copying per-box EI values and points.
+7. Compact split parents on the GPU, then feed the compact array directly to
+   the split kernel. The current implementation scans every box on the CPU to
+   collect selected parents before each split batch.
+8. Preserve exact ordering and determinism while making these changes. Compare
+   the complete partition trace, proposed points, best EI, and binary output
+   against the current implementation for several batch sizes.
+9. Do not assume that a larger batch is faster. The 8,388,608-row and
+   16,777,216-row ideal runs produced identical partition traces and took about
+   133 and 134 seconds. The larger run used longer 70--90% GPU bursts separated
+   by longer host-side gaps. Increasing the limit again would consume more
+   shared GB10 memory without addressing the serialized host work.
+10. Suggested implementation order: instrumentation, persistent allocations,
+    GPU reductions/compaction, device-side best reduction, and finally
+    double-buffered asynchronous execution. Re-profile after every step.
 */

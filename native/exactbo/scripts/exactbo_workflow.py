@@ -60,6 +60,10 @@ def current_timestamp():
 def load_problem_from_args(args):
     if args.example == "minimization_2d":
         f, X0, bounds = make_minimization_2d_data()
+    elif args.example == "problem5d":
+        f, X0, bounds = make_problem5d_data()
+    elif args.example == "problem10d":
+        f, X0, bounds = make_problem10d_data()
     else:
         if args.objective is None:
             raise ValueError("--objective is required when --example is not used")
@@ -103,6 +107,78 @@ def minimization_2d_objective(X):
         dy = y - center[1]
         value -= amplitude * np.exp(-(dx * dx + dy * dy) / width)
     return value + 2.0
+
+
+def make_problem5d_data():
+    """Return the 5D nonlinear least-squares benchmark from experiment 2."""
+    bounds = np.tile(np.array([[-1.0, 1.0]], dtype=np.float64), (5, 1))
+    X0 = np.zeros((1, 5), dtype=np.float64)
+    return problem5d_objective, X0, bounds
+
+
+def problem5d_objective(X):
+    """Five-dimensional nonlinear least-squares objective."""
+    X = np.asarray(X, dtype=np.float64)
+    if X.ndim == 1:
+        X = X.reshape(1, -1)
+    x0, x1, x2, x3, x4 = [X[:, i] for i in range(5)]
+
+    t1 = -4.583 - 3.933 * x0 + 0.107 * x1 + 0.126 * x2 - 9.99 * x4
+    t2 = 1.4185 - 0.987 * x1 - 22.95 * x3
+    t3 = -0.0921 + 0.002 * x0 - 0.235 * x2 + 5.67 * x4
+    t4 = 0.0084 + x1 - x3
+    t5 = -0.00071 - x2 - 0.196 * x4
+
+    t6 = -0.727 * x1 * x2 + 8.39 * x2 * x3 - 684.4 * x3 * x4 + 63.5 * x3 * x1
+    t7 = 0.949 * x0 * x2 + 0.173 * x0 * x4
+    t8 = -0.716 * x0 * x1 - 1.578 * x0 * x3 + 1.132 * x3 * x1
+    t9 = -x0 * x4
+    t10 = x0 * x3
+
+    return (
+        (t1 + t6) ** 2
+        + (t2 + t7) ** 2
+        + (t3 + t8) ** 2
+        + (t4 + t9) ** 2
+        + (t5 + t10) ** 2
+    )
+
+
+PROBLEM10D_A = np.array(
+    [
+        [-0.8123, 0.2413, -0.2964, 0.2484, 2.3081, -1.3713, 3.0762, -4.4416, -0.0310, -0.1894],
+        [0.6772, 0.0609, -1.2558, -0.0741, 3.4272, 1.2321, -3.4688, -6.2450, -0.6963, -0.7903],
+        [-0.3365, 0.5358, 0.8026, 1.9580, 1.4212, 1.9957, -1.1197, 4.1086, 0.5639, -0.7754],
+        [-0.4282, 0.4834, -0.4652, 1.4991, -2.8462, 0.6664, -1.0966, -4.4469, -0.7988, 0.5689],
+        [0.5119, 0.6563, 0.3090, 1.1751, 1.7230, 1.9228, 1.5512, -1.6881, -0.4119, -0.4169],
+        [-1.0177, -0.4945, 0.6911, -2.2498, -3.0143, -2.1242, 0.8211, 0.7823, -0.5253, 0.2071],
+        [-0.9385, 0.4491, -1.1320, -2.1417, -2.9591, 1.8822, 2.4259, -4.0952, 0.0617, 0.9288],
+        [0.3490, 0.1322, -1.0659, -2.0633, 1.0886, 3.7698, -1.1095, 2.1446, -0.8170, -0.1350],
+    ],
+    dtype=np.float64,
+)
+PROBLEM10D_B = np.array(
+    [1.7367, 6.9483, -1.1465, 2.6396, -0.5015, -0.2883, 2.1894, 1.8491],
+    dtype=np.float64,
+)
+
+
+def make_problem10d_data():
+    """Return the 10D L1-regularized least-squares benchmark from experiment 2."""
+    bounds = np.tile(np.array([[-1.0, 1.0]], dtype=np.float64), (10, 1))
+    X0 = np.zeros((1, 10), dtype=np.float64)
+    return problem10d_objective, X0, bounds
+
+
+def problem10d_objective(X):
+    """Ten-dimensional L1-regularized least-squares objective."""
+    X = np.asarray(X, dtype=np.float64)
+    if X.ndim == 1:
+        X = X.reshape(1, -1)
+    residual = X @ PROBLEM10D_A.T - PROBLEM10D_B
+    smooth = 0.5 * np.sum(residual**2, axis=1)
+    penalty = np.sum(np.abs(X), axis=1)
+    return smooth + penalty
 
 
 def load_callable(spec: str):
@@ -473,7 +549,11 @@ def main():
     parser = argparse.ArgumentParser(
         description="Run BO with native ExactBO partitioning as acquisition."
     )
-    parser.add_argument("--example", choices=["minimization_2d", "none"], default="minimization_2d")
+    parser.add_argument(
+        "--example",
+        choices=["minimization_2d", "problem5d", "problem10d", "none"],
+        default="minimization_2d",
+    )
     parser.add_argument("--objective", default=None, help="Objective as module:function or /path/file.py:function.")
     parser.add_argument("--x0", default=None, help=".npy file with initial X, shape (n0, d).")
     parser.add_argument("--y0", default=None, help="Optional .npy file with initial y, shape (n0,).")

@@ -19,3 +19,4 @@ native/exactbo/data/*
 !native/exactbo/data/.gitkeep
 native/slurm-*.out
 native/benchmarks/jobs/slurm-*.out
+native/exactbo/testruns_*D/
