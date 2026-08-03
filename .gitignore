@@ -15,7 +15,6 @@ examples/exactbo/profiles/
 native/benchmarks/matrix/data/*
 native/benchmarks/matrix/logs/*
 native/exactbo/data/*
-native/exactbo/logs/*
 native/benchmarks/matrix/executables/*
 native/benchmarks/smoke/executables/*
 native/exactbo/executables/*

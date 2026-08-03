@@ -109,6 +109,7 @@ Use one environment per usage:
 
 - `exactbo`: `envs/exactbo.yml`, `envs/exactbo.txt`, `envs/exactbo_nocp.txt`
 - `bo` (torch-based): `envs/pytorch/`
+- `exactbo v2`: `envs/dgx/`
 - `envs/gpugp.yml` (planned)
 - `envs/mobbo.yml` (planned)
 
@@ -116,11 +117,11 @@ Use one environment per usage:
 
 ```text
 tamubo/
-├── development/                  # branch-local exploration (scratch notebooks/scripts)
 ├── envs/                         # environments by usage/framework
 │   ├── exactbo.yml
 │   ├── exactbo.txt
 │   ├── exactbo_nocp.txt
+│   ├── dgx/
 │   └── pytorch/
 ├── examples/                     # lightweight runnable demos
 │   ├── bo/
@@ -133,6 +134,9 @@ tamubo/
 │   │   └── experiment2/
 │   ├── gpugp/
 │   └── mobbo/
+├── native/                       # C++/CUDA/MPI implementations
+│   ├── benchmarks/
+│   └── exactbo/
 ├── src/
 │   └── tamubo/
 │       ├── bo/
@@ -141,20 +145,6 @@ tamubo/
 │       └── mobbo/
 └── pyproject.toml
 ```
-
-## Branch Workflow for `development/`
-
-Use `development/` for work-in-progress and keep that work on dedicated branches.
-
-Suggested flow:
-
-1. Create a feature branch (example: `dev/exactbo-cupynumeric`).
-2. Iterate in `development/`.
-3. Promote mature outputs:
-   - reusable library code -> `src/tamubo/`
-   - minimal demos -> `examples/`
-   - reproducible studies -> `experiments/<framework>/`
-4. Merge only curated assets into `main`.
 
 ## License
 

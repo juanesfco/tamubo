@@ -22,9 +22,24 @@ native/exactbo/
 Build the native acquisition executable:
 
 ```bash
-cmake -S native/exactbo -B native/exactbo/build
-cmake --build native/exactbo/build --target exactbo_partitioning
+cmake -S native/exactbo -B native/exactbo/executables/build
+cmake --build native/exactbo/executables/build --target exactbo_partitioning
 ```
+
+Build and run the two small step-by-step diagnostics:
+
+```bash
+cmake --build native/exactbo/executables/build \
+  --target exactbo_bounding exactbo_box_partition
+native/exactbo/executables/exactbo_bounding
+native/exactbo/executables/exactbo_box_partition
+```
+
+`exactbo_bounding` prints the RBF-kernel, posterior-mean, Cholesky-solve,
+posterior-sigma, and EI-bound calculations for one box. It also evaluates EI
+at nine points inside the box and checks that they do not exceed the bound.
+`exactbo_box_partition` prints every child generated when one 2D box is split
+and checks containment, overlap, and total volume.
 
 Run a built-in example (`minimization_2d`, `problem5d`, or `problem10d`):
 

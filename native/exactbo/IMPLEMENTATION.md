@@ -170,8 +170,8 @@ Use a fresh build directory if an existing CMake cache was created at another
 absolute path:
 
 ```bash
-cmake -S native/exactbo -B native/exactbo/build
-cmake --build native/exactbo/build --target exactbo_partitioning
+cmake -S native/exactbo -B native/exactbo/executables/build
+cmake --build native/exactbo/executables/build --target exactbo_partitioning
 ```
 
 Force the two opposite memory paths:

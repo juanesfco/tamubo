@@ -2,7 +2,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-BUILD_DIR="${BUILD_DIR:-${SCRIPT_DIR}/build}"
+BUILD_DIR="${BUILD_DIR:-${SCRIPT_DIR}/executables/build}"
 EXECUTABLE_DIR="${EXECUTABLE_DIR:-${SCRIPT_DIR}/executables}"
 DATA_DIR="${DATA_DIR:-${SCRIPT_DIR}/data}"
 
