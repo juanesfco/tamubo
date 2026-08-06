@@ -12,7 +12,9 @@ using std::setw;
 
 constexpr int D = 2;
 constexpr int N = 2;
-constexpr int BOXES = 1000;
+constexpr int BOXES = 1000000;
+constexpr int THREADS_PER_BLOCK = 256;
+constexpr int BOXES_TO_PRINT = 8;
 constexpr double TOL = 0.0;
 constexpr double SQRT_2 = 1.4142135623730951;
 constexpr double INV_SQRT_2_PI = 0.3989422804014327;
@@ -217,17 +219,18 @@ int main() {
     const double center[D] = {0.5, 0.4};
     double half_width[D] = {0.3, 0.3};
 
-    // Create eight nested boxes with a common center.
+    // Create nested boxes with a common center.
     for (int box = 0; box < BOXES; ++box) {
         for (int dim = 0; dim < D; ++dim) {
             const int index = box * D + dim;
             results->low[index] = center[dim] - half_width[dim];
             results->high[index] = center[dim] + half_width[dim];
-            half_width[dim] /= 1.1;
+            half_width[dim] /= 1.01;
         }
     }
 
-    evaluate_boxes<<<1, 1000>>>(results);
+    const int blocks = (BOXES + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
+    evaluate_boxes<<<blocks, THREADS_PER_BLOCK>>>(results);
     CUDA_CHECK(cudaGetLastError());
     CUDA_CHECK(cudaDeviceSynchronize());
 
@@ -242,14 +245,27 @@ int main() {
     for (int box = 0; box < BOXES; ++box) {
         const double gap = results->upper_ei[box] - results->center_ei[box];
 
-        cout << setw(3) << box << "  "
-             << setw(7) << results->low[box * D + 0] << "  "
-             << setw(7) << results->high[box * D + 0] << "  "
-             << setw(7) << results->low[box * D + 1] << "  "
-             << setw(7) << results->high[box * D + 1] << "  "
-             << setw(7) << results->center_ei[box] << "  "
-             << setw(7) << results->upper_ei[box] << "  "
-             << setw(7) << gap << "\n";
+        if (box < BOXES_TO_PRINT) {
+            cout << setw(3) << box << "  "
+                 << setw(7) << results->low[box * D + 0] << "  "
+                 << setw(7) << results->high[box * D + 0] << "  "
+                 << setw(7) << results->low[box * D + 1] << "  "
+                 << setw(7) << results->high[box * D + 1] << "  "
+                 << setw(7) << results->center_ei[box] << "  "
+                 << setw(7) << results->upper_ei[box] << "  "
+                 << setw(7) << gap << "\n";
+        }
+
+        if (box > 999998) {
+            cout << setw(3) << box << "  "
+                 << setw(7) << results->low[box * D + 0] << "  "
+                 << setw(7) << results->high[box * D + 0] << "  "
+                 << setw(7) << results->low[box * D + 1] << "  "
+                 << setw(7) << results->high[box * D + 1] << "  "
+                 << setw(7) << results->center_ei[box] << "  "
+                 << setw(7) << results->upper_ei[box] << "  "
+                 << setw(7) << gap << "\n";
+        }
 
         if (box == 0) {
             first_gap = gap;
@@ -262,6 +278,8 @@ int main() {
     }
 
     passed &= previous_gap < first_gap;
+    cout << "Evaluated " << BOXES << " boxes with " << blocks
+         << " blocks of " << THREADS_PER_BLOCK << " threads.\n";
     cout << "Result: " << (passed ? "PASS" : "FAIL") << "\n";
 
     CUDA_CHECK(cudaFree(results));
