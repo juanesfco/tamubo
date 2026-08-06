@@ -1811,4 +1811,7 @@ Future performance work recorded after the 8M/16M batch comparison
 10. Suggested implementation order: instrumentation, persistent allocations,
     GPU reductions/compaction, device-side best reduction, and finally
     double-buffered asynchronous execution. Re-profile after every step.
+
+Key Changes:
+1. sample_best_kernel now uses a single block of threads to reduce the best EI and its corresponding point. This avoids the need for multiple kernel launches and reduces host-device synchronization overhead.
 */

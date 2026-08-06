@@ -35,9 +35,9 @@ native/exactbo/executables/exactbo_bounding
 native/exactbo/executables/exactbo_box_partition
 ```
 
-`exactbo_bounding` prints the RBF-kernel, posterior-mean, Cholesky-solve,
-posterior-sigma, and EI-bound calculations for one box. It also evaluates EI
-at nine points inside the box and checks that they do not exceed the bound.
+`exactbo_bounding` evaluates nested boxes with a shared center. It prints the
+actual EI at the center, the EI upper bound over each complete box, and their
+gap, then checks that the bound tightens as the boxes shrink.
 `exactbo_box_partition` prints every child generated when one 2D box is split
 and checks containment, overlap, and total volume.
 

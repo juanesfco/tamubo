@@ -17,6 +17,8 @@ find_package(CUDAToolkit REQUIRED)
 
 add_executable(cuda_smoke src/cuda_smoke.cu)
 
+add_executable(gpu_limits src/gpu_limits.cu)
+
 add_executable(mpi_smoke src/mpi_smoke.cpp)
 target_link_libraries(mpi_smoke PRIVATE MPI::MPI_CXX)
 

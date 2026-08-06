@@ -32,6 +32,7 @@ cmake "${cmake_args[@]}"
 cmake --build "${BUILD_DIR}"
 
 "${EXECUTABLE_DIR}/cuda_smoke"
+"${EXECUTABLE_DIR}/gpu_limits"
 "${EXECUTABLE_DIR}/unified_memory_query"
 mpirun -np "${MPI_RANKS}" "${EXECUTABLE_DIR}/mpi_smoke"
 mpirun -np "${MPI_RANKS}" "${EXECUTABLE_DIR}/cuda_mpi_smoke"
