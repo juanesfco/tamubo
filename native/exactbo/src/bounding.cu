@@ -12,7 +12,7 @@ using std::setw;
 
 constexpr int D = 2;
 constexpr int N = 2;
-constexpr int BOXES = 5;
+constexpr int BOXES = 1000;
 constexpr double TOL = 0.0;
 constexpr double SQRT_2 = 1.4142135623730951;
 constexpr double INV_SQRT_2_PI = 0.3989422804014327;
@@ -223,11 +223,11 @@ int main() {
             const int index = box * D + dim;
             results->low[index] = center[dim] - half_width[dim];
             results->high[index] = center[dim] + half_width[dim];
-            half_width[dim] /= 3.0;
+            half_width[dim] /= 1.1;
         }
     }
 
-    evaluate_boxes<<<1, 5>>>(results);
+    evaluate_boxes<<<1, 1000>>>(results);
     CUDA_CHECK(cudaGetLastError());
     CUDA_CHECK(cudaDeviceSynchronize());
 
