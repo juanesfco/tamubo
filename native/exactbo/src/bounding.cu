@@ -12,9 +12,8 @@ using std::setw;
 
 constexpr int D = 2;
 constexpr int N = 2;
-constexpr int BOXES = 1000000;
+constexpr int BOXES = 100000000;
 constexpr int THREADS_PER_BLOCK = 256;
-constexpr int BOXES_TO_PRINT = 8;
 constexpr double TOL = 0.0;
 constexpr double SQRT_2 = 1.4142135623730951;
 constexpr double INV_SQRT_2_PI = 0.3989422804014327;
@@ -225,7 +224,7 @@ int main() {
             const int index = box * D + dim;
             results->low[index] = center[dim] - half_width[dim];
             results->high[index] = center[dim] + half_width[dim];
-            half_width[dim] /= 1.01;
+            half_width[dim] /= 1.00000005;
         }
     }
 
@@ -234,8 +233,8 @@ int main() {
     CUDA_CHECK(cudaGetLastError());
     CUDA_CHECK(cudaDeviceSynchronize());
 
-    cout << fixed << setprecision(5);
-    cout << "box  low.x    high.x   low.y    high.y   EI(c)    EI_hi    gap\n";
+    cout << fixed << setprecision(8);
+    cout << "box        low.x       high.x      low.y       high.y      EI(c)       EI_hi       gap\n";
 
     bool passed = true;
     double first_gap = 0.0;
@@ -245,26 +244,26 @@ int main() {
     for (int box = 0; box < BOXES; ++box) {
         const double gap = results->upper_ei[box] - results->center_ei[box];
 
-        if (box < BOXES_TO_PRINT) {
-            cout << setw(3) << box << "  "
-                 << setw(7) << results->low[box * D + 0] << "  "
-                 << setw(7) << results->high[box * D + 0] << "  "
-                 << setw(7) << results->low[box * D + 1] << "  "
-                 << setw(7) << results->high[box * D + 1] << "  "
-                 << setw(7) << results->center_ei[box] << "  "
-                 << setw(7) << results->upper_ei[box] << "  "
-                 << setw(7) << gap << "\n";
+        if (box < 8) {
+            cout << setw(9) << box << "  "
+                 << setw(10) << results->low[box * D + 0] << "  "
+                 << setw(10) << results->high[box * D + 0] << "  "
+                 << setw(10) << results->low[box * D + 1] << "  "
+                 << setw(10) << results->high[box * D + 1] << "  "
+                 << setw(10) << results->center_ei[box] << "  "
+                 << setw(10) << results->upper_ei[box] << "  "
+                 << setw(10) << gap << "\n";
         }
 
-        if (box > 999998) {
-            cout << setw(3) << box << "  "
-                 << setw(7) << results->low[box * D + 0] << "  "
-                 << setw(7) << results->high[box * D + 0] << "  "
-                 << setw(7) << results->low[box * D + 1] << "  "
-                 << setw(7) << results->high[box * D + 1] << "  "
-                 << setw(7) << results->center_ei[box] << "  "
-                 << setw(7) << results->upper_ei[box] << "  "
-                 << setw(7) << gap << "\n";
+        if (box > 99999995) {
+            cout << setw(9) << box << "  "
+                 << setw(10) << results->low[box * D + 0] << "  "
+                 << setw(10) << results->high[box * D + 0] << "  "
+                 << setw(10) << results->low[box * D + 1] << "  "
+                 << setw(10) << results->high[box * D + 1] << "  "
+                 << setw(10) << results->center_ei[box] << "  "
+                 << setw(10) << results->upper_ei[box] << "  "
+                 << setw(10) << gap << "\n";
         }
 
         if (box == 0) {
