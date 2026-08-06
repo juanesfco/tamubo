@@ -10,12 +10,21 @@ ENV VIRTUAL_ENV=/opt/tamubo-venv
 ENV PATH="${VIRTUAL_ENV}/bin:${PATH}"
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    gnupg \
+    wget \
+    && wget -qO- https://developer.download.nvidia.com/compute/cuda/repos/ubuntu1804/x86_64/7fa2af80.pub \
+    | gpg --dearmor -o /usr/share/keyrings/nvidia-devtools-keyring.gpg \
+    && echo "deb [signed-by=/usr/share/keyrings/nvidia-devtools-keyring.gpg] https://developer.download.nvidia.com/devtools/repos/ubuntu2404/$(dpkg --print-architecture)/ /" \
+    > /etc/apt/sources.list.d/nvidia-devtools.list \
+    && apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     cmake \
     ninja-build \
     git \
     openmpi-bin \
     libopenmpi-dev \
+    nsight-systems-cli \
     python3 \
     python3-pip \
     python3-venv \

@@ -93,7 +93,7 @@ case "${cmd}" in
     ;;
   verify)
     docker run --rm "${docker_run_flags[@]}" "${IMAGE}" bash -lc \
-      'whoami && id && uname -m && which python && python --version && nvidia-smi && nvcc --version && mpirun --version | sed -n "1p"'
+      'whoami && id && uname -m && which python && python --version && nvidia-smi && nvcc --version && mpirun --version | sed -n "1p" && nsys --version'
     ;;
   -h|--help|help)
     usage
