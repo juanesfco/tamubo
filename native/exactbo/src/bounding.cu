@@ -12,7 +12,7 @@ using std::setw;
 
 constexpr int D = 2;
 constexpr int N = 2;
-constexpr int BOXES = 140000;
+constexpr int BOXES = 20000;
 constexpr int THREADS_PER_BLOCK = 256;
 constexpr double TOL = 0.0;
 constexpr double SQRT_2 = 1.4142135623730951;
@@ -264,7 +264,7 @@ int main() {
                  << setw(10) << gap << "\n";
         }
 
-        if (box > 99999995) {
+        if (box > BOXES - 5) {
             cout << setw(9) << box << "  "
                  << setw(10) << results->low[box * D + 0] << "  "
                  << setw(10) << results->high[box * D + 0] << "  "
