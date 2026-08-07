@@ -1,0 +1,7 @@
+GPU: NVIDIA GB10
+Compute capability: 12.1
+SMs: 48
+Max threads/block: 1024
+Max block dimensions: 1024 x 1024 x 64
+Max grid dimensions (blocks): 2147483647 x 65535 x 65535
+Max threads/SM: 1536
