@@ -224,7 +224,7 @@ int main() {
             const int index = box * D + dim;
             results->low[index] = center[dim] - half_width[dim];
             results->high[index] = center[dim] + half_width[dim];
-            half_width[dim] /= 1.00000005;
+            half_width[dim] /= 1.0000001;
         }
     }
 
