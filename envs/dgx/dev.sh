@@ -82,6 +82,15 @@ case "${cmd}" in
       "${IMAGE}" \
       bash -lc "sleep infinity"
     ;;
+  profile)
+    build_image
+    docker run --rm -it \
+      "${docker_run_flags[@]}" \
+      --cap-add=SYS_ADMIN \
+      --user root \
+      "${IMAGE}" \
+      bash
+    ;;
   exec)
     if [ "$#" -eq 0 ]; then
       set -- bash
