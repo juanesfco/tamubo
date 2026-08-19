@@ -2,7 +2,6 @@
 #include <cstdlib>
 #include <iomanip>
 #include <iostream>
-#include <vector>
 #include <string>
 #include <fstream>
 #include <stdexcept>
@@ -16,7 +15,6 @@ using std::cout;
 using std::fixed;
 using std::setprecision;
 using std::setw;
-using std::vector;
 using std::string;
 using std::ifstream;
 using std::runtime_error;
@@ -32,6 +30,15 @@ constexpr int THREADS_PER_BLOCK = 256;
 constexpr double SQRT_2 = 1.4142135623730951;
 constexpr double INV_SQRT_2_PI = 0.3989422804014327;
 
+#define CUDA_CHECK(call)                                                    \
+    do {                                                                    \
+        cudaError_t error = call;                                           \
+        if (error != cudaSuccess) {                                         \
+            cerr << cudaGetErrorString(error) << "\n";                     \
+            exit(1);                                                        \
+        }                                                                   \
+    } while (0)
+
 struct PartitionInput {
     int n_train = 0;
     int d = 0;
@@ -42,13 +49,13 @@ struct PartitionInput {
     double y_train_mean = 0.0;
     double y_train_std = 1.0;
     double y_min_scaled = 0.0;
-    vector<double> epsilon_x;
-    vector<double> domain_L;
-    vector<double> domain_U;
-    vector<double> X_train;
-    vector<double> alpha;
-    vector<double> L;
-    vector<double> length_scale;
+    double* epsilon_x = nullptr;
+    double* domain_L = nullptr;
+    double* domain_U = nullptr;
+    double* X_train = nullptr;
+    double* alpha = nullptr;
+    double* L = nullptr;
+    double* length_scale = nullptr;
 };
 
 struct Interval {
@@ -63,7 +70,7 @@ struct Results {
     double* upper_ei = nullptr;
 };
 
-PartitionInput read_input(const string& path) {
+PartitionInput* read_input(const string& path) {
     ifstream in(path, ios::binary);
     if (!in) {
         throw runtime_error("failed to open input file: " + path);
@@ -74,52 +81,44 @@ PartitionInput read_input(const string& path) {
         throw runtime_error("invalid exactbo_partitioning input magic");
     }
 
-    PartitionInput input;
+    PartitionInput* input = nullptr;
+    CUDA_CHECK(cudaMallocManaged(&input, sizeof(PartitionInput)));
     // Binary streams read bytes through char pointers.  These casts are required
     // by the C++ stream API; they do not change the stored values.
-    in.read(reinterpret_cast<char*>(&input.n_train), sizeof(input.n_train));
-    in.read(reinterpret_cast<char*>(&input.d), sizeof(input.d));
-    in.read(reinterpret_cast<char*>(&input.max_partitions), sizeof(input.max_partitions));
-    in.read(reinterpret_cast<char*>(&input.epsilon_ei), sizeof(input.epsilon_ei));
-    in.read(reinterpret_cast<char*>(&input.sigma_f_2), sizeof(input.sigma_f_2));
-    in.read(reinterpret_cast<char*>(&input.sigma_n_2), sizeof(input.sigma_n_2));
-    in.read(reinterpret_cast<char*>(&input.y_train_mean), sizeof(input.y_train_mean));
-    in.read(reinterpret_cast<char*>(&input.y_train_std), sizeof(input.y_train_std));
-    in.read(reinterpret_cast<char*>(&input.y_min_scaled), sizeof(input.y_min_scaled));
+    in.read(reinterpret_cast<char*>(&input->n_train), sizeof(input->n_train));
+    in.read(reinterpret_cast<char*>(&input->d), sizeof(input->d));
+    in.read(reinterpret_cast<char*>(&input->max_partitions), sizeof(input->max_partitions));
+    in.read(reinterpret_cast<char*>(&input->epsilon_ei), sizeof(input->epsilon_ei));
+    in.read(reinterpret_cast<char*>(&input->sigma_f_2), sizeof(input->sigma_f_2));
+    in.read(reinterpret_cast<char*>(&input->sigma_n_2), sizeof(input->sigma_n_2));
+    in.read(reinterpret_cast<char*>(&input->y_train_mean), sizeof(input->y_train_mean));
+    in.read(reinterpret_cast<char*>(&input->y_train_std), sizeof(input->y_train_std));
+    in.read(reinterpret_cast<char*>(&input->y_min_scaled), sizeof(input->y_min_scaled));
     
     if (!in) {
         throw runtime_error("input file ended while reading GP settings");
     }
 
-    input.epsilon_x.resize(input.d);
-    input.domain_L.resize(input.d);
-    input.domain_U.resize(input.d);
-    input.X_train.resize(input.n_train * input.d);
-    input.alpha.resize(input.n_train);
-    input.L.resize(input.n_train * input.n_train);
-    input.length_scale.resize(input.d);
+    CUDA_CHECK(cudaMallocManaged(&input->epsilon_x, input->d * sizeof(double)));
+    CUDA_CHECK(cudaMallocManaged(&input->domain_L, input->d * sizeof(double)));
+    CUDA_CHECK(cudaMallocManaged(&input->domain_U, input->d * sizeof(double)));
+    CUDA_CHECK(cudaMallocManaged(&input->X_train, input->n_train * input->d * sizeof(double)));
+    CUDA_CHECK(cudaMallocManaged(&input->alpha, input->n_train * sizeof(double)));
+    CUDA_CHECK(cudaMallocManaged(&input->L, input->n_train * input->n_train * sizeof(double)));
+    CUDA_CHECK(cudaMallocManaged(&input->length_scale, input->d * sizeof(double)));
 
-    in.read(reinterpret_cast<char*>(input.epsilon_x.data()), input.epsilon_x.size() * sizeof(double));
-    in.read(reinterpret_cast<char*>(input.domain_L.data()), input.domain_L.size() * sizeof(double));
-    in.read(reinterpret_cast<char*>(input.domain_U.data()), input.domain_U.size() * sizeof(double));
-    in.read(reinterpret_cast<char*>(input.X_train.data()), input.X_train.size() * sizeof(double));
-    in.read(reinterpret_cast<char*>(input.alpha.data()), input.alpha.size() * sizeof(double));
-    in.read(reinterpret_cast<char*>(input.L.data()), input.L.size() * sizeof(double));
-    in.read(reinterpret_cast<char*>(input.length_scale.data()), input.length_scale.size() * sizeof(double));
+    in.read(reinterpret_cast<char*>(input->epsilon_x), input->d * sizeof(double));
+    in.read(reinterpret_cast<char*>(input->domain_L), input->d * sizeof(double));
+    in.read(reinterpret_cast<char*>(input->domain_U), input->d * sizeof(double));
+    in.read(reinterpret_cast<char*>(input->X_train), input->n_train * input->d * sizeof(double));
+    in.read(reinterpret_cast<char*>(input->alpha), input->n_train * sizeof(double));
+    in.read(reinterpret_cast<char*>(input->L), input->n_train * input->n_train * sizeof(double));
+    in.read(reinterpret_cast<char*>(input->length_scale), input->d * sizeof(double));
     if (!in) {
         throw runtime_error("input file ended while reading GP arrays");
     }
     return input;
 }
-
-#define CUDA_CHECK(call)                                                    \
-    do {                                                                    \
-        cudaError_t error = call;                                           \
-        if (error != cudaSuccess) {                                         \
-            cerr << cudaGetErrorString(error) << "\n";                     \
-            exit(1);                                                        \
-        }                                                                   \
-    } while (0)
 
 __device__ double normal_cdf(double z) {
     return 0.5 * (1.0 + erf(z / SQRT_2));
@@ -148,19 +147,19 @@ __device__ void bound_box(const double* low, const double* high, double* upper_e
     
 }
 
-__global__ void evaluate_boxes(Results* results, const int d, const int n, const double* x_train, const double* alpha, const double* L, const double* length_scale) {
+__global__ void evaluate_boxes(Results* results, PartitionInput* input) {
     const int box = blockIdx.x * blockDim.x + threadIdx.x;
     if (box >= BOXES) {
         return;
     }
 
-    const double* low = results->low + box * d;
-    const double* high = results->high + box * d;
+    const double* low = results->low + box * input->d;
+    const double* high = results->high + box * input->d;
     double* center_ei = results->center_ei + box;
     double* upper_ei = results->upper_ei + box;
 
-    ei_at_point(low, high, center_ei, d, n, x_train, alpha, L, length_scale);
-    bound_box(low, high, upper_ei, d, n, x_train, alpha, L, length_scale);
+    ei_at_point(low, high, center_ei, input->d, input->n_train, input->X_train, input->alpha, input->L, input->length_scale);
+    bound_box(low, high, upper_ei, input->d, input->n_train, input->X_train, input->alpha, input->L, input->length_scale);
 }
 
 void print_input(const PartitionInput& input, const string& input_path) {
@@ -238,24 +237,24 @@ void print_input(const PartitionInput& input, const string& input_path) {
 int main() {
 
     const string input_path = "data/logs/checkBounding/input.bin";
-    const PartitionInput input = read_input(input_path);
+    PartitionInput* input = read_input(input_path);
 
-    print_input(input, input_path);
+    print_input(*input, input_path);
 
     Results* results = nullptr;
     CUDA_CHECK(cudaMallocManaged(&results, sizeof(Results)));
-    CUDA_CHECK(cudaMallocManaged(&results->low, BOXES * input.d * sizeof(double)));
-    CUDA_CHECK(cudaMallocManaged(&results->high, BOXES * input.d * sizeof(double)));
+    CUDA_CHECK(cudaMallocManaged(&results->low, BOXES * input->d * sizeof(double)));
+    CUDA_CHECK(cudaMallocManaged(&results->high, BOXES * input->d * sizeof(double)));
     CUDA_CHECK(cudaMallocManaged(&results->center_ei, BOXES * sizeof(double)));
     CUDA_CHECK(cudaMallocManaged(&results->upper_ei, BOXES * sizeof(double)));
 
-    const double center[input.d] = {0.5, 0.4};
-    double half_width[input.d] = {0.3, 0.3};
+    const double center[input->d] = {0.5, 0.4};
+    double half_width[input->d] = {0.3, 0.3};
 
     // Create nested boxes with a common center.
     for (int box = 0; box < BOXES; ++box) {
-        for (int dim = 0; dim < input.d; ++dim) {
-            const int index = box * input.d + dim;
+        for (int dim = 0; dim < input->d; ++dim) {
+            const int index = box * input->d + dim;
             results->low[index] = center[dim] - half_width[dim];
             results->high[index] = center[dim] + half_width[dim];
             half_width[dim] /= 1.0000001;
@@ -265,13 +264,13 @@ int main() {
     const int blocks = (BOXES + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
 
     // Warm up the GPU to avoid measuring kernel launch overhead.
-    evaluate_boxes<<<blocks, THREADS_PER_BLOCK>>>(results, input.d, input.n_train, input.X_train.data(), input.alpha.data(), input.L.data(), input.length_scale.data());
+    evaluate_boxes<<<blocks, THREADS_PER_BLOCK>>>(results, input);
     CUDA_CHECK(cudaGetLastError());
     CUDA_CHECK(cudaDeviceSynchronize());
 
     // Profile representative kernel launches.
     for (int i = 0; i < 10; ++i) {
-        evaluate_boxes<<<blocks, THREADS_PER_BLOCK>>>(results, input.d, input.n_train, input.X_train.data(), input.alpha.data(), input.L.data(), input.length_scale.data());
+        evaluate_boxes<<<blocks, THREADS_PER_BLOCK>>>(results, input);
         CUDA_CHECK(cudaGetLastError());
         CUDA_CHECK(cudaDeviceSynchronize());
     }
@@ -289,10 +288,10 @@ int main() {
 
         if (box < 8) {
             cout << setw(9) << box << "  "
-                 << setw(10) << results->low[box * input.d + 0] << "  "
-                 << setw(10) << results->high[box * input.d + 0] << "  "
-                 << setw(10) << results->low[box * input.d + 1] << "  "
-                 << setw(10) << results->high[box * input.d + 1] << "  "
+                 << setw(10) << results->low[box * input->d + 0] << "  "
+                 << setw(10) << results->high[box * input->d + 0] << "  "
+                 << setw(10) << results->low[box * input->d + 1] << "  "
+                 << setw(10) << results->high[box * input->d + 1] << "  "
                  << setw(10) << results->center_ei[box] << "  "
                  << setw(10) << results->upper_ei[box] << "  "
                  << setw(10) << gap << "\n";
@@ -300,10 +299,10 @@ int main() {
 
         if (box > BOXES - 5) {
             cout << setw(9) << box << "  "
-                 << setw(10) << results->low[box * input.d + 0] << "  "
-                 << setw(10) << results->high[box * input.d + 0] << "  "
-                 << setw(10) << results->low[box * input.d + 1] << "  "
-                 << setw(10) << results->high[box * input.d + 1] << "  "
+                 << setw(10) << results->low[box * input->d + 0] << "  "
+                 << setw(10) << results->high[box * input->d + 0] << "  "
+                 << setw(10) << results->low[box * input->d + 1] << "  "
+                 << setw(10) << results->high[box * input->d + 1] << "  "
                  << setw(10) << results->center_ei[box] << "  "
                  << setw(10) << results->upper_ei[box] << "  "
                  << setw(10) << gap << "\n";
@@ -324,6 +323,14 @@ int main() {
          << " blocks of " << THREADS_PER_BLOCK << " threads.\n";
     cout << "Result: " << (passed ? "PASS" : "FAIL") << "\n";
 
+    CUDA_CHECK(cudaFree(input->epsilon_x));
+    CUDA_CHECK(cudaFree(input->domain_L));
+    CUDA_CHECK(cudaFree(input->domain_U));
+    CUDA_CHECK(cudaFree(input->X_train));
+    CUDA_CHECK(cudaFree(input->alpha));
+    CUDA_CHECK(cudaFree(input->L));
+    CUDA_CHECK(cudaFree(input->length_scale));
+    CUDA_CHECK(cudaFree(input));
     CUDA_CHECK(cudaFree(results->low));
     CUDA_CHECK(cudaFree(results->high));
     CUDA_CHECK(cudaFree(results->center_ei));
