@@ -1,27 +1,27 @@
-#include <cmath>
+//#include <cmath>
 #include <cstdlib>
-#include <iomanip>
-#include <iostream>
-#include <string>
-#include <fstream>
-#include <stdexcept>
-#include <cstdint>
-#include <limits>
-#include <cstddef>
-#include <cuda_runtime.h>
+using std::exit;
 
-using std::cerr;
-using std::cout;
+#include <iomanip>
 using std::fixed;
 using std::setprecision;
 using std::setw;
+
+#include <iostream>
+using std::cerr;
+using std::cout;
+
+#include <string>
 using std::string;
+
+#include <fstream>
 using std::ifstream;
-using std::runtime_error;
 using std::ios;
-using std::uint64_t;
-using std::numeric_limits;
-using std::size_t;
+
+#include <stdexcept>
+using std::runtime_error;
+
+#include <cuda_runtime.h>
 
 constexpr char kInputMagic[8] = {'T', 'P', 'A', 'R', 'I', 'N', '1', '!'};
 
@@ -139,11 +139,11 @@ __device__ Interval multiply(Interval a, Interval b) {
     };
 }
 
-__device__ void ei_at_point(const double* low, const double* high, double* center_ei, const int d, const int n, const double* x_train, const double* alpha, const double* L, const double* length_scale) {
+__device__ void ei_at_point(const double* center_ei, const double* low, const double* high, const int d, const int n, const double* x_train, const double* alpha, const double* L, const double* length_scale) {
     
 }
 
-__device__ void bound_box(const double* low, const double* high, double* upper_ei, const int d, const int n, const double* x_train, const double* alpha, const double* L, const double* length_scale) {
+__device__ void bound_box(const double* upper_ei, const double* low, const double* high, const int d, const int n, const double* x_train, const double* alpha, const double* L, const double* length_scale) {
     
 }
 
@@ -158,8 +158,8 @@ __global__ void evaluate_boxes(Results* results, PartitionInput* input) {
     double* center_ei = results->center_ei + box;
     double* upper_ei = results->upper_ei + box;
 
-    ei_at_point(low, high, center_ei, input->d, input->n_train, input->X_train, input->alpha, input->L, input->length_scale);
-    bound_box(low, high, upper_ei, input->d, input->n_train, input->X_train, input->alpha, input->L, input->length_scale);
+    ei_at_point(center_ei, low, high, input->d, input->n_train, input->X_train, input->alpha, input->L, input->length_scale);
+    bound_box(upper_ei, low, high, input->d, input->n_train, input->X_train, input->alpha, input->L, input->length_scale);
 }
 
 void print_input(const PartitionInput& input, const string& input_path) {
