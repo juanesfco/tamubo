@@ -386,7 +386,7 @@ __global__ void evaluate_boxes(Results* results, PartitionInput* input) {
 
 int main() {
     // Read input from binary file and allocate memory on device for the input data.
-    const string input_path = "data/logs/checkBounding/input5d.bin";
+    const string input_path = "data/logs/checkBounding/input10d.bin";
     PartitionInput* input = read_input(input_path);
 
     // Print the input data to the console for verification.
