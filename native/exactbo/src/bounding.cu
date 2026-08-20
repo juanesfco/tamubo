@@ -1,4 +1,8 @@
-//#include <cmath>
+#include <cmath>
+using std::exp;
+using std::sqrt;
+using std::erf;
+
 #include <cstdlib>
 using std::exit;
 
@@ -48,7 +52,7 @@ struct PartitionInput {
     double sigma_n_2 = 0.0;
     double y_train_mean = 0.0;
     double y_train_std = 1.0;
-    double y_min_scaled = 0.0;
+    double y_min = 0.0;
     double* epsilon_x = nullptr;
     double* domain_L = nullptr;
     double* domain_U = nullptr;
@@ -93,7 +97,7 @@ PartitionInput* read_input(const string& path) {
     in.read(reinterpret_cast<char*>(&input->sigma_n_2), sizeof(input->sigma_n_2));
     in.read(reinterpret_cast<char*>(&input->y_train_mean), sizeof(input->y_train_mean));
     in.read(reinterpret_cast<char*>(&input->y_train_std), sizeof(input->y_train_std));
-    in.read(reinterpret_cast<char*>(&input->y_min_scaled), sizeof(input->y_min_scaled));
+    in.read(reinterpret_cast<char*>(&input->y_min), sizeof(input->y_min));
     
     if (!in) {
         throw runtime_error("input file ended while reading GP settings");
@@ -120,48 +124,6 @@ PartitionInput* read_input(const string& path) {
     return input;
 }
 
-__device__ double normal_cdf(double z) {
-    return 0.5 * (1.0 + erf(z / SQRT_2));
-}
-
-__device__ double normal_pdf(double z) {
-    return INV_SQRT_2_PI * exp(-0.5 * z * z);
-}
-
-__device__ Interval multiply(Interval a, Interval b) {
-    const double p1 = a.low * b.low;
-    const double p2 = a.low * b.high;
-    const double p3 = a.high * b.low;
-    const double p4 = a.high * b.high;
-    return {
-        fmin(fmin(p1, p2), fmin(p3, p4)),
-        fmax(fmax(p1, p2), fmax(p3, p4)),
-    };
-}
-
-__device__ void ei_at_point(const double* center_ei, const double* low, const double* high, const int d, const int n, const double* x_train, const double* alpha, const double* L, const double* length_scale) {
-    
-}
-
-__device__ void bound_box(const double* upper_ei, const double* low, const double* high, const int d, const int n, const double* x_train, const double* alpha, const double* L, const double* length_scale) {
-    
-}
-
-__global__ void evaluate_boxes(Results* results, PartitionInput* input) {
-    const int box = blockIdx.x * blockDim.x + threadIdx.x;
-    if (box >= BOXES) {
-        return;
-    }
-
-    const double* low = results->low + box * input->d;
-    const double* high = results->high + box * input->d;
-    double* center_ei = results->center_ei + box;
-    double* upper_ei = results->upper_ei + box;
-
-    ei_at_point(center_ei, low, high, input->d, input->n_train, input->X_train, input->alpha, input->L, input->length_scale);
-    bound_box(upper_ei, low, high, input->d, input->n_train, input->X_train, input->alpha, input->L, input->length_scale);
-}
-
 void print_input(const PartitionInput& input, const string& input_path) {
     cout << "Read input from " << input_path << "\n"
          << " n_train: " << input.n_train << "\n"
@@ -172,7 +134,7 @@ void print_input(const PartitionInput& input, const string& input_path) {
          << " sigma_n_2: " << input.sigma_n_2 << "\n"
          << " y_train_mean: " << input.y_train_mean << "\n"
          << " y_train_std: " << input.y_train_std << "\n"
-         << " y_min_scaled: " << input.y_min_scaled << "\n"
+         << " y_min: " << input.y_min << "\n"
          << " epsilon_x: ";
             for (int dim = 0; dim < input.d; ++dim) {
                 cout << input.epsilon_x[dim] << " ";
@@ -234,13 +196,105 @@ void print_input(const PartitionInput& input, const string& input_path) {
             cout << "\n";
 }
 
-int main() {
+__device__ double normal_cdf(double z) {
+    return 0.5 * (1.0 + erf(z / SQRT_2));
+}
 
+__device__ double normal_pdf(double z) {
+    return INV_SQRT_2_PI * exp(-0.5 * z * z);
+}
+
+__device__ Interval multiply(Interval a, Interval b) {
+    const double p1 = a.low * b.low;
+    const double p2 = a.low * b.high;
+    const double p3 = a.high * b.low;
+    const double p4 = a.high * b.high;
+    return {
+        fmin(fmin(p1, p2), fmin(p3, p4)),
+        fmax(fmax(p1, p2), fmax(p3, p4)),
+    };
+}
+
+__device__ void ei_at_point(double* center_ei, const double* low, const double* high, const int d, const int n, const double* x_train, const double* length_scale, const double sigma_f_2, const double sigma_n_2, const double* alpha, const double y_train_mean, const double y_train_std, const double* L, const double y_min, double* workspace) {
+    // Calculate the values of the kernel function between the center of the box and each training point using a temporary array to store the kernel values. 
+    for (int i = 0; i < n; ++i) {
+        workspace[i] = 0.0;
+        for (int dim = 0; dim < d; ++dim) {
+            workspace[i] += ((low[dim] + high[dim]) / 2.0 - x_train[i * d + dim])/length_scale[dim] * ((low[dim] + high[dim]) / 2.0 - x_train[i * d + dim]) / length_scale[dim];
+        }
+        workspace[i] = sigma_f_2 * exp(-0.5 * workspace[i]);
+    }
+
+    // Calculate normalized mean, store in center_ei
+    *center_ei = 0.0;
+    for (int i = 0; i < n; ++i) { 
+        *center_ei += alpha[i] * workspace[i];
+    }
+
+    // Undo mean normalization, store in center_ei
+    *center_ei = y_train_mean + y_train_std * *center_ei;
+
+    
+    // Left divide L by workspace to solve for v in L * v = workspace, store in workspace
+    for (int i = 0; i < n; ++i) {
+        workspace[i] /= L[i * n + i];
+        for (int j = i + 1; j < n; ++j) {
+            workspace[j] -= L[j * n + i] * workspace[i];
+        }
+    }
+
+    // Calculate normalized variance, store in workspace[0]
+    workspace[0] = sigma_f_2 + sigma_n_2 - workspace[0] * workspace[0];
+    for (int i = 1; i < n; ++i) {
+        workspace[0] -= workspace[i] * workspace[i];
+    }
+
+    // If the variance is negative due to numerical issues, set it to zero
+    if (workspace[0] < 0.0) {
+        workspace[0] = 0.0;
+        *center_ei = 0.0;
+    } else {
+        // Undo variance normalization, store in workspace[0]
+        workspace[0] *= y_train_std * y_train_std;
+
+        // Calculate standard deviation, store in workspace[0]
+        workspace[0] = sqrt(workspace[0]);
+
+        // Calculate the expected improvement for minimization, store in center_ei
+        *center_ei = (y_min - *center_ei) * normal_cdf((y_min - *center_ei) / workspace[0]) + workspace[0] * normal_pdf((y_min - *center_ei) / workspace[0]);
+    }
+}
+
+__device__ void bound_box(double* upper_ei, const double* low, const double* high, const int d, const int n, const double* x_train, const double* length_scale, const double sigma_f_2, const double sigma_n_2, const double* alpha, const double y_train_mean, const double y_train_std, const double* L, const double y_min, double* workspace) {
+    *upper_ei = 0.0;
+}
+
+__global__ void evaluate_boxes(Results* results, PartitionInput* input, double* workspace) {
+    const int box = blockIdx.x * blockDim.x + threadIdx.x;
+    if (box >= BOXES) {
+        return;
+    }
+
+    const double* low = results->low + box * input->d;
+    const double* high = results->high + box * input->d;
+    double* center_ei = results->center_ei + box;
+    double* upper_ei = results->upper_ei + box;
+
+    double* workspace_for_box = workspace + box * input->n_train;
+
+    ei_at_point(center_ei, low, high, input->d, input->n_train, input->X_train, input->length_scale, input->sigma_f_2, input->sigma_n_2, input->alpha, input->y_train_mean, input->y_train_std, input->L, input->y_min, workspace_for_box);
+    bound_box(upper_ei, low, high, input->d, input->n_train, input->X_train, input->length_scale, input->sigma_f_2, input->sigma_n_2, input->alpha, input->y_train_mean, input->y_train_std, input->L, input->y_min, workspace_for_box);
+}
+
+int main() {
+    // Read input from binary file and allocate memory on device for the input data.
     const string input_path = "data/logs/checkBounding/input.bin";
     PartitionInput* input = read_input(input_path);
 
+    // Print the input data to the console for verification.
     print_input(*input, input_path);
 
+    // Allocate memory on the device for the results of the box evaluations.
     Results* results = nullptr;
     CUDA_CHECK(cudaMallocManaged(&results, sizeof(Results)));
     CUDA_CHECK(cudaMallocManaged(&results->low, BOXES * input->d * sizeof(double)));
@@ -248,6 +302,11 @@ int main() {
     CUDA_CHECK(cudaMallocManaged(&results->center_ei, BOXES * sizeof(double)));
     CUDA_CHECK(cudaMallocManaged(&results->upper_ei, BOXES * sizeof(double)));
 
+    // Allocate memory on the device for workspace used in device computations.
+    double* workspace = nullptr;
+    CUDA_CHECK(cudaMallocManaged(&workspace, BOXES * input->n_train * sizeof(double)));
+
+    // Define the center and half-width of the boxes to be evaluated.
     const double center[input->d] = {0.5, 0.4};
     double half_width[input->d] = {0.3, 0.3};
 
@@ -261,20 +320,22 @@ int main() {
         }
     }
 
+    // Calculate the number of blocks needed to evaluate all boxes with the specified number of threads per block.
     const int blocks = (BOXES + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
 
     // Warm up the GPU to avoid measuring kernel launch overhead.
-    evaluate_boxes<<<blocks, THREADS_PER_BLOCK>>>(results, input);
+    evaluate_boxes<<<blocks, THREADS_PER_BLOCK>>>(results, input, workspace);
     CUDA_CHECK(cudaGetLastError());
     CUDA_CHECK(cudaDeviceSynchronize());
 
     // Profile representative kernel launches.
     for (int i = 0; i < 10; ++i) {
-        evaluate_boxes<<<blocks, THREADS_PER_BLOCK>>>(results, input);
+        evaluate_boxes<<<blocks, THREADS_PER_BLOCK>>>(results, input, workspace);
         CUDA_CHECK(cudaGetLastError());
         CUDA_CHECK(cudaDeviceSynchronize());
     }
 
+    // Print the results of the box evaluations to the console for verification.
     cout << fixed << setprecision(8);
     cout << "box        low.x       high.x      low.y       high.y      EI(c)       EI_hi       gap\n";
 
@@ -318,11 +379,13 @@ int main() {
         previous_gap = gap;
     }
 
+    // Check that the gaps are decreasing and that the first gap is greater than the last gap.
     passed &= previous_gap < first_gap;
     cout << "Evaluated " << BOXES << " boxes with " << blocks
          << " blocks of " << THREADS_PER_BLOCK << " threads.\n";
     cout << "Result: " << (passed ? "PASS" : "FAIL") << "\n";
 
+    // Free the allocated memory on the device for the input data, results, and workspace.
     CUDA_CHECK(cudaFree(input->epsilon_x));
     CUDA_CHECK(cudaFree(input->domain_L));
     CUDA_CHECK(cudaFree(input->domain_U));
@@ -336,5 +399,8 @@ int main() {
     CUDA_CHECK(cudaFree(results->center_ei));
     CUDA_CHECK(cudaFree(results->upper_ei));
     CUDA_CHECK(cudaFree(results));
+    CUDA_CHECK(cudaFree(workspace));
+
+    // Return 0 if the test passed, or 1 if it failed.
     return passed ? 0 : 1;
 }
