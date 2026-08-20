@@ -200,3 +200,21 @@ The comparison must be byte-identical. Repeat the file-backed command with
 
 When isolating a discrepancy, run one BO iteration with `--verbose` and compare
 the complete partition trace and binary output across storage and batch modes.
+
+## Author's tools
+
+Check time and memory:
+
+```
+/usr/bin/time -v -o memory_usage.txt ./executables/exactbo_bounding
+```
+
+Check registers and spills:
+
+```
+/usr/local/cuda/bin/nvcc -std=c++17 -arch=native -Xptxas=-v -c src/bounding.cu -o /tmp/bounding.o
+```
+
+Profile Nsight Systems:
+
+Profile Nsight Compute:

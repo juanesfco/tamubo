@@ -289,10 +289,8 @@ __device__ void bound_box(double* upper_ei, const double* low, const double* hig
     }
 
     // Undo the mean normalization.
-    const double unnormalized_mean_1 = y_train_mean + y_train_std * mean_low;
-    const double unnormalized_mean_2 = y_train_mean + y_train_std * mean_high;
-    mean_low = fmin(unnormalized_mean_1, unnormalized_mean_2);
-    mean_high = fmax(unnormalized_mean_1, unnormalized_mean_2);
+    mean_low = y_train_mean + y_train_std * mean_low;
+    mean_high = y_train_mean + y_train_std * mean_high;
 
     // Bound v = L^-1 k one component at a time.  workspace stores one row of
     // L^-1, which avoids allocating separate low and high interval arrays.
@@ -345,10 +343,9 @@ __device__ void bound_box(double* upper_ei, const double* low, const double* hig
 
     // Bound and unnormalize the posterior standard deviation.
     const double variance_base = sigma_f_2 + sigma_n_2;
-    const double std_scale = fabs(y_train_std);
     Interval standard_deviation = {
-        std_scale * sqrt(fmax(variance_base - q_high, 1.0e-12)),
-        std_scale * sqrt(fmax(variance_base - q_low, 1.0e-12)),
+        y_train_std * sqrt(fmax(variance_base - q_high, 1.0e-12)),
+        y_train_std * sqrt(fmax(variance_base - q_low, 1.0e-12)),
     };
 
     // Interval extension of EI = (y_min - mean) Phi(z) + sigma phi(z).
