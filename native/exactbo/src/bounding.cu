@@ -2,6 +2,9 @@
 using std::exp;
 using std::sqrt;
 using std::erf;
+using std::fabs;
+using std::fmin;
+using std::fmax;
 
 #include <cstdlib>
 using std::exit;
@@ -216,25 +219,22 @@ __device__ Interval multiply(Interval a, Interval b) {
 }
 
 __device__ void ei_at_point(double* center_ei, const double* low, const double* high, const int d, const int n, const double* x_train, const double* length_scale, const double sigma_f_2, const double sigma_n_2, const double* alpha, const double y_train_mean, const double y_train_std, const double* L, const double y_min, double* workspace) {
-    /*
-    // Calculate the values of the kernel function between the center of the box and each training point using a temporary array to store the kernel values. 
+    // Calculate the kernel values between the center of the box and each training point.
     for (int i = 0; i < n; ++i) {
-        workspace[i] = 0.0;
+        double squared_distance = 0.0;
         for (int dim = 0; dim < d; ++dim) {
-            workspace[i] += ((low[dim] + high[dim]) / 2.0 - x_train[i * d + dim])/length_scale[dim] * ((low[dim] + high[dim]) / 2.0 - x_train[i * d + dim]) / length_scale[dim];
+            const double difference = ((low[dim] + high[dim]) / 2.0 - x_train[i * d + dim]) / length_scale[dim];
+            squared_distance += difference * difference;
         }
-        workspace[i] = sigma_f_2 * exp(-0.5 * workspace[i]);
+        workspace[i] = sigma_f_2 * exp(-0.5 * squared_distance);
     }
 
-    // Calculate normalized mean, store in center_ei
-    *center_ei = 0.0;
+    // Calculate and unnormalize the mean.
+    double mean = 0.0;
     for (int i = 0; i < n; ++i) { 
-        *center_ei += alpha[i] * workspace[i];
+        mean += alpha[i] * workspace[i];
     }
-
-    // Undo mean normalization, store in center_ei
-    *center_ei = y_train_mean + y_train_std * *center_ei;
-
+    mean = y_train_mean + y_train_std * mean;
     
     // Left divide L by workspace to solve for v in L * v = workspace, store in workspace
     for (int i = 0; i < n; ++i) {
@@ -244,79 +244,24 @@ __device__ void ei_at_point(double* center_ei, const double* low, const double* 
         }
     }
 
-    // Calculate normalized variance, store in workspace[0]
-    workspace[0] = sigma_f_2 + sigma_n_2 - workspace[0] * workspace[0];
-    for (int i = 1; i < n; ++i) {
-        workspace[0] -= workspace[i] * workspace[i];
+    // Calculate the normalized variance.
+    double variance = sigma_f_2 + sigma_n_2;
+    for (int i = 0; i < n; ++i) {
+        variance -= workspace[i] * workspace[i];
     }
 
-    // If the variance is negative due to numerical issues, set it to zero
-    if (workspace[0] < 0.0) {
-        workspace[0] = 0.0;
+    // If the variance is negative due to numerical issues, set EI to zero.
+    if (variance < 0.0) {
         *center_ei = 0.0;
     } else {
-        // Undo variance normalization, store in workspace[0]
-        workspace[0] *= y_train_std * y_train_std;
-
-        // Calculate standard deviation, store in workspace[0]
-        workspace[0] = sqrt(workspace[0]);
-
-        // Calculate the expected improvement for minimization, store in center_ei
-        *center_ei = (y_min - *center_ei) * normal_cdf((y_min - *center_ei) / workspace[0]) + workspace[0] * normal_pdf((y_min - *center_ei) / workspace[0]);
-    }
-    */
-
-    // Calculate the values of the kernel function between the center of the box and each training point using a temporary array to store the kernel values. 
-    for (int i = 0; i < n; ++i) {
-        workspace[i] = 0.0;
-        for (int dim = 0; dim < d; ++dim) {
-            workspace[i] += ((low[dim] + high[dim]) / 2.0 - x_train[i * d + dim])/length_scale[dim] * ((low[dim] + high[dim]) / 2.0 - x_train[i * d + dim]) / length_scale[dim];
-        }
-        workspace[i] = sigma_f_2 * exp(-0.5 * workspace[i]);
-    }
-
-    // Calculate normalized mean, store in center_ei
-    *center_ei = 0.0;
-    for (int i = 0; i < n; ++i) { 
-        *center_ei += alpha[i] * workspace[i];
-    }
-
-    // Undo mean normalization, store in center_ei
-    *center_ei = y_train_mean + y_train_std * *center_ei;
-
-    
-    // Left divide L by workspace to solve for v in L * v = workspace, store in workspace
-    for (int i = 0; i < n; ++i) {
-        workspace[i] /= L[i * n + i];
-        for (int j = i + 1; j < n; ++j) {
-            workspace[j] -= L[j * n + i] * workspace[i];
-        }
-    }
-
-    // Calculate normalized variance, store in workspace[0]
-    workspace[0] = sigma_f_2 + sigma_n_2 - workspace[0] * workspace[0];
-    for (int i = 1; i < n; ++i) {
-        workspace[0] -= workspace[i] * workspace[i];
-    }
-
-    // If the variance is negative due to numerical issues, set it to zero
-    if (workspace[0] < 0.0) {
-        workspace[0] = 0.0;
-        *center_ei = 0.0;
-    } else {
-        // Undo variance normalization, store in workspace[0]
-        workspace[0] *= y_train_std * y_train_std;
-
-        // Calculate standard deviation, store in workspace[0]
-        workspace[0] = sqrt(workspace[0]);
-
-        // Calculate the expected improvement for minimization, store in center_ei
-        *center_ei = (y_min - *center_ei) * normal_cdf((y_min - *center_ei) / workspace[0]) + workspace[0] * normal_pdf((y_min - *center_ei) / workspace[0]);
+        const double standard_deviation = sqrt(variance * y_train_std * y_train_std);
+        const double improvement = y_min - mean;
+        const double z = improvement / standard_deviation;
+        *center_ei = improvement * normal_cdf(z) + standard_deviation * normal_pdf(z);
     }
 }
 
 __device__ void bound_box(double* upper_ei, const double* low, const double* high, const int d, const int n, const double* x_train, const double* length_scale, const double sigma_f_2, const double sigma_n_2, const double* alpha, const double y_train_mean, const double y_train_std, const double* L, const double y_min, double* workspace) {
-    /*
     // Bound the normalized mean over the box.
     double mean_low = 0.0;
     double mean_high = 0.0;
@@ -429,7 +374,6 @@ __device__ void bound_box(double* upper_ei, const double* low, const double* hig
     if (standard_deviation.high == 0.0) {
         *upper_ei = 0.0;
     }
-    */
 }
 
 __global__ void evaluate_boxes(Results* results, PartitionInput* input, double* workspace) {
