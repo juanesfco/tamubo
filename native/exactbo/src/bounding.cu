@@ -33,7 +33,7 @@ using std::runtime_error;
 
 constexpr char kInputMagic[8] = {'T', 'P', 'A', 'R', 'I', 'N', '1', '!'};
 
-constexpr size_t BOXES = 100000000;
+constexpr size_t BOXES = 1000000000;
 constexpr int THREADS_PER_BLOCK = 256;
 constexpr double SQRT_2 = 1.4142135623730951;
 constexpr double INV_SQRT_2_PI = 0.3989422804014327;
@@ -262,7 +262,7 @@ __device__ void ei_at_point(double* center_ei, const double* low, const double* 
     }
 }
 
-__device__ void bound_box(double* upper_ei, const double* low, const double* high, const int d, const int n, const double* x_train, const double* length_scale, const double sigma_f_2, const double sigma_n_2, const double* alpha, const double y_train_mean, const double y_train_std, const double* L, const double y_min, double* workspace) {
+__device__ void bound_box(double* upper_ei, const double* low, const double* high, const int d, const int n, const double* x_train, const double* length_scale, const double sigma_f_2, const double sigma_n_2, const double* alpha, const double y_train_mean, const double y_train_std, const double* L, const double y_min, double* workspace_low, double* workspace_high) {
     // Bound the normalized mean over the box.
     double mean_low = 0.0;
     double mean_high = 0.0;
@@ -280,6 +280,8 @@ __device__ void bound_box(double* upper_ei, const double* low, const double* hig
 
         const double kernel_low = sigma_f_2 * exp(-0.5 * max_distance_2);
         const double kernel_high = sigma_f_2 * exp(-0.5 * min_distance_2);
+        workspace_low[i] = kernel_low;
+        workspace_high[i] = kernel_high;
         if (alpha[i] >= 0.0) {
             mean_low += alpha[i] * kernel_low;
             mean_high += alpha[i] * kernel_high;
@@ -293,44 +295,28 @@ __device__ void bound_box(double* upper_ei, const double* low, const double* hig
     mean_low = y_train_mean + y_train_std * mean_low;
     mean_high = y_train_mean + y_train_std * mean_high;
 
-    // Bound v = L^-1 k one component at a time.  workspace stores one row of
-    // L^-1, which avoids allocating separate low and high interval arrays.
+    // Bound v = L^-1 k, overwriting the kernel bounds with the v bounds.
     double q_low = 0.0;
     double q_high = 0.0;
     for (int row = 0; row < n; ++row) {
-        workspace[row] = 1.0 / L[row * n + row];
-        for (int column = row - 1; column >= 0; --column) {
-            double sum = 0.0;
-            for (int k = column + 1; k <= row; ++k) {
-                sum += L[k * n + column] * workspace[k];
-            }
-            workspace[column] = -sum / L[column * n + column];
-        }
-
-        double v_low = 0.0;
-        double v_high = 0.0;
-        for (int i = 0; i <= row; ++i) {
-            double min_distance_2 = 0.0;
-            double max_distance_2 = 0.0;
-            for (int dim = 0; dim < d; ++dim) {
-                const double distance_low = (low[dim] - x_train[i * d + dim]) / length_scale[dim];
-                const double distance_high = (x_train[i * d + dim] - high[dim]) / length_scale[dim];
-                const double min_distance = fmax(fmax(distance_low, distance_high), 0.0);
-                const double max_distance = fmax(fabs(distance_low), fabs(distance_high));
-                min_distance_2 += min_distance * min_distance;
-                max_distance_2 += max_distance * max_distance;
-            }
-
-            const double kernel_low = sigma_f_2 * exp(-0.5 * max_distance_2);
-            const double kernel_high = sigma_f_2 * exp(-0.5 * min_distance_2);
-            if (workspace[i] >= 0.0) {
-                v_low += workspace[i] * kernel_low;
-                v_high += workspace[i] * kernel_high;
+        double sum_low = 0.0;
+        double sum_high = 0.0;
+        for (int i = 0; i < row; ++i) {
+            const double coefficient = L[row * n + i];
+            if (coefficient >= 0.0) {
+                sum_low += coefficient * workspace_low[i];
+                sum_high += coefficient * workspace_high[i];
             } else {
-                v_low += workspace[i] * kernel_high;
-                v_high += workspace[i] * kernel_low;
+                sum_low += coefficient * workspace_high[i];
+                sum_high += coefficient * workspace_low[i];
             }
         }
+
+        const double diagonal = L[row * n + row];
+        const double v_low = (workspace_low[row] - sum_high) / diagonal;
+        const double v_high = (workspace_high[row] - sum_low) / diagonal;
+        workspace_low[row] = v_low;
+        workspace_high[row] = v_high;
 
         const double square_1 = v_low * v_low;
         const double square_2 = v_high * v_high;
@@ -374,7 +360,7 @@ __device__ void bound_box(double* upper_ei, const double* low, const double* hig
     }
 }
 
-__global__ void evaluate_boxes(Results* results, PartitionInput* input, double* workspace) {
+__global__ void evaluate_boxes(Results* results, PartitionInput* input, double* workspace_low, double* workspace_high) {
     const size_t box = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
     if (box >= BOXES) {
         return;
@@ -385,10 +371,11 @@ __global__ void evaluate_boxes(Results* results, PartitionInput* input, double* 
     double* center_ei = results->center_ei + box;
     double* upper_ei = results->upper_ei + box;
 
-    double* workspace_for_box = workspace + box * input->n_train;
+    double* workspace_low_for_box = workspace_low + box * input->n_train;
+    double* workspace_high_for_box = workspace_high + box * input->n_train;
 
-    ei_at_point(center_ei, low, high, input->d, input->n_train, input->X_train, input->length_scale, input->sigma_f_2, input->sigma_n_2, input->alpha, input->y_train_mean, input->y_train_std, input->L, input->y_min, workspace_for_box);
-    bound_box(upper_ei, low, high, input->d, input->n_train, input->X_train, input->length_scale, input->sigma_f_2, input->sigma_n_2, input->alpha, input->y_train_mean, input->y_train_std, input->L, input->y_min, workspace_for_box);
+    ei_at_point(center_ei, low, high, input->d, input->n_train, input->X_train, input->length_scale, input->sigma_f_2, input->sigma_n_2, input->alpha, input->y_train_mean, input->y_train_std, input->L, input->y_min, workspace_low_for_box);
+    bound_box(upper_ei, low, high, input->d, input->n_train, input->X_train, input->length_scale, input->sigma_f_2, input->sigma_n_2, input->alpha, input->y_train_mean, input->y_train_std, input->L, input->y_min, workspace_low_for_box, workspace_high_for_box);
 }
 
 int main() {
@@ -408,8 +395,10 @@ int main() {
     CUDA_CHECK(cudaMallocManaged(&results->upper_ei, BOXES * sizeof(double)));
 
     // Allocate memory on the device for workspace used in device computations.
-    double* workspace = nullptr;
-    CUDA_CHECK(cudaMallocManaged(&workspace, BOXES * input->n_train * sizeof(double)));
+    double* workspace_low = nullptr;
+    double* workspace_high = nullptr;
+    CUDA_CHECK(cudaMallocManaged(&workspace_low, BOXES * input->n_train * sizeof(double)));
+    CUDA_CHECK(cudaMallocManaged(&workspace_high, BOXES * input->n_train * sizeof(double)));
 
     // Define the center and half-width of the boxes to be evaluated.
     const double center[input->d] = {0.5, 0.4};
@@ -429,13 +418,13 @@ int main() {
     const unsigned int blocks = static_cast<unsigned int>((BOXES + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK);
 
     // Warm up the GPU to avoid measuring kernel launch overhead.
-    evaluate_boxes<<<blocks, THREADS_PER_BLOCK>>>(results, input, workspace);
+    evaluate_boxes<<<blocks, THREADS_PER_BLOCK>>>(results, input, workspace_low, workspace_high);
     CUDA_CHECK(cudaGetLastError());
     CUDA_CHECK(cudaDeviceSynchronize());
 
     // Profile representative kernel launches.
     for (int i = 0; i < 2; ++i) {
-        evaluate_boxes<<<blocks, THREADS_PER_BLOCK>>>(results, input, workspace);
+        evaluate_boxes<<<blocks, THREADS_PER_BLOCK>>>(results, input, workspace_low, workspace_high);
         CUDA_CHECK(cudaGetLastError());
         CUDA_CHECK(cudaDeviceSynchronize());
     }
@@ -504,7 +493,8 @@ int main() {
     CUDA_CHECK(cudaFree(results->center_ei));
     CUDA_CHECK(cudaFree(results->upper_ei));
     CUDA_CHECK(cudaFree(results));
-    CUDA_CHECK(cudaFree(workspace));
+    CUDA_CHECK(cudaFree(workspace_low));
+    CUDA_CHECK(cudaFree(workspace_high));
 
     // Return 0 if the test passed, or 1 if it failed.
     return passed ? 0 : 1;
