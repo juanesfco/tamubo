@@ -25,6 +25,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     openmpi-bin \
     libopenmpi-dev \
     nsight-systems-cli \
+    time \
     python3 \
     python3-pip \
     python3-venv \

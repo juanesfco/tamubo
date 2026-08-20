@@ -216,6 +216,56 @@ __device__ Interval multiply(Interval a, Interval b) {
 }
 
 __device__ void ei_at_point(double* center_ei, const double* low, const double* high, const int d, const int n, const double* x_train, const double* length_scale, const double sigma_f_2, const double sigma_n_2, const double* alpha, const double y_train_mean, const double y_train_std, const double* L, const double y_min, double* workspace) {
+    /*
+    // Calculate the values of the kernel function between the center of the box and each training point using a temporary array to store the kernel values. 
+    for (int i = 0; i < n; ++i) {
+        workspace[i] = 0.0;
+        for (int dim = 0; dim < d; ++dim) {
+            workspace[i] += ((low[dim] + high[dim]) / 2.0 - x_train[i * d + dim])/length_scale[dim] * ((low[dim] + high[dim]) / 2.0 - x_train[i * d + dim]) / length_scale[dim];
+        }
+        workspace[i] = sigma_f_2 * exp(-0.5 * workspace[i]);
+    }
+
+    // Calculate normalized mean, store in center_ei
+    *center_ei = 0.0;
+    for (int i = 0; i < n; ++i) { 
+        *center_ei += alpha[i] * workspace[i];
+    }
+
+    // Undo mean normalization, store in center_ei
+    *center_ei = y_train_mean + y_train_std * *center_ei;
+
+    
+    // Left divide L by workspace to solve for v in L * v = workspace, store in workspace
+    for (int i = 0; i < n; ++i) {
+        workspace[i] /= L[i * n + i];
+        for (int j = i + 1; j < n; ++j) {
+            workspace[j] -= L[j * n + i] * workspace[i];
+        }
+    }
+
+    // Calculate normalized variance, store in workspace[0]
+    workspace[0] = sigma_f_2 + sigma_n_2 - workspace[0] * workspace[0];
+    for (int i = 1; i < n; ++i) {
+        workspace[0] -= workspace[i] * workspace[i];
+    }
+
+    // If the variance is negative due to numerical issues, set it to zero
+    if (workspace[0] < 0.0) {
+        workspace[0] = 0.0;
+        *center_ei = 0.0;
+    } else {
+        // Undo variance normalization, store in workspace[0]
+        workspace[0] *= y_train_std * y_train_std;
+
+        // Calculate standard deviation, store in workspace[0]
+        workspace[0] = sqrt(workspace[0]);
+
+        // Calculate the expected improvement for minimization, store in center_ei
+        *center_ei = (y_min - *center_ei) * normal_cdf((y_min - *center_ei) / workspace[0]) + workspace[0] * normal_pdf((y_min - *center_ei) / workspace[0]);
+    }
+    */
+
     // Calculate the values of the kernel function between the center of the box and each training point using a temporary array to store the kernel values. 
     for (int i = 0; i < n; ++i) {
         workspace[i] = 0.0;
@@ -266,7 +316,120 @@ __device__ void ei_at_point(double* center_ei, const double* low, const double* 
 }
 
 __device__ void bound_box(double* upper_ei, const double* low, const double* high, const int d, const int n, const double* x_train, const double* length_scale, const double sigma_f_2, const double sigma_n_2, const double* alpha, const double y_train_mean, const double y_train_std, const double* L, const double y_min, double* workspace) {
-    *upper_ei = 0.0;
+    /*
+    // Bound the normalized mean over the box.
+    double mean_low = 0.0;
+    double mean_high = 0.0;
+    for (int i = 0; i < n; ++i) {
+        double min_distance_2 = 0.0;
+        double max_distance_2 = 0.0;
+        for (int dim = 0; dim < d; ++dim) {
+            const double distance_low = (low[dim] - x_train[i * d + dim]) / length_scale[dim];
+            const double distance_high = (x_train[i * d + dim] - high[dim]) / length_scale[dim];
+            const double min_distance = fmax(fmax(distance_low, distance_high), 0.0);
+            const double max_distance = fmax(fabs(distance_low), fabs(distance_high));
+            min_distance_2 += min_distance * min_distance;
+            max_distance_2 += max_distance * max_distance;
+        }
+
+        const double kernel_low = sigma_f_2 * exp(-0.5 * max_distance_2);
+        const double kernel_high = sigma_f_2 * exp(-0.5 * min_distance_2);
+        if (alpha[i] >= 0.0) {
+            mean_low += alpha[i] * kernel_low;
+            mean_high += alpha[i] * kernel_high;
+        } else {
+            mean_low += alpha[i] * kernel_high;
+            mean_high += alpha[i] * kernel_low;
+        }
+    }
+
+    // Undo the mean normalization.
+    const double unnormalized_mean_1 = y_train_mean + y_train_std * mean_low;
+    const double unnormalized_mean_2 = y_train_mean + y_train_std * mean_high;
+    mean_low = fmin(unnormalized_mean_1, unnormalized_mean_2);
+    mean_high = fmax(unnormalized_mean_1, unnormalized_mean_2);
+
+    // Bound v = L^-1 k one component at a time.  workspace stores one row of
+    // L^-1, which avoids allocating separate low and high interval arrays.
+    double q_low = 0.0;
+    double q_high = 0.0;
+    for (int row = 0; row < n; ++row) {
+        workspace[row] = 1.0 / L[row * n + row];
+        for (int column = row - 1; column >= 0; --column) {
+            double sum = 0.0;
+            for (int k = column + 1; k <= row; ++k) {
+                sum += L[k * n + column] * workspace[k];
+            }
+            workspace[column] = -sum / L[column * n + column];
+        }
+
+        double v_low = 0.0;
+        double v_high = 0.0;
+        for (int i = 0; i <= row; ++i) {
+            double min_distance_2 = 0.0;
+            double max_distance_2 = 0.0;
+            for (int dim = 0; dim < d; ++dim) {
+                const double distance_low = (low[dim] - x_train[i * d + dim]) / length_scale[dim];
+                const double distance_high = (x_train[i * d + dim] - high[dim]) / length_scale[dim];
+                const double min_distance = fmax(fmax(distance_low, distance_high), 0.0);
+                const double max_distance = fmax(fabs(distance_low), fabs(distance_high));
+                min_distance_2 += min_distance * min_distance;
+                max_distance_2 += max_distance * max_distance;
+            }
+
+            const double kernel_low = sigma_f_2 * exp(-0.5 * max_distance_2);
+            const double kernel_high = sigma_f_2 * exp(-0.5 * min_distance_2);
+            if (workspace[i] >= 0.0) {
+                v_low += workspace[i] * kernel_low;
+                v_high += workspace[i] * kernel_high;
+            } else {
+                v_low += workspace[i] * kernel_high;
+                v_high += workspace[i] * kernel_low;
+            }
+        }
+
+        const double square_1 = v_low * v_low;
+        const double square_2 = v_high * v_high;
+        q_high += fmax(square_1, square_2);
+        if (v_low <= 0.0 && v_high >= 0.0) {
+            q_low += 0.0;
+        } else {
+            q_low += fmin(square_1, square_2);
+        }
+    }
+
+    // Bound and unnormalize the posterior standard deviation.
+    const double variance_base = sigma_f_2 + sigma_n_2;
+    const double std_scale = fabs(y_train_std);
+    Interval standard_deviation = {
+        std_scale * sqrt(fmax(variance_base - q_high, 1.0e-12)),
+        std_scale * sqrt(fmax(variance_base - q_low, 1.0e-12)),
+    };
+
+    // Interval extension of EI = (y_min - mean) Phi(z) + sigma phi(z).
+    const Interval improvement = {y_min - mean_high, y_min - mean_low};
+    const Interval inverse_standard_deviation = {
+        standard_deviation.high != 0.0 ? 1.0 / standard_deviation.high : 1.0e12,
+        standard_deviation.low != 0.0 ? 1.0 / standard_deviation.low : 1.0e12,
+    };
+    const Interval z = multiply(improvement, inverse_standard_deviation);
+    const Interval cdf = {normal_cdf(z.low), normal_cdf(z.high)};
+
+    Interval pdf = {
+        fmin(normal_pdf(z.low), normal_pdf(z.high)),
+        fmax(normal_pdf(z.low), normal_pdf(z.high)),
+    };
+    if (z.low <= 0.0 && z.high >= 0.0) {
+        pdf.high = INV_SQRT_2_PI;
+    }
+
+    const Interval first_term = multiply(improvement, cdf);
+    const Interval second_term = multiply(standard_deviation, pdf);
+    *upper_ei = fmax(first_term.high + second_term.high, 0.0);
+    if (standard_deviation.high == 0.0) {
+        *upper_ei = 0.0;
+    }
+    */
 }
 
 __global__ void evaluate_boxes(Results* results, PartitionInput* input, double* workspace) {
