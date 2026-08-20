@@ -204,7 +204,10 @@ the complete partition trace and binary output across storage and batch modes.
 ## Author's notes/tools
 
 Bounding memory formula until now:
-$$ bytes = 8 × BOXES × (2d + 2 + n_{train}) $$
+$$ M = 8 * BOXES * (2d + 2) + M_{input} $$
+
+Bounding shared memory formula:
+$$ SM = 8 * TPB * (2n_{train} + 1) $$
 
 Check time and memory:
 

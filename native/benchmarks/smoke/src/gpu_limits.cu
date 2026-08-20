@@ -20,5 +20,10 @@ int main() {
               << p.maxGridSize[0] << " x "
               << p.maxGridSize[1] << " x "
               << p.maxGridSize[2] << '\n'
-              << "Max threads/SM: " << p.maxThreadsPerMultiProcessor << '\n';
+              << "Max threads/SM: " << p.maxThreadsPerMultiProcessor << '\n'
+              << "Max shared memory/SM: " << p.sharedMemPerMultiprocessor << " bytes\n"
+              << "Max shared memory/block: " << p.sharedMemPerBlock << " bytes\n"
+              << "Max registers/SM: " << p.regsPerMultiprocessor << '\n'
+              << "Max registers/block: " << p.regsPerBlock << '\n'
+              << "Max opt-in per block: " << p.sharedMemPerBlockOptin << " bytes\n";
 }

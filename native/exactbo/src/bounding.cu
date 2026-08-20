@@ -5,6 +5,7 @@ using std::erf;
 using std::fabs;
 using std::fmin;
 using std::fmax;
+using std::log;
 
 #include <cstdlib>
 using std::exit;
@@ -33,8 +34,10 @@ using std::runtime_error;
 
 constexpr char kInputMagic[8] = {'T', 'P', 'A', 'R', 'I', 'N', '1', '!'};
 
-constexpr size_t BOXES = 1000000000;
-constexpr int THREADS_PER_BLOCK = 256;
+constexpr int PROFILE_REPS = 0;
+constexpr double BOX_WIDTH_DICREASE_FACTOR = 1.0000003;
+constexpr size_t BOXES = 100000000;
+constexpr int THREADS_PER_BLOCK = 128;
 constexpr double SQRT_2 = 1.4142135623730951;
 constexpr double INV_SQRT_2_PI = 0.3989422804014327;
 
@@ -74,8 +77,8 @@ struct Interval {
 struct Results {
     double* low = nullptr;
     double* high = nullptr;
-    double* center_ei = nullptr;
-    double* upper_ei = nullptr;
+    double* center_logei = nullptr;
+    double* upper_logei = nullptr;
 };
 
 PartitionInput* read_input(const string& path) {
@@ -219,7 +222,7 @@ __device__ Interval multiply(Interval a, Interval b) {
     };
 }
 
-__device__ void ei_at_point(double* center_ei, const double* low, const double* high, const int d, const int n, const double* x_train, const double* length_scale, const double sigma_f_2, const double sigma_n_2, const double* alpha, const double y_train_mean, const double y_train_std, const double* L, const double y_min, double* workspace) {
+__device__ void logei_at_point(double* center_logei, const double* low, const double* high, const int d, const int n, const double* x_train, const double* length_scale, const double sigma_f_2, const double sigma_n_2, const double* alpha, const double y_train_mean, const double y_train_std, const double* L, const double y_min, double* workspace) {
     // Calculate the kernel values between the center of the box and each training point.
     for (int i = 0; i < n; ++i) {
         double squared_distance = 0.0;
@@ -253,16 +256,16 @@ __device__ void ei_at_point(double* center_ei, const double* low, const double* 
 
     // If the variance is negative due to numerical issues, set EI to zero.
     if (variance < 0.0) {
-        *center_ei = 0.0;
+        *center_logei = -INFINITY;
     } else {
         const double standard_deviation = sqrt(variance * y_train_std * y_train_std);
         const double improvement = y_min - mean;
         const double z = improvement / standard_deviation;
-        *center_ei = improvement * normal_cdf(z) + standard_deviation * normal_pdf(z);
+        *center_logei = log(improvement * normal_cdf(z) + standard_deviation * normal_pdf(z));
     }
 }
 
-__device__ void bound_box(double* upper_ei, const double* low, const double* high, const int d, const int n, const double* x_train, const double* length_scale, const double sigma_f_2, const double sigma_n_2, const double* alpha, const double y_train_mean, const double y_train_std, const double* L, const double y_min, double* workspace_low, double* workspace_high) {
+__device__ void bound_box(double* upper_logei, const double* low, const double* high, const int d, const int n, const double* x_train, const double* length_scale, const double sigma_f_2, const double sigma_n_2, const double* alpha, const double y_train_mean, const double y_train_std, const double* L, const double y_min, double* workspace_low, double* workspace_high) {
     // Bound the normalized mean over the box.
     double mean_low = 0.0;
     double mean_high = 0.0;
@@ -354,13 +357,15 @@ __device__ void bound_box(double* upper_ei, const double* low, const double* hig
 
     const Interval first_term = multiply(improvement, cdf);
     const Interval second_term = multiply(standard_deviation, pdf);
-    *upper_ei = fmax(first_term.high + second_term.high, 0.0);
+    *upper_logei = log(fmax(first_term.high + second_term.high, 0.0));
     if (standard_deviation.high == 0.0) {
-        *upper_ei = 0.0;
+        *upper_logei = -INFINITY;
     }
 }
 
-__global__ void evaluate_boxes(Results* results, PartitionInput* input, double* workspace_low, double* workspace_high) {
+__global__ void evaluate_boxes(Results* results, PartitionInput* input) {
+    extern __shared__ double shared_workspace[];
+
     const size_t box = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
     if (box >= BOXES) {
         return;
@@ -368,19 +373,20 @@ __global__ void evaluate_boxes(Results* results, PartitionInput* input, double* 
 
     const double* low = results->low + box * input->d;
     const double* high = results->high + box * input->d;
-    double* center_ei = results->center_ei + box;
-    double* upper_ei = results->upper_ei + box;
+    double* center_logei = results->center_logei + box;
+    double* upper_logei = results->upper_logei + box;
 
-    double* workspace_low_for_box = workspace_low + box * input->n_train;
-    double* workspace_high_for_box = workspace_high + box * input->n_train;
+    const size_t values_per_thread = 2 * static_cast<size_t>(input->n_train) + 1;
+    double* workspace_low_for_box = shared_workspace + threadIdx.x * values_per_thread;
+    double* workspace_high_for_box = workspace_low_for_box + input->n_train;
 
-    ei_at_point(center_ei, low, high, input->d, input->n_train, input->X_train, input->length_scale, input->sigma_f_2, input->sigma_n_2, input->alpha, input->y_train_mean, input->y_train_std, input->L, input->y_min, workspace_low_for_box);
-    bound_box(upper_ei, low, high, input->d, input->n_train, input->X_train, input->length_scale, input->sigma_f_2, input->sigma_n_2, input->alpha, input->y_train_mean, input->y_train_std, input->L, input->y_min, workspace_low_for_box, workspace_high_for_box);
+    logei_at_point(center_logei, low, high, input->d, input->n_train, input->X_train, input->length_scale, input->sigma_f_2, input->sigma_n_2, input->alpha, input->y_train_mean, input->y_train_std, input->L, input->y_min, workspace_low_for_box);
+    bound_box(upper_logei, low, high, input->d, input->n_train, input->X_train, input->length_scale, input->sigma_f_2, input->sigma_n_2, input->alpha, input->y_train_mean, input->y_train_std, input->L, input->y_min, workspace_low_for_box, workspace_high_for_box);
 }
 
 int main() {
     // Read input from binary file and allocate memory on device for the input data.
-    const string input_path = "data/logs/checkBounding/input.bin";
+    const string input_path = "data/logs/checkBounding/input5d.bin";
     PartitionInput* input = read_input(input_path);
 
     // Print the input data to the console for verification.
@@ -391,18 +397,55 @@ int main() {
     CUDA_CHECK(cudaMallocManaged(&results, sizeof(Results)));
     CUDA_CHECK(cudaMallocManaged(&results->low, BOXES * input->d * sizeof(double)));
     CUDA_CHECK(cudaMallocManaged(&results->high, BOXES * input->d * sizeof(double)));
-    CUDA_CHECK(cudaMallocManaged(&results->center_ei, BOXES * sizeof(double)));
-    CUDA_CHECK(cudaMallocManaged(&results->upper_ei, BOXES * sizeof(double)));
-
-    // Allocate memory on the device for workspace used in device computations.
-    double* workspace_low = nullptr;
-    double* workspace_high = nullptr;
-    CUDA_CHECK(cudaMallocManaged(&workspace_low, BOXES * input->n_train * sizeof(double)));
-    CUDA_CHECK(cudaMallocManaged(&workspace_high, BOXES * input->n_train * sizeof(double)));
+    CUDA_CHECK(cudaMallocManaged(&results->center_logei, BOXES * sizeof(double)));
+    CUDA_CHECK(cudaMallocManaged(&results->upper_logei, BOXES * sizeof(double)));
 
     // Define the center and half-width of the boxes to be evaluated.
-    const double center[input->d] = {0.5, 0.4};
-    double half_width[input->d] = {0.3, 0.3};
+    double center[input->d];
+    double half_width[input->d];
+
+    if (input->d == 2) {
+        center[0] = 0.5;
+        center[1] = 0.4;
+        half_width[0] = 0.3;
+        half_width[1] = 0.3;
+    } else if (input->d == 5) {
+        center[0] = 0.8;
+        center[1] = 0.6;
+        center[2] = 0.4;
+        center[3] = 0.2;
+        center[4] = 0.1;
+        half_width[0] = 0.2;
+        half_width[1] = 0.3;
+        half_width[2] = 0.5;
+        half_width[3] = 0.3;
+        half_width[4] = 0.1;
+    } else if (input->d == 10) {
+        center[0] = 0.9;
+        center[1] = 0.8;
+        center[2] = 0.7;
+        center[3] = 0.6;
+        center[4] = 0.5;
+        center[5] = 0.5;
+        center[6] = 0.4;
+        center[7] = 0.3;
+        center[8] = 0.2;
+        center[9] = 0.1;
+        half_width[0] = 0.1;
+        half_width[1] = 0.3;
+        half_width[2] = 0.4;
+        half_width[3] = 0.3;
+        half_width[4] = 0.6;
+        half_width[5] = 0.3;
+        half_width[6] = 0.3;
+        half_width[7] = 0.3;
+        half_width[8] = 0.2;
+        half_width[9] = 0.1;
+    } else {
+        cerr << "Unsupported dimension: " << input->d << "\n";
+        return 1;
+    }
+    
 
     // Create nested boxes with a common center.
     for (size_t box = 0; box < BOXES; ++box) {
@@ -410,28 +453,29 @@ int main() {
             const size_t index = box * input->d + dim;
             results->low[index] = center[dim] - half_width[dim];
             results->high[index] = center[dim] + half_width[dim];
-            half_width[dim] /= 1.0000001;
+            half_width[dim] /= BOX_WIDTH_DICREASE_FACTOR;
         }
     }
 
     // Calculate the number of blocks needed to evaluate all boxes with the specified number of threads per block.
     const unsigned int blocks = static_cast<unsigned int>((BOXES + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK);
+    const size_t shared_memory_bytes = THREADS_PER_BLOCK * (2 * static_cast<size_t>(input->n_train) + 1) * sizeof(double);
 
     // Warm up the GPU to avoid measuring kernel launch overhead.
-    evaluate_boxes<<<blocks, THREADS_PER_BLOCK>>>(results, input, workspace_low, workspace_high);
+    evaluate_boxes<<<blocks, THREADS_PER_BLOCK, shared_memory_bytes>>>(results, input);
     CUDA_CHECK(cudaGetLastError());
     CUDA_CHECK(cudaDeviceSynchronize());
 
     // Profile representative kernel launches.
-    for (int i = 0; i < 2; ++i) {
-        evaluate_boxes<<<blocks, THREADS_PER_BLOCK>>>(results, input, workspace_low, workspace_high);
+    for (int i = 0; i < PROFILE_REPS; ++i) {
+        evaluate_boxes<<<blocks, THREADS_PER_BLOCK, shared_memory_bytes>>>(results, input);
         CUDA_CHECK(cudaGetLastError());
         CUDA_CHECK(cudaDeviceSynchronize());
     }
 
     // Print the results of the box evaluations to the console for verification.
-    cout << fixed << setprecision(8);
-    cout << "box        low.x       high.x      low.y       high.y      EI(c)       EI_hi       gap\n";
+    cout << fixed << setprecision(12);
+    cout << "box            low.x_1         high.x_1        low.x_d         high.x_d        logEI(c)        logEI_hi        gap\n";
 
     bool passed = true;
     double first_gap = 0.0;
@@ -439,16 +483,16 @@ int main() {
     double previous_gap = INFINITY;
 
     for (size_t box = 0; box < BOXES; ++box) {
-        const double gap = results->upper_ei[box] - results->center_ei[box];
+        const double gap = results->upper_logei[box] - results->center_logei[box];
 
         if (box < 8) {
             cout << setw(9) << box << "  "
                  << setw(10) << results->low[box * input->d + 0] << "  "
                  << setw(10) << results->high[box * input->d + 0] << "  "
-                 << setw(10) << results->low[box * input->d + 1] << "  "
-                 << setw(10) << results->high[box * input->d + 1] << "  "
-                 << setw(10) << results->center_ei[box] << "  "
-                 << setw(10) << results->upper_ei[box] << "  "
+                 << setw(10) << results->low[box * input->d + (input->d - 1)] << "  "
+                 << setw(10) << results->high[box * input->d + (input->d - 1)] << "  "
+                 << setw(10) << results->center_logei[box] << "  "
+                 << setw(10) << results->upper_logei[box] << "  "
                  << setw(10) << gap << "\n";
         }
 
@@ -456,20 +500,20 @@ int main() {
             cout << setw(9) << box << "  "
                  << setw(10) << results->low[box * input->d + 0] << "  "
                  << setw(10) << results->high[box * input->d + 0] << "  "
-                 << setw(10) << results->low[box * input->d + 1] << "  "
-                 << setw(10) << results->high[box * input->d + 1] << "  "
-                 << setw(10) << results->center_ei[box] << "  "
-                 << setw(10) << results->upper_ei[box] << "  "
+                 << setw(10) << results->low[box * input->d + (input->d - 1)] << "  "
+                 << setw(10) << results->high[box * input->d + (input->d - 1)] << "  "
+                 << setw(10) << results->center_logei[box] << "  "
+                 << setw(10) << results->upper_logei[box] << "  "
                  << setw(10) << gap << "\n";
         }
 
         if (box == 0) {
             first_gap = gap;
         }
-        passed &= results->center_ei[box] <= results->upper_ei[box];
-        passed &= results->upper_ei[box] <= previous_upper;
+        passed &= results->center_logei[box] <= results->upper_logei[box];
+        passed &= results->upper_logei[box] <= previous_upper;
         passed &= gap <= previous_gap;
-        previous_upper = results->upper_ei[box];
+        previous_upper = results->upper_logei[box];
         previous_gap = gap;
     }
 
@@ -479,7 +523,7 @@ int main() {
          << " blocks of " << THREADS_PER_BLOCK << " threads.\n";
     cout << "Result: " << (passed ? "PASS" : "FAIL") << "\n";
 
-    // Free the allocated memory on the device for the input data, results, and workspace.
+    // Free the allocated memory on the device for the input data and results.
     CUDA_CHECK(cudaFree(input->epsilon_x));
     CUDA_CHECK(cudaFree(input->domain_L));
     CUDA_CHECK(cudaFree(input->domain_U));
@@ -490,11 +534,9 @@ int main() {
     CUDA_CHECK(cudaFree(input));
     CUDA_CHECK(cudaFree(results->low));
     CUDA_CHECK(cudaFree(results->high));
-    CUDA_CHECK(cudaFree(results->center_ei));
-    CUDA_CHECK(cudaFree(results->upper_ei));
+    CUDA_CHECK(cudaFree(results->center_logei));
+    CUDA_CHECK(cudaFree(results->upper_logei));
     CUDA_CHECK(cudaFree(results));
-    CUDA_CHECK(cudaFree(workspace_low));
-    CUDA_CHECK(cudaFree(workspace_high));
 
     // Return 0 if the test passed, or 1 if it failed.
     return passed ? 0 : 1;
