@@ -201,7 +201,10 @@ The comparison must be byte-identical. Repeat the file-backed command with
 When isolating a discrepancy, run one BO iteration with `--verbose` and compare
 the complete partition trace and binary output across storage and batch modes.
 
-## Author's tools
+## Author's notes/tools
+
+Bounding memory formula until now:
+$$ bytes = 8 × BOXES × (2d + 2 + n_{train}) $$
 
 Check time and memory:
 

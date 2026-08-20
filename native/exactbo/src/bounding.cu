@@ -8,6 +8,7 @@ using std::fmax;
 
 #include <cstdlib>
 using std::exit;
+using std::size_t;
 
 #include <iomanip>
 using std::fixed;
@@ -32,7 +33,7 @@ using std::runtime_error;
 
 constexpr char kInputMagic[8] = {'T', 'P', 'A', 'R', 'I', 'N', '1', '!'};
 
-constexpr int BOXES = 100000000;
+constexpr size_t BOXES = 100000000;
 constexpr int THREADS_PER_BLOCK = 256;
 constexpr double SQRT_2 = 1.4142135623730951;
 constexpr double INV_SQRT_2_PI = 0.3989422804014327;
@@ -374,7 +375,7 @@ __device__ void bound_box(double* upper_ei, const double* low, const double* hig
 }
 
 __global__ void evaluate_boxes(Results* results, PartitionInput* input, double* workspace) {
-    const int box = blockIdx.x * blockDim.x + threadIdx.x;
+    const size_t box = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
     if (box >= BOXES) {
         return;
     }
@@ -415,9 +416,9 @@ int main() {
     double half_width[input->d] = {0.3, 0.3};
 
     // Create nested boxes with a common center.
-    for (int box = 0; box < BOXES; ++box) {
+    for (size_t box = 0; box < BOXES; ++box) {
         for (int dim = 0; dim < input->d; ++dim) {
-            const int index = box * input->d + dim;
+            const size_t index = box * input->d + dim;
             results->low[index] = center[dim] - half_width[dim];
             results->high[index] = center[dim] + half_width[dim];
             half_width[dim] /= 1.0000001;
@@ -425,7 +426,7 @@ int main() {
     }
 
     // Calculate the number of blocks needed to evaluate all boxes with the specified number of threads per block.
-    const int blocks = (BOXES + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK;
+    const unsigned int blocks = static_cast<unsigned int>((BOXES + THREADS_PER_BLOCK - 1) / THREADS_PER_BLOCK);
 
     // Warm up the GPU to avoid measuring kernel launch overhead.
     evaluate_boxes<<<blocks, THREADS_PER_BLOCK>>>(results, input, workspace);
@@ -433,7 +434,7 @@ int main() {
     CUDA_CHECK(cudaDeviceSynchronize());
 
     // Profile representative kernel launches.
-    for (int i = 0; i < 10; ++i) {
+    for (int i = 0; i < 2; ++i) {
         evaluate_boxes<<<blocks, THREADS_PER_BLOCK>>>(results, input, workspace);
         CUDA_CHECK(cudaGetLastError());
         CUDA_CHECK(cudaDeviceSynchronize());
@@ -448,7 +449,7 @@ int main() {
     double previous_upper = INFINITY;
     double previous_gap = INFINITY;
 
-    for (int box = 0; box < BOXES; ++box) {
+    for (size_t box = 0; box < BOXES; ++box) {
         const double gap = results->upper_ei[box] - results->center_ei[box];
 
         if (box < 8) {
