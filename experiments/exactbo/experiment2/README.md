@@ -45,6 +45,24 @@ python3 experiments/exactbo/experiment2/run_seed_sweep.py \
   --rest-seconds 2
 ```
 
+## Plot results
+
+Paper mode remains the default and writes to `figures/`:
+
+```bash
+python3 experiments/exactbo/experiment2/plot_results.py --mode paper
+```
+
+Presentation mode uses the slide typography and the paper figure color cycle, creates
+transparent 2.4-by-1.75-inch PDFs, and writes them separately to
+`figures/presentation/`:
+
+```bash
+python3 experiments/exactbo/experiment2/plot_results.py --mode presentation
+```
+
+Use `--output-dir` to override either mode's default destination.
+
 ## Notes
 
 - BoTorch workflows require `torch`, `botorch`, and `gpytorch`.
