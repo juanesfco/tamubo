@@ -51,9 +51,10 @@ The loop in `partitioning.cu` mirrors `exactbo_partitioning()` in `run.py`:
    computes a conservative EI upper bound per box.
 2. Boxes within `epsilon_ei` of the global maximum are analyzed. Children of
    the previously best box are forcibly preserved in this set.
-3. `sample_best_streamed()` evaluates a deterministic centered Latin
-   hypercube with `2^d` points in every selected box. Batch results are reduced
-   immediately instead of retaining every sampled point.
+3. `sample_best_streamed()` evaluates EI at the center point of every selected
+   box (`n_samples = 1`, so `centered_latin_hypercube_unit(1, d)` degenerates
+   to the all-0.5 center). Batch results are reduced immediately instead of
+   retaining every sampled point.
 4. Boxes whose EI upper bound can still beat the sampled EI become active.
 5. The active boxes are sampled again. Boxes that can beat that result become
    targets; the sampled-best box is always included.

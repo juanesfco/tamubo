@@ -11,6 +11,12 @@ using std::log;
 using std::exit;
 using std::size_t;
 
+#include <cstdint>
+using std::uint64_t;
+
+#include <limits>
+using std::numeric_limits;
+
 #include <iomanip>
 using std::fixed;
 using std::setprecision;
@@ -96,21 +102,37 @@ PartitionInput* read_input(const string& path) {
 
     PartitionInput* input = nullptr;
     CUDA_CHECK(cudaMallocManaged(&input, sizeof(PartitionInput)));
+    // The Python writer stores n_train/d/max_partitions as 8-byte uint64_t,
+    // not native int (see write_partition_input() in exactbo_workflow.py and
+    // read_input() in partitioning.cu). Read them at that width before
+    // narrowing, or every field after n_train silently misaligns.
+    uint64_t n_train_on_disk = 0;
+    uint64_t dimensions_on_disk = 0;
+    uint64_t max_partitions_on_disk = 0;
     // Binary streams read bytes through char pointers.  These casts are required
     // by the C++ stream API; they do not change the stored values.
-    in.read(reinterpret_cast<char*>(&input->n_train), sizeof(input->n_train));
-    in.read(reinterpret_cast<char*>(&input->d), sizeof(input->d));
-    in.read(reinterpret_cast<char*>(&input->max_partitions), sizeof(input->max_partitions));
+    in.read(reinterpret_cast<char*>(&n_train_on_disk), sizeof(n_train_on_disk));
+    in.read(reinterpret_cast<char*>(&dimensions_on_disk), sizeof(dimensions_on_disk));
+    in.read(reinterpret_cast<char*>(&max_partitions_on_disk), sizeof(max_partitions_on_disk));
     in.read(reinterpret_cast<char*>(&input->epsilon_ei), sizeof(input->epsilon_ei));
     in.read(reinterpret_cast<char*>(&input->sigma_f_2), sizeof(input->sigma_f_2));
     in.read(reinterpret_cast<char*>(&input->sigma_n_2), sizeof(input->sigma_n_2));
     in.read(reinterpret_cast<char*>(&input->y_train_mean), sizeof(input->y_train_mean));
     in.read(reinterpret_cast<char*>(&input->y_train_std), sizeof(input->y_train_std));
     in.read(reinterpret_cast<char*>(&input->y_min), sizeof(input->y_min));
-    
+
     if (!in) {
         throw runtime_error("input file ended while reading GP settings");
     }
+    if (n_train_on_disk > static_cast<uint64_t>(numeric_limits<int>::max()) ||
+        dimensions_on_disk > static_cast<uint64_t>(numeric_limits<int>::max()) ||
+        max_partitions_on_disk > static_cast<uint64_t>(numeric_limits<int>::max())) {
+        throw runtime_error("training size, dimensions, or partitions exceed int range");
+    }
+    // These casts deliberately narrow validated on-disk 64-bit values.
+    input->n_train = static_cast<int>(n_train_on_disk);
+    input->d = static_cast<int>(dimensions_on_disk);
+    input->max_partitions = static_cast<int>(max_partitions_on_disk);
 
     CUDA_CHECK(cudaMallocManaged(&input->epsilon_x, input->d * sizeof(double)));
     CUDA_CHECK(cudaMallocManaged(&input->domain_L, input->d * sizeof(double)));

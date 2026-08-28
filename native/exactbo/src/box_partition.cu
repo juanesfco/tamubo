@@ -269,8 +269,8 @@ int main() {
         volume_is_preserved;
 
     cout << "Result: " << (passed ? "PASS" : "FAIL") << "\n";
-    cout << "Reminder: the children cover the old box, but a new LHS design "
-            "does not necessarily contain the previous best sample point.\n";
+    cout << "Reminder: the children cover the old box, but a child's center "
+            "does not necessarily equal the previous best sample point.\n";
 
     check_cuda(cudaFree(demo), "freeing the teaching example");
     return passed ? 0 : 1;

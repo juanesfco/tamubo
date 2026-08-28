@@ -945,7 +945,9 @@ BestSample sample_best_streamed(
     cudaDeviceProp prop{};
     CUDA_CHECK(cudaGetDeviceProperties(&prop, device));
 
-    const uint64_t n_samples = 1ULL << input.d;
+    // Sample only the box center instead of a 2^d local Latin hypercube design.
+    // centered_latin_hypercube_unit(1, d) degenerates to the all-0.5 center point.
+    const uint64_t n_samples = 1;
     const uint64_t start = local_start_for_rank(boxes.rows(), rank, size);
     const uint64_t local_n = local_count_for_rank(boxes.rows(), rank, size);
     if (local_mask.size() != local_n) {
@@ -1538,7 +1540,9 @@ int main(int argc, char** argv) {
 
         unique_ptr<BoxStore> boxes = make_unique<HostBoxStore>(
             1, input.d, input.domain_L, input.domain_U);
-        const uint64_t n_samples = 1ULL << input.d;
+        // Sample only the box center instead of a 2^d local Latin hypercube design.
+        // centered_latin_hypercube_unit(1, d) degenerates to the all-0.5 center point.
+        const uint64_t n_samples = 1;
         const int stride = 2 * input.d + 1;
         const vector<double> lhs =
             centered_latin_hypercube_unit(n_samples, input.d);

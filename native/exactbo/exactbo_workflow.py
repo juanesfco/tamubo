@@ -570,7 +570,11 @@ def main():
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args()
 
-    log_path = Path(args.log_file).expanduser().resolve() if args.log_file else None
+    log_path = (
+        Path(args.log_file).expanduser().resolve()
+        if args.log_file
+        else Path(args.workdir).expanduser().resolve() / "exactbo_run.log"
+    )
 
     with ExitStack() as log_context:
         if log_path is not None:
