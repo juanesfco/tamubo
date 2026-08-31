@@ -1,0 +1,45 @@
+matrix_products_mpi: mpi_size=1 device_count=1 execution=sequential AB then BA
+rank 0 starting AB on pid=1035753 launch_cpu=0 gpu_device=0 gpu_name="NVIDIA H200" matrix=8192x8192 bytes_per_matrix=0.500 GiB repeats=5 cycles=3
+rank 0 memory [AB cycle 1/3 before cudaMalloc] used=0.514 GiB free=139.286 GiB total=139.801 GiB
+rank 0 memory [AB cycle 1/3 after cudaMalloc left/right/result] used=2.014 GiB free=137.786 GiB total=139.801 GiB
+rank 0 memory [AB cycle 1/3 after host-to-device copies] used=2.014 GiB free=137.786 GiB total=139.801 GiB
+rank 0 memory [AB cycle 1/3 after kernel] used=2.014 GiB free=137.786 GiB total=139.801 GiB
+rank 0 memory [AB cycle 1/3 after cudaFree] used=0.514 GiB free=139.286 GiB total=139.801 GiB
+rank 0 finished AB cycle 1/3 seconds=1.17932 approx_gflop_s=4661.63
+rank 0 memory [AB cycle 2/3 before cudaMalloc] used=0.514 GiB free=139.286 GiB total=139.801 GiB
+rank 0 memory [AB cycle 2/3 after cudaMalloc left/right/result] used=2.014 GiB free=137.786 GiB total=139.801 GiB
+rank 0 memory [AB cycle 2/3 after host-to-device copies] used=2.014 GiB free=137.786 GiB total=139.801 GiB
+rank 0 memory [AB cycle 2/3 after kernel] used=2.014 GiB free=137.786 GiB total=139.801 GiB
+rank 0 memory [AB cycle 2/3 after cudaFree] used=0.514 GiB free=139.286 GiB total=139.801 GiB
+rank 0 finished AB cycle 2/3 seconds=1.17917 approx_gflop_s=4662.23
+rank 0 memory [AB cycle 3/3 before cudaMalloc] used=0.514 GiB free=139.286 GiB total=139.801 GiB
+rank 0 memory [AB cycle 3/3 after cudaMalloc left/right/result] used=2.014 GiB free=137.786 GiB total=139.801 GiB
+rank 0 memory [AB cycle 3/3 after host-to-device copies] used=2.014 GiB free=137.786 GiB total=139.801 GiB
+rank 0 memory [AB cycle 3/3 after kernel] used=2.014 GiB free=137.786 GiB total=139.801 GiB
+rank 0 memory [AB cycle 3/3 after device-to-host copy] used=2.014 GiB free=137.786 GiB total=139.801 GiB
+rank 0 memory [AB cycle 3/3 after cudaFree] used=0.514 GiB free=139.286 GiB total=139.801 GiB
+rank 0 finished AB cycle 3/3 seconds=1.17941 approx_gflop_s=4661.28
+rank 0 finished all AB cycles total_kernel_seconds=3.5379 aggregate_approx_gflop_s=4661.71
+rank 0 wrote AB to /scratch/user/juan.florez_tamu.edu/tamubo/native/benchmarks/matrix/data/vision-h200/job-480670-n8192-r1/AB_tiled.bin
+rank 0 starting BA on pid=1035753 launch_cpu=0 gpu_device=0 gpu_name="NVIDIA H200" matrix=8192x8192 bytes_per_matrix=0.500 GiB repeats=5 cycles=3
+rank 0 memory [BA cycle 1/3 before cudaMalloc] used=0.514 GiB free=139.286 GiB total=139.801 GiB
+rank 0 memory [BA cycle 1/3 after cudaMalloc left/right/result] used=2.014 GiB free=137.786 GiB total=139.801 GiB
+rank 0 memory [BA cycle 1/3 after host-to-device copies] used=2.014 GiB free=137.786 GiB total=139.801 GiB
+rank 0 memory [BA cycle 1/3 after kernel] used=2.014 GiB free=137.786 GiB total=139.801 GiB
+rank 0 memory [BA cycle 1/3 after cudaFree] used=0.514 GiB free=139.286 GiB total=139.801 GiB
+rank 0 finished BA cycle 1/3 seconds=1.17945 approx_gflop_s=4661.12
+rank 0 memory [BA cycle 2/3 before cudaMalloc] used=0.514 GiB free=139.286 GiB total=139.801 GiB
+rank 0 memory [BA cycle 2/3 after cudaMalloc left/right/result] used=2.014 GiB free=137.786 GiB total=139.801 GiB
+rank 0 memory [BA cycle 2/3 after host-to-device copies] used=2.014 GiB free=137.786 GiB total=139.801 GiB
+rank 0 memory [BA cycle 2/3 after kernel] used=2.014 GiB free=137.786 GiB total=139.801 GiB
+rank 0 memory [BA cycle 2/3 after cudaFree] used=0.514 GiB free=139.286 GiB total=139.801 GiB
+rank 0 finished BA cycle 2/3 seconds=1.17934 approx_gflop_s=4661.56
+rank 0 memory [BA cycle 3/3 before cudaMalloc] used=0.514 GiB free=139.286 GiB total=139.801 GiB
+rank 0 memory [BA cycle 3/3 after cudaMalloc left/right/result] used=2.014 GiB free=137.786 GiB total=139.801 GiB
+rank 0 memory [BA cycle 3/3 after host-to-device copies] used=2.014 GiB free=137.786 GiB total=139.801 GiB
+rank 0 memory [BA cycle 3/3 after kernel] used=2.014 GiB free=137.786 GiB total=139.801 GiB
+rank 0 memory [BA cycle 3/3 after device-to-host copy] used=2.014 GiB free=137.786 GiB total=139.801 GiB
+rank 0 memory [BA cycle 3/3 after cudaFree] used=0.514 GiB free=139.286 GiB total=139.801 GiB
+rank 0 finished BA cycle 3/3 seconds=1.17952 approx_gflop_s=4660.86
+rank 0 finished all BA cycles total_kernel_seconds=3.5383 aggregate_approx_gflop_s=4661.18
+rank 0 wrote BA to /scratch/user/juan.florez_tamu.edu/tamubo/native/benchmarks/matrix/data/vision-h200/job-480670-n8192-r1/BA_tiled.bin

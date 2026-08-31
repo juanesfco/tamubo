@@ -1,0 +1,37 @@
+-- Configuring done (2.0s)
+-- Generating done (0.1s)
+-- Build files have been written to: /scratch/user/juan.florez_tamu.edu/tamubo/native/benchmarks/smoke/executables/build-vision-h200
+[ 20%] Built target mpi_smoke
+[ 60%] Linking CUDA executable /scratch/user/juan.florez_tamu.edu/tamubo/native/benchmarks/smoke/executables/cuda_mpi_smoke
+[ 60%] Linking CUDA executable /scratch/user/juan.florez_tamu.edu/tamubo/native/benchmarks/smoke/executables/gpu_limits
+[ 60%] Linking CUDA executable /scratch/user/juan.florez_tamu.edu/tamubo/native/benchmarks/smoke/executables/cuda_smoke
+[ 60%] Linking CUDA executable /scratch/user/juan.florez_tamu.edu/tamubo/native/benchmarks/smoke/executables/unified_memory_query
+[100%] Built target cuda_smoke
+[100%] Built target gpu_limits
+[100%] Built target unified_memory_query
+Built target cuda_mpi_smoke
+cuda_smoke: 2.0 3.0 4.0 5.0
+GPU: NVIDIA H200
+Compute capability: 9.0
+SMs: 132
+Max threads/block: 1024
+Max block dimensions: 1024 x 1024 x 64
+Max grid dimensions (blocks): 2147483647 x 65535 x 65535
+Max threads/SM: 2048
+Max shared memory/SM: 233472 bytes
+Max shared memory/block: 49152 bytes
+Max registers/SM: 65536
+Max registers/block: 65536
+Max opt-in per block: 232448 bytes
+unified_memory_query: device_count=1
+device 0: NVIDIA H200
+  compute capability=9.0
+  totalGlobalMem=150109880320 bytes
+  cudaDevAttrConcurrentManagedAccess=1
+  cudaDevAttrPageableMemoryAccess=1
+  cudaDevAttrPageableMemoryAccessUsesHostPageTables=0
+  cudaDevAttrDirectManagedMemAccessFromHost=0
+  cudaDevAttrHostNativeAtomicSupported=0
+  mode: full system-memory access with software coherency/HMM
+mpi_smoke: rank 0 of 1 on dgx002 pid=2185713 cpu=112
+cuda_mpi_smoke: rank 0/1 host=dgx002 pid=2185752 launch_cpu=112 gpu_device=0/1 gpu_name="NVIDIA H200" gpu_pci=0000:df:00 value=0.0

@@ -1,0 +1,223 @@
+start_time=2026-08-31T17:50:56+00:00
+slurm_job_id=480670
+slurm_job_name=tamubo-matrix-h200
+hostname=dgx064
+project_dir=/scratch/user/juan.florez_tamu.edu/tamubo
+results_root=/scratch/user/juan.florez_tamu.edu/tamubo/native/benchmarks/matrix/data
+data_dir=/scratch/user/juan.florez_tamu.edu/tamubo/native/benchmarks/matrix/data/vision-h200/job-480670-n8192-r1
+
+platform=vision-h200
+matrix_n=8192
+mpi_ranks=1
+repeats=5
+cycles=3
+hold_ms=0
+atol=1e-8
+rtol=1e-8
+cuda_architectures=90
+cmake_generator=Unix Makefiles
+cpu_threads=14
+
+git_commit=c1b8ea6fef716211b3cbe991d8ea73f05b290762
+git_branch=memory
+
+git_status:
+?? native/benchmarks/matrix/data/vision-h200/
+?? native/benchmarks/matrix/slurm/
+?? native/benchmarks/matrix/vision_matrix_benchmark.slurm
+
+loaded_modules:
+
+Currently Loaded Modules:
+  1) GCCcore/14.3.0       11) OpenSSL/3        21) libidn2/2.3.8
+  2) zlib/1.3.1           12) libevent/2.1.12  22) libiconv/1.18
+  3) binutils/2.44        13) UCX/1.19.0       23) libunistring/1.3
+  4) GCC/14.3.0           14) libfabric/2.1.0  24) libpsl/0.21.5
+  5) CUDA/12.9.1          15) PMIx/5.0.8       25) cURL/8.14.1
+  6) numactl/2.0.19       16) PRRTE/3.0.11     26) lz4/1.10.0
+  7) XZ/5.8.1             17) UCC/1.4.4        27) gzip/1.14
+  8) libxml2/2.14.3       18) OpenMPI/5.0.8    28) zstd/1.5.7
+  9) libpciaccess/0.18.1  19) ncurses/6.5      29) libarchive/3.8.1
+ 10) hwloc/2.12.1         20) bzip2/1.0.8      30) CMake/3.31.8
+
+ 
+
+
+operating_system:
+Linux dgx064 6.8.0-90-generic #91-Ubuntu SMP PREEMPT_DYNAMIC Tue Nov 18 14:14:30 UTC 2025 x86_64 x86_64 x86_64 GNU/Linux
+
+cpu_information:
+Architecture:                         x86_64
+CPU op-mode(s):                       32-bit, 64-bit
+Address sizes:                        52 bits physical, 57 bits virtual
+Byte Order:                           Little Endian
+CPU(s):                               224
+On-line CPU(s) list:                  0-223
+Vendor ID:                            GenuineIntel
+Model name:                           Intel(R) Xeon(R) Platinum 8480C
+CPU family:                           6
+Model:                                143
+Thread(s) per core:                   2
+Core(s) per socket:                   56
+Socket(s):                            2
+Stepping:                             8
+CPU(s) scaling MHz:                   53%
+CPU max MHz:                          3800.0000
+CPU min MHz:                          800.0000
+BogoMIPS:                             4000.00
+Flags:                                fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush dts acpi mmx fxsr sse sse2 ss ht tm pbe syscall nx pdpe1gb rdtscp lm constant_tsc art arch_perfmon pebs bts rep_good nopl xtopology nonstop_tsc cpuid aperfmperf tsc_known_freq pni pclmulqdq dtes64 monitor ds_cpl vmx smx est tm2 ssse3 sdbg fma cx16 xtpr pdcm pcid dca sse4_1 sse4_2 x2apic movbe popcnt tsc_deadline_timer aes xsave avx f16c rdrand lahf_lm abm 3dnowprefetch cpuid_fault epb cat_l3 cat_l2 cdp_l3 intel_ppin cdp_l2 ssbd mba ibrs ibpb stibp ibrs_enhanced tpr_shadow flexpriority ept vpid ept_ad fsgsbase tsc_adjust bmi1 avx2 smep bmi2 erms invpcid cqm rdt_a avx512f avx512dq rdseed adx smap avx512ifma clflushopt clwb intel_pt avx512cd sha_ni avx512bw avx512vl xsaveopt xsavec xgetbv1 xsaves cqm_llc cqm_occup_llc cqm_mbm_total cqm_mbm_local split_lock_detect user_shstk avx_vnni avx512_bf16 wbnoinvd dtherm ida arat pln pts hwp hwp_act_window hwp_epp hwp_pkg_req vnmi avx512vbmi umip pku ospke waitpkg avx512_vbmi2 gfni vaes vpclmulqdq avx512_vnni avx512_bitalg tme avx512_vpopcntdq la57 rdpid bus_lock_detect cldemote movdiri movdir64b enqcmd fsrm md_clear serialize tsxldtrk pconfig arch_lbr ibt amx_bf16 avx512_fp16 amx_tile amx_int8 flush_l1d arch_capabilities ibpb_exit_to_user
+Virtualization:                       VT-x
+L1d cache:                            5.3 MiB (112 instances)
+L1i cache:                            3.5 MiB (112 instances)
+L2 cache:                             224 MiB (112 instances)
+L3 cache:                             210 MiB (2 instances)
+NUMA node(s):                         2
+NUMA node0 CPU(s):                    0-55,112-167
+NUMA node1 CPU(s):                    56-111,168-223
+Vulnerability Gather data sampling:   Not affected
+Vulnerability Itlb multihit:          Not affected
+Vulnerability L1tf:                   Not affected
+Vulnerability Mds:                    Not affected
+Vulnerability Meltdown:               Not affected
+Vulnerability Mmio stale data:        Not affected
+Vulnerability Reg file data sampling: Not affected
+Vulnerability Retbleed:               Not affected
+Vulnerability Spec rstack overflow:   Not affected
+Vulnerability Spec store bypass:      Mitigation; Speculative Store Bypass disabled via prctl
+Vulnerability Spectre v1:             Mitigation; usercopy/swapgs barriers and __user pointer sanitization
+Vulnerability Spectre v2:             Mitigation; Enhanced / Automatic IBRS; IBPB conditional; RSB filling; PBRSB-eIBRS SW sequence; BHI BHI_DIS_S
+Vulnerability Srbds:                  Not affected
+Vulnerability Tsx async abort:        Not affected
+Vulnerability Vmscape:                Mitigation; IBPB before exit to userspace
+
+memory_information:
+               total        used        free      shared  buff/cache   available
+Mem:           2.0Ti        80Gi       1.7Ti       220Mi       190Gi       1.9Ti
+Swap:             0B          0B          0B
+
+gpu_inventory:
+GPU 0: NVIDIA H200 (UUID: GPU-86d5a8a3-4ac6-197c-a9c0-921d049fe597)
+
+gpu_properties:
+name, uuid, driver_version, pstate, memory.total [MiB], power.limit [W]
+NVIDIA H200, GPU-86d5a8a3-4ac6-197c-a9c0-921d049fe597, 580.126.16, P0, 143771 MiB, 700.00 W
+
+gpu_topology:
+	[4mGPU0	NIC0	NIC1	NIC2	NIC3	NIC4	NIC5	NIC6	NIC7	NIC8	NIC9	NIC10	NIC11	CPU Affinity	NUMA Affinity	GPU NUMA ID[0m
+GPU0	 X 	SYS	SYS	SYS	SYS	SYS	SYS	NODE	NODE	NODE	PXB	NODE	NODE	56-111,168-223	1		N/A
+NIC0	SYS	 X 	NODE	NODE	NODE	NODE	NODE	SYS	SYS	SYS	SYS	SYS	SYS				
+NIC1	SYS	NODE	 X 	PIX	NODE	NODE	NODE	SYS	SYS	SYS	SYS	SYS	SYS				
+NIC2	SYS	NODE	PIX	 X 	NODE	NODE	NODE	SYS	SYS	SYS	SYS	SYS	SYS				
+NIC3	SYS	NODE	NODE	NODE	 X 	NODE	NODE	SYS	SYS	SYS	SYS	SYS	SYS				
+NIC4	SYS	NODE	NODE	NODE	NODE	 X 	NODE	SYS	SYS	SYS	SYS	SYS	SYS				
+NIC5	SYS	NODE	NODE	NODE	NODE	NODE	 X 	SYS	SYS	SYS	SYS	SYS	SYS				
+NIC6	NODE	SYS	SYS	SYS	SYS	SYS	SYS	 X 	NODE	NODE	NODE	NODE	NODE				
+NIC7	NODE	SYS	SYS	SYS	SYS	SYS	SYS	NODE	 X 	PIX	NODE	NODE	NODE				
+NIC8	NODE	SYS	SYS	SYS	SYS	SYS	SYS	NODE	PIX	 X 	NODE	NODE	NODE				
+NIC9	PXB	SYS	SYS	SYS	SYS	SYS	SYS	NODE	NODE	NODE	 X 	NODE	NODE				
+NIC10	NODE	SYS	SYS	SYS	SYS	SYS	SYS	NODE	NODE	NODE	NODE	 X 	NODE				
+NIC11	NODE	SYS	SYS	SYS	SYS	SYS	SYS	NODE	NODE	NODE	NODE	NODE	 X 				
+
+Legend:
+
+  X    = Self
+  SYS  = Connection traversing PCIe as well as the SMP interconnect between NUMA nodes (e.g., QPI/UPI)
+  NODE = Connection traversing PCIe as well as the interconnect between PCIe Host Bridges within a NUMA node
+  PHB  = Connection traversing PCIe as well as a PCIe Host Bridge (typically the CPU)
+  PXB  = Connection traversing multiple PCIe bridges (without traversing the PCIe Host Bridge)
+  PIX  = Connection traversing at most a single PCIe bridge
+  NV#  = Connection traversing a bonded set of # NVLinks
+
+NIC Legend:
+
+  NIC0: mlx5_0
+  NIC1: mlx5_1
+  NIC2: mlx5_2
+  NIC3: mlx5_3
+  NIC4: mlx5_4
+  NIC5: mlx5_5
+  NIC6: mlx5_6
+  NIC7: mlx5_7
+  NIC8: mlx5_8
+  NIC9: mlx5_9
+  NIC10: mlx5_10
+  NIC11: mlx5_11
+
+
+gcc:
+/sw/eb/sw/GCCcore/14.3.0/bin/gcc
+gcc (GCC) 14.3.0
+Copyright (C) 2024 Free Software Foundation, Inc.
+This is free software; see the source for copying conditions.  There is NO
+warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+
+
+g++:
+/sw/eb/sw/GCCcore/14.3.0/bin/g++
+g++ (GCC) 14.3.0
+Copyright (C) 2024 Free Software Foundation, Inc.
+This is free software; see the source for copying conditions.  There is NO
+warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+
+
+nvcc:
+/sw/eb/sw/CUDA/12.9.1/bin/nvcc
+nvcc: NVIDIA (R) Cuda compiler driver
+Copyright (c) 2005-2025 NVIDIA Corporation
+Built on Tue_May_27_02:21:03_PDT_2025
+Cuda compilation tools, release 12.9, V12.9.86
+Build cuda_12.9.r12.9/compiler.36037853_0
+
+mpicxx:
+/sw/eb/sw/OpenMPI/5.0.8-GCC-14.3.0/bin/mpicxx
+g++ (GCC) 14.3.0
+Copyright (C) 2024 Free Software Foundation, Inc.
+This is free software; see the source for copying conditions.  There is NO
+warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+
+g++
+
+mpirun:
+/sw/eb/sw/OpenMPI/5.0.8-GCC-14.3.0/bin/mpirun
+mpirun (Open MPI) 5.0.8
+
+Report bugs to https://www.open-mpi.org/community/help/
+
+
+cmake:
+/sw/eb/sw/CMake/3.31.8-GCCcore-14.3.0/bin/cmake
+cmake version 3.31.8
+
+CMake suite maintained and supported by Kitware (kitware.com/cmake).
+
+slurm_allocation:
+JobId=480670 JobName=tamubo-matrix-h200
+   UserId=juan.florez_tamu.edu(1881273525) GroupId=juan.florez_tamu.edu(1881273525) MCS_label=N/A
+   Priority=9130 Nice=0 Account=prj-02-pi-raymundo-arroyave QOS=standard
+   JobState=RUNNING Reason=None Dependency=(null)
+   Requeue=1 Restarts=0 BatchFlag=1 Reboot=0 ExitCode=0:0
+   RunTime=00:00:03 TimeLimit=01:00:00 TimeMin=N/A
+   SubmitTime=2026-08-31T12:49:52 EligibleTime=2026-08-31T12:49:52
+   AccrueTime=2026-08-31T12:49:52
+   StartTime=2026-08-31T12:50:55 EndTime=2026-08-31T13:50:55 Deadline=N/A
+   SuspendTime=None SecsPreSuspend=0 LastSchedEval=2026-08-31T12:50:55 Scheduler=Backfill
+   Partition=def AllocNode:Sid=slogin-01:1450247
+   ReqNodeList=(null) ExcNodeList=(null)
+   NodeList=dgx064
+   BatchHost=dgx064
+   NumNodes=1 NumCPUs=14 NumTasks=1 CPUs/Task=14 ReqB:S:C:T=0:0:*:*
+   ReqTRES=cpu=14,mem=64G,node=1,billing=14,gres/gpu=1
+   AllocTRES=cpu=14,mem=64G,node=1,billing=14,gres/gpu=1
+   Socks/Node=* NtasksPerN:B:S:C=0:0:*:* CoreSpec=*
+   MinCPUsNode=14 MinMemoryNode=64G MinTmpDiskNode=0
+   Features=(null) DelayBoot=00:00:00
+   OverSubscribe=OK Contiguous=0 Licenses=(null) LicensesAlloc=(null) Network=(null)
+   Command=/scratch/user/juan.florez_tamu.edu/tamubo/native/benchmarks/matrix/vision_matrix_benchmark.slurm
+   WorkDir=/scratch/user/juan.florez_tamu.edu/tamubo/native/benchmarks/matrix
+   StdErr=/scratch/user/juan.florez_tamu.edu/tamubo/native/benchmarks/matrix/slurm/vision-slurm-tamubo-matrix-h200-480670.out
+   StdIn=/dev/null
+   StdOut=/scratch/user/juan.florez_tamu.edu/tamubo/native/benchmarks/matrix/slurm/vision-slurm-tamubo-matrix-h200-480670.out
+   TresPerNode=gres/gpu:1
+   TresPerTask=cpu=14
+   
+

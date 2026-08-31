@@ -1,0 +1,57 @@
+matrix_products_cublas_mpi: mpi_size=1 device_count=1 execution=sequential AB then BA
+rank 0 starting cuBLAS AB on pid=443823 launch_cpu=0 gpu_device=0 gpu_name="NVIDIA H200" matrix=8192x8192 bytes_per_matrix=0.500 GiB repeats=5 cycles=3
+rank 0 memory [cuBLAS AB cycle 1/3 before cublasCreate] used=0.514 GiB free=139.286 GiB total=139.801 GiB
+rank 0 memory [cuBLAS AB cycle 1/3 after cublasCreate] used=0.581 GiB free=139.220 GiB total=139.801 GiB
+rank 0 memory [cuBLAS AB cycle 1/3 after cudaMalloc left/right/result] used=2.081 GiB free=137.720 GiB total=139.801 GiB
+rank 0 memory [cuBLAS AB cycle 1/3 after host-to-device copies] used=2.081 GiB free=137.720 GiB total=139.801 GiB
+rank 0 memory [cuBLAS AB cycle 1/3 after cublasDgemm] used=2.081 GiB free=137.720 GiB total=139.801 GiB
+rank 0 memory [cuBLAS AB cycle 1/3 after cublasDestroy] used=2.016 GiB free=137.784 GiB total=139.801 GiB
+rank 0 memory [cuBLAS AB cycle 1/3 after cudaFree] used=0.516 GiB free=139.284 GiB total=139.801 GiB
+rank 0 finished cuBLAS AB cycle 1/3 seconds=0.127266 approx_gflop_s=43197.3
+rank 0 memory [cuBLAS AB cycle 2/3 before cublasCreate] used=0.516 GiB free=139.284 GiB total=139.801 GiB
+rank 0 memory [cuBLAS AB cycle 2/3 after cublasCreate] used=0.581 GiB free=139.220 GiB total=139.801 GiB
+rank 0 memory [cuBLAS AB cycle 2/3 after cudaMalloc left/right/result] used=2.081 GiB free=137.720 GiB total=139.801 GiB
+rank 0 memory [cuBLAS AB cycle 2/3 after host-to-device copies] used=2.081 GiB free=137.720 GiB total=139.801 GiB
+rank 0 memory [cuBLAS AB cycle 2/3 after cublasDgemm] used=2.081 GiB free=137.720 GiB total=139.801 GiB
+rank 0 memory [cuBLAS AB cycle 2/3 after cublasDestroy] used=2.016 GiB free=137.784 GiB total=139.801 GiB
+rank 0 memory [cuBLAS AB cycle 2/3 after cudaFree] used=0.516 GiB free=139.284 GiB total=139.801 GiB
+rank 0 finished cuBLAS AB cycle 2/3 seconds=0.0873209 approx_gflop_s=62958.1
+rank 0 memory [cuBLAS AB cycle 3/3 before cublasCreate] used=0.516 GiB free=139.284 GiB total=139.801 GiB
+rank 0 memory [cuBLAS AB cycle 3/3 after cublasCreate] used=0.581 GiB free=139.220 GiB total=139.801 GiB
+rank 0 memory [cuBLAS AB cycle 3/3 after cudaMalloc left/right/result] used=2.081 GiB free=137.720 GiB total=139.801 GiB
+rank 0 memory [cuBLAS AB cycle 3/3 after host-to-device copies] used=2.081 GiB free=137.720 GiB total=139.801 GiB
+rank 0 memory [cuBLAS AB cycle 3/3 after cublasDgemm] used=2.081 GiB free=137.720 GiB total=139.801 GiB
+rank 0 memory [cuBLAS AB cycle 3/3 after device-to-host copy] used=2.081 GiB free=137.720 GiB total=139.801 GiB
+rank 0 memory [cuBLAS AB cycle 3/3 after cublasDestroy] used=2.016 GiB free=137.784 GiB total=139.801 GiB
+rank 0 memory [cuBLAS AB cycle 3/3 after cudaFree] used=0.516 GiB free=139.284 GiB total=139.801 GiB
+rank 0 finished cuBLAS AB cycle 3/3 seconds=0.08711 approx_gflop_s=63110.6
+rank 0 finished all cuBLAS AB cycles total_kernel_seconds=0.301697 aggregate_approx_gflop_s=54666.3
+rank 0 wrote cuBLAS AB to /scratch/user/juan.florez_tamu.edu/tamubo/native/benchmarks/matrix/data/vision-h200/job-480603-n8192-r1/AB_cublas.bin
+rank 0 starting cuBLAS BA on pid=443823 launch_cpu=0 gpu_device=0 gpu_name="NVIDIA H200" matrix=8192x8192 bytes_per_matrix=0.500 GiB repeats=5 cycles=3
+rank 0 memory [cuBLAS BA cycle 1/3 before cublasCreate] used=0.516 GiB free=139.284 GiB total=139.801 GiB
+rank 0 memory [cuBLAS BA cycle 1/3 after cublasCreate] used=0.581 GiB free=139.220 GiB total=139.801 GiB
+rank 0 memory [cuBLAS BA cycle 1/3 after cudaMalloc left/right/result] used=2.081 GiB free=137.720 GiB total=139.801 GiB
+rank 0 memory [cuBLAS BA cycle 1/3 after host-to-device copies] used=2.081 GiB free=137.720 GiB total=139.801 GiB
+rank 0 memory [cuBLAS BA cycle 1/3 after cublasDgemm] used=2.081 GiB free=137.720 GiB total=139.801 GiB
+rank 0 memory [cuBLAS BA cycle 1/3 after cublasDestroy] used=2.016 GiB free=137.784 GiB total=139.801 GiB
+rank 0 memory [cuBLAS BA cycle 1/3 after cudaFree] used=0.516 GiB free=139.284 GiB total=139.801 GiB
+rank 0 finished cuBLAS BA cycle 1/3 seconds=0.0866385 approx_gflop_s=63454
+rank 0 memory [cuBLAS BA cycle 2/3 before cublasCreate] used=0.516 GiB free=139.284 GiB total=139.801 GiB
+rank 0 memory [cuBLAS BA cycle 2/3 after cublasCreate] used=0.581 GiB free=139.220 GiB total=139.801 GiB
+rank 0 memory [cuBLAS BA cycle 2/3 after cudaMalloc left/right/result] used=2.081 GiB free=137.720 GiB total=139.801 GiB
+rank 0 memory [cuBLAS BA cycle 2/3 after host-to-device copies] used=2.081 GiB free=137.720 GiB total=139.801 GiB
+rank 0 memory [cuBLAS BA cycle 2/3 after cublasDgemm] used=2.081 GiB free=137.720 GiB total=139.801 GiB
+rank 0 memory [cuBLAS BA cycle 2/3 after cublasDestroy] used=2.016 GiB free=137.784 GiB total=139.801 GiB
+rank 0 memory [cuBLAS BA cycle 2/3 after cudaFree] used=0.516 GiB free=139.284 GiB total=139.801 GiB
+rank 0 finished cuBLAS BA cycle 2/3 seconds=0.0875444 approx_gflop_s=62797.4
+rank 0 memory [cuBLAS BA cycle 3/3 before cublasCreate] used=0.516 GiB free=139.284 GiB total=139.801 GiB
+rank 0 memory [cuBLAS BA cycle 3/3 after cublasCreate] used=0.581 GiB free=139.220 GiB total=139.801 GiB
+rank 0 memory [cuBLAS BA cycle 3/3 after cudaMalloc left/right/result] used=2.081 GiB free=137.720 GiB total=139.801 GiB
+rank 0 memory [cuBLAS BA cycle 3/3 after host-to-device copies] used=2.081 GiB free=137.720 GiB total=139.801 GiB
+rank 0 memory [cuBLAS BA cycle 3/3 after cublasDgemm] used=2.081 GiB free=137.720 GiB total=139.801 GiB
+rank 0 memory [cuBLAS BA cycle 3/3 after device-to-host copy] used=2.081 GiB free=137.720 GiB total=139.801 GiB
+rank 0 memory [cuBLAS BA cycle 3/3 after cublasDestroy] used=2.016 GiB free=137.784 GiB total=139.801 GiB
+rank 0 memory [cuBLAS BA cycle 3/3 after cudaFree] used=0.516 GiB free=139.284 GiB total=139.801 GiB
+rank 0 finished cuBLAS BA cycle 3/3 seconds=0.0864673 approx_gflop_s=63579.6
+rank 0 finished all cuBLAS BA cycles total_kernel_seconds=0.26065 aggregate_approx_gflop_s=63275.1
+rank 0 wrote cuBLAS BA to /scratch/user/juan.florez_tamu.edu/tamubo/native/benchmarks/matrix/data/vision-h200/job-480603-n8192-r1/BA_cublas.bin

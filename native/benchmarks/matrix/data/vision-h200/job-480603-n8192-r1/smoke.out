@@ -1,0 +1,61 @@
+-- The CXX compiler identification is GNU 14.3.0
+-- The CUDA compiler identification is NVIDIA 12.9.86 with host compiler GNU 14.3.0
+-- Detecting CXX compiler ABI info
+-- Detecting CXX compiler ABI info - done
+-- Check for working CXX compiler: /sw/eb/sw/GCCcore/14.3.0/bin/c++ - skipped
+-- Detecting CXX compile features
+-- Detecting CXX compile features - done
+-- Detecting CUDA compiler ABI info
+-- Detecting CUDA compiler ABI info - done
+-- Check for working CUDA compiler: /sw/eb/sw/CUDA/12.9.1/bin/nvcc - skipped
+-- Detecting CUDA compile features
+-- Detecting CUDA compile features - done
+-- Found MPI_CXX: /sw/eb/sw/OpenMPI/5.0.8-GCC-14.3.0/lib/libmpi.so (found version "3.1")
+-- Found MPI: TRUE (found version "3.1")
+-- Found CUDAToolkit: /sw/eb/sw/CUDA/12.9.1/targets/x86_64-linux/include (found version "12.9.86")
+-- Performing Test CMAKE_HAVE_LIBC_PTHREAD
+-- Performing Test CMAKE_HAVE_LIBC_PTHREAD - Success
+-- Found Threads: TRUE
+-- Configuring done (9.2s)
+-- Generating done (0.2s)
+-- Build files have been written to: /scratch/user/juan.florez_tamu.edu/tamubo/native/benchmarks/smoke/executables/build-vision-h200
+[ 30%] Building CUDA object CMakeFiles/cuda_smoke.dir/src/cuda_smoke.cu.o
+[ 30%] Building CUDA object CMakeFiles/gpu_limits.dir/src/gpu_limits.cu.o
+[ 30%] Building CXX object CMakeFiles/mpi_smoke.dir/src/mpi_smoke.cpp.o
+[ 50%] Building CUDA object CMakeFiles/cuda_mpi_smoke.dir/src/cuda_mpi_smoke.cu.o
+[ 50%] Building CUDA object CMakeFiles/unified_memory_query.dir/src/unified_memory_query.cu.o
+[ 60%] Linking CXX executable /scratch/user/juan.florez_tamu.edu/tamubo/native/benchmarks/smoke/executables/mpi_smoke
+[ 60%] Built target mpi_smoke
+[ 70%] Linking CUDA executable /scratch/user/juan.florez_tamu.edu/tamubo/native/benchmarks/smoke/executables/unified_memory_query
+[ 80%] Linking CUDA executable /scratch/user/juan.florez_tamu.edu/tamubo/native/benchmarks/smoke/executables/cuda_smoke
+[ 90%] Linking CUDA executable /scratch/user/juan.florez_tamu.edu/tamubo/native/benchmarks/smoke/executables/cuda_mpi_smoke
+[ 90%] Built target unified_memory_query
+[ 90%] Built target cuda_smoke
+[ 90%] Built target cuda_mpi_smoke
+[100%] Linking CUDA executable /scratch/user/juan.florez_tamu.edu/tamubo/native/benchmarks/smoke/executables/gpu_limits
+[100%] Built target gpu_limits
+cuda_smoke: 2.0 3.0 4.0 5.0
+GPU: NVIDIA H200
+Compute capability: 9.0
+SMs: 132
+Max threads/block: 1024
+Max block dimensions: 1024 x 1024 x 64
+Max grid dimensions (blocks): 2147483647 x 65535 x 65535
+Max threads/SM: 2048
+Max shared memory/SM: 233472 bytes
+Max shared memory/block: 49152 bytes
+Max registers/SM: 65536
+Max registers/block: 65536
+Max opt-in per block: 232448 bytes
+unified_memory_query: device_count=1
+device 0: NVIDIA H200
+  compute capability=9.0
+  totalGlobalMem=150109880320 bytes
+  cudaDevAttrConcurrentManagedAccess=1
+  cudaDevAttrPageableMemoryAccess=1
+  cudaDevAttrPageableMemoryAccessUsesHostPageTables=0
+  cudaDevAttrDirectManagedMemAccessFromHost=0
+  cudaDevAttrHostNativeAtomicSupported=0
+  mode: full system-memory access with software coherency/HMM
+mpi_smoke: rank 0 of 1 on dgx021 pid=413846 cpu=0
+cuda_mpi_smoke: rank 0/1 host=dgx021 pid=416856 launch_cpu=112 gpu_device=0/1 gpu_name="NVIDIA H200" gpu_pci=0000:c3:00 value=0.0
