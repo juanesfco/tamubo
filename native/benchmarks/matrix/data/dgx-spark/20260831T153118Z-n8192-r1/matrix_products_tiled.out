@@ -1,0 +1,45 @@
+matrix_products_mpi: mpi_size=1 device_count=1 execution=sequential AB then BA
+rank 0 starting AB on pid=902 launch_cpu=0 gpu_device=0 gpu_name="NVIDIA GB10" matrix=8192x8192 bytes_per_matrix=0.500 GiB repeats=5 cycles=3
+rank 0 memory [AB cycle 1/3 before cudaMalloc] used=19.922 GiB free=101.768 GiB total=121.689 GiB
+rank 0 memory [AB cycle 1/3 after cudaMalloc left/right/result] used=21.446 GiB free=100.243 GiB total=121.689 GiB
+rank 0 memory [AB cycle 1/3 after host-to-device copies] used=21.446 GiB free=100.243 GiB total=121.689 GiB
+rank 0 memory [AB cycle 1/3 after kernel] used=21.328 GiB free=100.361 GiB total=121.689 GiB
+rank 0 memory [AB cycle 1/3 after cudaFree] used=19.821 GiB free=101.869 GiB total=121.689 GiB
+rank 0 finished AB cycle 1/3 seconds=12.0388 approx_gflop_s=456.653
+rank 0 memory [AB cycle 2/3 before cudaMalloc] used=19.821 GiB free=101.869 GiB total=121.689 GiB
+rank 0 memory [AB cycle 2/3 after cudaMalloc left/right/result] used=21.320 GiB free=100.369 GiB total=121.689 GiB
+rank 0 memory [AB cycle 2/3 after host-to-device copies] used=21.320 GiB free=100.369 GiB total=121.689 GiB
+rank 0 memory [AB cycle 2/3 after kernel] used=21.229 GiB free=100.461 GiB total=121.689 GiB
+rank 0 memory [AB cycle 2/3 after cudaFree] used=19.721 GiB free=101.968 GiB total=121.689 GiB
+rank 0 finished AB cycle 2/3 seconds=12.0439 approx_gflop_s=456.459
+rank 0 memory [AB cycle 3/3 before cudaMalloc] used=19.721 GiB free=101.968 GiB total=121.689 GiB
+rank 0 memory [AB cycle 3/3 after cudaMalloc left/right/result] used=21.228 GiB free=100.461 GiB total=121.689 GiB
+rank 0 memory [AB cycle 3/3 after host-to-device copies] used=21.221 GiB free=100.469 GiB total=121.689 GiB
+rank 0 memory [AB cycle 3/3 after kernel] used=21.154 GiB free=100.535 GiB total=121.689 GiB
+rank 0 memory [AB cycle 3/3 after device-to-host copy] used=21.154 GiB free=100.535 GiB total=121.689 GiB
+rank 0 memory [AB cycle 3/3 after cudaFree] used=19.626 GiB free=102.063 GiB total=121.689 GiB
+rank 0 finished AB cycle 3/3 seconds=12.0441 approx_gflop_s=456.453
+rank 0 finished all AB cycles total_kernel_seconds=36.1268 aggregate_approx_gflop_s=456.522
+rank 0 wrote AB to /workspace/native/benchmarks/matrix/data/dgx-spark/20260831T153118Z-n8192-r1/AB_tiled.bin
+rank 0 starting BA on pid=902 launch_cpu=0 gpu_device=0 gpu_name="NVIDIA GB10" matrix=8192x8192 bytes_per_matrix=0.500 GiB repeats=5 cycles=3
+rank 0 memory [BA cycle 1/3 before cudaMalloc] used=20.144 GiB free=101.545 GiB total=121.689 GiB
+rank 0 memory [BA cycle 1/3 after cudaMalloc left/right/result] used=21.670 GiB free=100.020 GiB total=121.689 GiB
+rank 0 memory [BA cycle 1/3 after host-to-device copies] used=21.670 GiB free=100.020 GiB total=121.689 GiB
+rank 0 memory [BA cycle 1/3 after kernel] used=21.611 GiB free=100.079 GiB total=121.689 GiB
+rank 0 memory [BA cycle 1/3 after cudaFree] used=20.111 GiB free=101.578 GiB total=121.689 GiB
+rank 0 finished BA cycle 1/3 seconds=12.0427 approx_gflop_s=456.505
+rank 0 memory [BA cycle 2/3 before cudaMalloc] used=20.111 GiB free=101.578 GiB total=121.689 GiB
+rank 0 memory [BA cycle 2/3 after cudaMalloc left/right/result] used=21.611 GiB free=100.079 GiB total=121.689 GiB
+rank 0 memory [BA cycle 2/3 after host-to-device copies] used=21.611 GiB free=100.079 GiB total=121.689 GiB
+rank 0 memory [BA cycle 2/3 after kernel] used=21.564 GiB free=100.125 GiB total=121.689 GiB
+rank 0 memory [BA cycle 2/3 after cudaFree] used=20.048 GiB free=101.642 GiB total=121.689 GiB
+rank 0 finished BA cycle 2/3 seconds=12.066 approx_gflop_s=455.624
+rank 0 memory [BA cycle 3/3 before cudaMalloc] used=20.048 GiB free=101.642 GiB total=121.689 GiB
+rank 0 memory [BA cycle 3/3 after cudaMalloc left/right/result] used=21.562 GiB free=100.127 GiB total=121.689 GiB
+rank 0 memory [BA cycle 3/3 after host-to-device copies] used=21.562 GiB free=100.127 GiB total=121.689 GiB
+rank 0 memory [BA cycle 3/3 after kernel] used=21.508 GiB free=100.181 GiB total=121.689 GiB
+rank 0 memory [BA cycle 3/3 after device-to-host copy] used=21.508 GiB free=100.181 GiB total=121.689 GiB
+rank 0 memory [BA cycle 3/3 after cudaFree] used=19.982 GiB free=101.707 GiB total=121.689 GiB
+rank 0 finished BA cycle 3/3 seconds=12.0689 approx_gflop_s=455.513
+rank 0 finished all BA cycles total_kernel_seconds=36.1777 aggregate_approx_gflop_s=455.88
+rank 0 wrote BA to /workspace/native/benchmarks/matrix/data/dgx-spark/20260831T153118Z-n8192-r1/BA_tiled.bin

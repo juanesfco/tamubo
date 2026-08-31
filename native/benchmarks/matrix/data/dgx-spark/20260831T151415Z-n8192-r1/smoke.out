@@ -1,0 +1,56 @@
+-- The CXX compiler identification is GNU 13.3.0
+-- The CUDA compiler identification is NVIDIA 13.0.48
+-- Detecting CXX compiler ABI info
+-- Detecting CXX compiler ABI info - done
+-- Check for working CXX compiler: /usr/bin/c++ - skipped
+-- Detecting CXX compile features
+-- Detecting CXX compile features - done
+-- Detecting CUDA compiler ABI info
+-- Detecting CUDA compiler ABI info - done
+-- Check for working CUDA compiler: /usr/local/cuda/bin/nvcc - skipped
+-- Detecting CUDA compile features
+-- Detecting CUDA compile features - done
+-- Found MPI_CXX: /usr/lib/aarch64-linux-gnu/openmpi/lib/libmpi_cxx.so (found version "3.1") 
+-- Found MPI: TRUE (found version "3.1")  
+-- Found CUDAToolkit: /usr/local/cuda/targets/sbsa-linux/include (found version "13.0.48") 
+-- Performing Test CMAKE_HAVE_LIBC_PTHREAD
+-- Performing Test CMAKE_HAVE_LIBC_PTHREAD - Success
+-- Found Threads: TRUE  
+-- Configuring done (2.1s)
+-- Generating done (0.0s)
+-- Build files have been written to: /workspace/native/benchmarks/smoke/executables/build-dgx-spark
+[1/10] Building CXX object CMakeFiles/mpi_smoke.dir/src/mpi_smoke.cpp.o
+[2/10] Linking CXX executable /workspace/native/benchmarks/smoke/executables/mpi_smoke
+[3/10] Building CUDA object CMakeFiles/unified_memory_query.dir/src/unified_memory_query.cu.o
+[4/10] Linking CUDA executable /workspace/native/benchmarks/smoke/executables/unified_memory_query
+[5/10] Building CUDA object CMakeFiles/cuda_smoke.dir/src/cuda_smoke.cu.o
+[6/10] Linking CUDA executable /workspace/native/benchmarks/smoke/executables/cuda_smoke
+[7/10] Building CUDA object CMakeFiles/gpu_limits.dir/src/gpu_limits.cu.o
+[8/10] Linking CUDA executable /workspace/native/benchmarks/smoke/executables/gpu_limits
+[9/10] Building CUDA object CMakeFiles/cuda_mpi_smoke.dir/src/cuda_mpi_smoke.cu.o
+[10/10] Linking CUDA executable /workspace/native/benchmarks/smoke/executables/cuda_mpi_smoke
+cuda_smoke: 2.0 3.0 4.0 5.0
+GPU: NVIDIA GB10
+Compute capability: 12.1
+SMs: 48
+Max threads/block: 1024
+Max block dimensions: 1024 x 1024 x 64
+Max grid dimensions (blocks): 2147483647 x 65535 x 65535
+Max threads/SM: 1536
+Max shared memory/SM: 102400 bytes
+Max shared memory/block: 49152 bytes
+Max registers/SM: 65536
+Max registers/block: 65536
+Max opt-in per block: 101376 bytes
+unified_memory_query: device_count=1
+device 0: NVIDIA GB10
+  compute capability=12.1
+  totalGlobalMem=130662940672 bytes
+  cudaDevAttrConcurrentManagedAccess=1
+  cudaDevAttrPageableMemoryAccess=1
+  cudaDevAttrPageableMemoryAccessUsesHostPageTables=1
+  cudaDevAttrDirectManagedMemAccessFromHost=0
+  cudaDevAttrHostNativeAtomicSupported=1
+  mode: full system-memory access with hardware coherency/ATS
+mpi_smoke: rank 0 of 1 on 3c59153679a4 pid=386 cpu=0
+cuda_mpi_smoke: rank 0/1 host=3c59153679a4 pid=392 launch_cpu=0 gpu_device=0/1 gpu_name="NVIDIA GB10" gpu_pci=000f:01:00 value=0.0

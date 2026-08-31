@@ -1,0 +1,29 @@
+-- Configuring done (0.6s)
+-- Generating done (0.0s)
+-- Build files have been written to: /workspace/native/benchmarks/smoke/executables/build-dgx-spark
+ninja: no work to do.
+cuda_smoke: 2.0 3.0 4.0 5.0
+GPU: NVIDIA GB10
+Compute capability: 12.1
+SMs: 48
+Max threads/block: 1024
+Max block dimensions: 1024 x 1024 x 64
+Max grid dimensions (blocks): 2147483647 x 65535 x 65535
+Max threads/SM: 1536
+Max shared memory/SM: 102400 bytes
+Max shared memory/block: 49152 bytes
+Max registers/SM: 65536
+Max registers/block: 65536
+Max opt-in per block: 101376 bytes
+unified_memory_query: device_count=1
+device 0: NVIDIA GB10
+  compute capability=12.1
+  totalGlobalMem=130662940672 bytes
+  cudaDevAttrConcurrentManagedAccess=1
+  cudaDevAttrPageableMemoryAccess=1
+  cudaDevAttrPageableMemoryAccessUsesHostPageTables=1
+  cudaDevAttrDirectManagedMemAccessFromHost=0
+  cudaDevAttrHostNativeAtomicSupported=1
+  mode: full system-memory access with hardware coherency/ATS
+mpi_smoke: rank 0 of 1 on 3c59153679a4 pid=846 cpu=0
+cuda_mpi_smoke: rank 0/1 host=3c59153679a4 pid=852 launch_cpu=0 gpu_device=0/1 gpu_name="NVIDIA GB10" gpu_pci=000f:01:00 value=0.0

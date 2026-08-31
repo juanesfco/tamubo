@@ -1,0 +1,2 @@
+matrix_compare: n=8192 elements=67108864 max_abs=0 max_rel_at_max_abs=0 rmse=0 max_abs_index=(0,0) failures=0 atol=1e-08 rtol=1e-08
+matrix_compare: n=8192 elements=67108864 max_abs=0 max_rel_at_max_abs=0 rmse=0 max_abs_index=(0,0) failures=0 atol=1e-08 rtol=1e-08

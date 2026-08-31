@@ -1,0 +1,17 @@
+2026-08-31T15:35:23+00:00
+0c5581de38f4726786710090b884e9b31d744639
+Linux 3c59153679a4 6.17.0-1029-nvidia #29-Ubuntu SMP PREEMPT_DYNAMIC Wed Jul  1 00:13:52 UTC 2026 aarch64 aarch64 aarch64 GNU/Linux
+GPU 0: NVIDIA GB10 (UUID: GPU-e425f5f2-22b6-7273-967e-46bf4c5f62ae)
+name, uuid, driver_version, memory.total [MiB], power.limit [W]
+NVIDIA GB10, GPU-e425f5f2-22b6-7273-967e-46bf4c5f62ae, 580.173.02, [N/A], [N/A]
+nvcc: NVIDIA (R) Cuda compiler driver
+Copyright (c) 2005-2025 NVIDIA Corporation
+Built on Wed_Jul_16_07:31:19_PM_PDT_2025
+Cuda compilation tools, release 13.0, V13.0.48
+Build cuda_13.0.r13.0/compiler.36260728_0
+mpirun (Open MPI) 4.1.6
+
+Report bugs to http://www.open-mpi.org/community/help/
+cmake version 3.28.3
+
+CMake suite maintained and supported by Kitware (kitware.com/cmake).

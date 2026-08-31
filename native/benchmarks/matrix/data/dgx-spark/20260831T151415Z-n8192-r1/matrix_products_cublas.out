@@ -1,0 +1,57 @@
+matrix_products_cublas_mpi: mpi_size=1 device_count=1 execution=sequential AB then BA
+rank 0 starting cuBLAS AB on pid=639 launch_cpu=0 gpu_device=0 gpu_name="NVIDIA GB10" matrix=8192x8192 bytes_per_matrix=0.500 GiB repeats=5 cycles=3
+rank 0 memory [cuBLAS AB cycle 1/3 before cublasCreate] used=14.294 GiB free=107.396 GiB total=121.689 GiB
+rank 0 memory [cuBLAS AB cycle 1/3 after cublasCreate] used=14.306 GiB free=107.383 GiB total=121.689 GiB
+rank 0 memory [cuBLAS AB cycle 1/3 after cudaMalloc left/right/result] used=15.829 GiB free=105.860 GiB total=121.689 GiB
+rank 0 memory [cuBLAS AB cycle 1/3 after host-to-device copies] used=15.829 GiB free=105.860 GiB total=121.689 GiB
+rank 0 memory [cuBLAS AB cycle 1/3 after cublasDgemm] used=15.974 GiB free=105.716 GiB total=121.689 GiB
+rank 0 memory [cuBLAS AB cycle 1/3 after cublasDestroy] used=15.964 GiB free=105.725 GiB total=121.689 GiB
+rank 0 memory [cuBLAS AB cycle 1/3 after cudaFree] used=14.464 GiB free=107.225 GiB total=121.689 GiB
+rank 0 finished cuBLAS AB cycle 1/3 seconds=13.7831 approx_gflop_s=398.863
+rank 0 memory [cuBLAS AB cycle 2/3 before cublasCreate] used=14.464 GiB free=107.225 GiB total=121.689 GiB
+rank 0 memory [cuBLAS AB cycle 2/3 after cublasCreate] used=14.474 GiB free=107.216 GiB total=121.689 GiB
+rank 0 memory [cuBLAS AB cycle 2/3 after cudaMalloc left/right/result] used=15.974 GiB free=105.716 GiB total=121.689 GiB
+rank 0 memory [cuBLAS AB cycle 2/3 after host-to-device copies] used=15.974 GiB free=105.716 GiB total=121.689 GiB
+rank 0 memory [cuBLAS AB cycle 2/3 after cublasDgemm] used=15.898 GiB free=105.791 GiB total=121.689 GiB
+rank 0 memory [cuBLAS AB cycle 2/3 after cublasDestroy] used=15.889 GiB free=105.800 GiB total=121.689 GiB
+rank 0 memory [cuBLAS AB cycle 2/3 after cudaFree] used=14.373 GiB free=107.316 GiB total=121.689 GiB
+rank 0 finished cuBLAS AB cycle 2/3 seconds=13.5544 approx_gflop_s=405.594
+rank 0 memory [cuBLAS AB cycle 3/3 before cublasCreate] used=14.373 GiB free=107.316 GiB total=121.689 GiB
+rank 0 memory [cuBLAS AB cycle 3/3 after cublasCreate] used=14.383 GiB free=107.307 GiB total=121.689 GiB
+rank 0 memory [cuBLAS AB cycle 3/3 after cudaMalloc left/right/result] used=15.898 GiB free=105.792 GiB total=121.689 GiB
+rank 0 memory [cuBLAS AB cycle 3/3 after host-to-device copies] used=15.898 GiB free=105.792 GiB total=121.689 GiB
+rank 0 memory [cuBLAS AB cycle 3/3 after cublasDgemm] used=15.828 GiB free=105.861 GiB total=121.689 GiB
+rank 0 memory [cuBLAS AB cycle 3/3 after device-to-host copy] used=15.828 GiB free=105.861 GiB total=121.689 GiB
+rank 0 memory [cuBLAS AB cycle 3/3 after cublasDestroy] used=15.818 GiB free=105.871 GiB total=121.689 GiB
+rank 0 memory [cuBLAS AB cycle 3/3 after cudaFree] used=14.292 GiB free=107.398 GiB total=121.689 GiB
+rank 0 finished cuBLAS AB cycle 3/3 seconds=13.5541 approx_gflop_s=405.602
+rank 0 finished all cuBLAS AB cycles total_kernel_seconds=40.8915 aggregate_approx_gflop_s=403.328
+rank 0 wrote cuBLAS AB to /workspace/native/benchmarks/matrix/data/dgx-spark/20260831T151415Z-n8192-r1/AB_cublas.bin
+rank 0 starting cuBLAS BA on pid=639 launch_cpu=0 gpu_device=0 gpu_name="NVIDIA GB10" matrix=8192x8192 bytes_per_matrix=0.500 GiB repeats=5 cycles=3
+rank 0 memory [cuBLAS BA cycle 1/3 before cublasCreate] used=14.810 GiB free=106.879 GiB total=121.689 GiB
+rank 0 memory [cuBLAS BA cycle 1/3 after cublasCreate] used=14.820 GiB free=106.869 GiB total=121.689 GiB
+rank 0 memory [cuBLAS BA cycle 1/3 after cudaMalloc left/right/result] used=16.343 GiB free=105.347 GiB total=121.689 GiB
+rank 0 memory [cuBLAS BA cycle 1/3 after host-to-device copies] used=16.343 GiB free=105.347 GiB total=121.689 GiB
+rank 0 memory [cuBLAS BA cycle 1/3 after cublasDgemm] used=16.280 GiB free=105.410 GiB total=121.689 GiB
+rank 0 memory [cuBLAS BA cycle 1/3 after cublasDestroy] used=16.270 GiB free=105.419 GiB total=121.689 GiB
+rank 0 memory [cuBLAS BA cycle 1/3 after cudaFree] used=14.770 GiB free=106.919 GiB total=121.689 GiB
+rank 0 finished cuBLAS BA cycle 1/3 seconds=13.5542 approx_gflop_s=405.598
+rank 0 memory [cuBLAS BA cycle 2/3 before cublasCreate] used=14.770 GiB free=106.919 GiB total=121.689 GiB
+rank 0 memory [cuBLAS BA cycle 2/3 after cublasCreate] used=14.780 GiB free=106.910 GiB total=121.689 GiB
+rank 0 memory [cuBLAS BA cycle 2/3 after cudaMalloc left/right/result] used=16.280 GiB free=105.410 GiB total=121.689 GiB
+rank 0 memory [cuBLAS BA cycle 2/3 after host-to-device copies] used=16.280 GiB free=105.410 GiB total=121.689 GiB
+rank 0 memory [cuBLAS BA cycle 2/3 after cublasDgemm] used=16.222 GiB free=105.468 GiB total=121.689 GiB
+rank 0 memory [cuBLAS BA cycle 2/3 after cublasDestroy] used=16.212 GiB free=105.477 GiB total=121.689 GiB
+rank 0 memory [cuBLAS BA cycle 2/3 after cudaFree] used=14.691 GiB free=106.999 GiB total=121.689 GiB
+rank 0 finished cuBLAS BA cycle 2/3 seconds=13.5542 approx_gflop_s=405.597
+rank 0 memory [cuBLAS BA cycle 3/3 before cublasCreate] used=14.691 GiB free=106.999 GiB total=121.689 GiB
+rank 0 memory [cuBLAS BA cycle 3/3 after cublasCreate] used=14.700 GiB free=106.989 GiB total=121.689 GiB
+rank 0 memory [cuBLAS BA cycle 3/3 after cudaMalloc left/right/result] used=16.223 GiB free=105.467 GiB total=121.689 GiB
+rank 0 memory [cuBLAS BA cycle 3/3 after host-to-device copies] used=16.223 GiB free=105.467 GiB total=121.689 GiB
+rank 0 memory [cuBLAS BA cycle 3/3 after cublasDgemm] used=16.198 GiB free=105.492 GiB total=121.689 GiB
+rank 0 memory [cuBLAS BA cycle 3/3 after device-to-host copy] used=16.198 GiB free=105.492 GiB total=121.689 GiB
+rank 0 memory [cuBLAS BA cycle 3/3 after cublasDestroy] used=16.188 GiB free=105.502 GiB total=121.689 GiB
+rank 0 memory [cuBLAS BA cycle 3/3 after cudaFree] used=14.661 GiB free=107.028 GiB total=121.689 GiB
+rank 0 finished cuBLAS BA cycle 3/3 seconds=13.5316 approx_gflop_s=406.276
+rank 0 finished all cuBLAS BA cycles total_kernel_seconds=40.64 aggregate_approx_gflop_s=405.823
+rank 0 wrote cuBLAS BA to /workspace/native/benchmarks/matrix/data/dgx-spark/20260831T151415Z-n8192-r1/BA_cublas.bin

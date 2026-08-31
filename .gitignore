@@ -12,10 +12,11 @@ cufile.log
 examples/exactbo/logs/minimization_2d_visualization.json
 examples/exactbo/profiles/
 .vscode/
-native/benchmarks/matrix/data/*
+#native/benchmarks/matrix/data/*
 native/benchmarks/matrix/logs/*
 native/exactbo/data/*
 native/benchmarks/matrix/executables/*
 native/benchmarks/smoke/executables/*
 native/exactbo/executables/*
 native/**/build/
+*.bin
