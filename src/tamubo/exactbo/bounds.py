@@ -1,12 +1,9 @@
 from __future__ import annotations
 
 import numpy as np
-import math
 
+from tamubo.acquisition_functions.ei import log_expected_improvement
 from tamubo.utils import BackendName, get_array_module as _array_module, to_numpy
-
-# Constants reused across helper calls.
-_INV_SQRT2PI = 1.0 / math.sqrt(2.0 * math.pi)
 
 
 # Define rbf_k_bounds
@@ -256,33 +253,43 @@ def mu_bounds(
         return (mu_lo, mu_hi)
 
 
+
+
 # Define sigma_bounds
 def sigma_bounds(
-    K_lo, 
-    K_hi, 
-    L, 
-    n: int, 
-    N: int, 
-    sigma_f_2: float, 
+    K_lo,
+    K_hi,
+    L,
+    n: int,
+    N: int,
+    sigma_f_2: float,
     *,
     y_train_std: float = 1.0,
     scaled_output: bool = False,
-    backend: BackendName = "auto", 
+    backend: BackendName = "auto",
     validation: bool = True,
+    L_inv=None,
+    lambda_max: float | None = None,
+    q_bounds: tuple | None = None,
 ) -> tuple:
     """
-    Compute lower/upper bounds on the GP posterior std per box.
-    Given L = cholesky(K + σ_n^2 I) and per-component kernel intervals K_lo, K_hi (nonnegative), 
-    bound v for the solution of L v = k, and then bound Q = ||v||^2, then σ^2 = σ_f^2 - Q, 
-    and finally bound σ = sqrt(σ^2).
-    Recurrence:
-      v_1 = k_1 / L_11
-      v_j = (k_j - Σ_{i<j} L_{j,i} v_i) / L_{j,j}
+    Compute lower/upper bounds on the GP (latent) posterior std per box.
+    σ^2 = σ_f^2 - Q with Q = ||v||^2, v = L^{-1} k, L = cholesky(K + σ_n^2 I),
+    and each kernel entry k_i in [K_lo_i, K_hi_i] (K_lo >= 0).
+
+    Q is bounded two ways and the tighter bound is kept:
+      (A) v = L^{-1} k is linear in k, so each v_j is bounded exactly over the
+          K box by splitting the rows of L^{-1} by sign:
+            v_lo = L^{-1}_+ K_lo + L^{-1}_- K_hi,  v_hi = L^{-1}_+ K_hi + L^{-1}_- K_lo,
+          then Q_lo = Σ_j min v_j^2 (0 where [v_lo, v_hi] contains 0), Q_hi = Σ_j max v_j^2.
+          Unlike interval forward substitution, no interval is reused across rows,
+          so the v bounds do not widen with j. Cost: two (n, N) x (N, N) GEMMs.
+      (B) Q = k^T (K + σ_n^2 I)^{-1} k >= ||k||^2 / λ_max(K + σ_n^2 I) >= ||K_lo||^2 / λ_max.
 
     Parameters
     ----------
     K_lo, K_hi : np.ndarray or cupy.ndarray
-        Kernel bounds per box vs training points, shape (n, N).
+        Kernel bounds per box vs training points, shape (n, N). Not modified.
     L : np.ndarray or cupy.ndarray
         Cholesky factor (N, N) of K + σ_n^2 I (lower triangular).
     n : int
@@ -300,6 +307,12 @@ def sigma_bounds(
         Backend used for array ops.
     validation : bool, default=True
         If True, validate shapes and sizes.
+    L_inv : array, shape (N, N), optional
+        Precomputed L^{-1}; computed from L when None.
+    lambda_max : float, optional
+        Precomputed largest eigenvalue of L L^T; computed from L when None.
+    q_bounds : tuple (q_lo, q_hi) of arrays with shape (n,), optional
+        Additional valid bounds on Q (e.g. from AutoBound) intersected with (A)/(B).
 
     Returns
     -------
@@ -321,195 +334,97 @@ def sigma_bounds(
         if K_lo.shape[1] != L.shape[0]:
             raise ValueError("K_lo/K_hi second dim must match L size.")
 
-    # Check if using numpy or cupy for the computation.
-    if xp is np:
-        # Serial computation for numpy (more efficient for small n).
-        return _sigma_bounds_numpy(
-            K_lo,
-            K_hi,
-            L,
-            n,
-            N,
-            sigma_f_2,
-            y_train_std,
-            scaled_output,
-        )
-    else:
-        # Vectorized computation for GPU backends (more efficient for large n).
-        return _sigma_bounds_vectorized(
-            K_lo,
-            K_hi,
-            L,
-            n,
-            N,
-            sigma_f_2,
-            y_train_std,
-            scaled_output,
-            xp,
-        )
-    
-def _sigma_bounds_numpy(K_lo, K_hi, L, n, N, sigma_f_2, y_train_std, scaled_output):
-    sig_lo = []
-    sig_hi = []
-    # For each box, compute the lower and upper sigma bounds
-    for i in range(n):
-        K_lo_i = K_lo[i]  # shape (N,)
-        K_hi_i = K_hi[i]  # shape (N,)
+    if L_inv is None or lambda_max is None:
+        L_inv_L, lambda_max_L = sigma_bound_factors(L)
+        L_inv = L_inv_L if L_inv is None else L_inv
+        lambda_max = lambda_max_L if lambda_max is None else lambda_max
+    L_inv = xp.asarray(L_inv, dtype=xp.float64)
 
-        # Forward solve for v bounds: L v = k, where k is in [K_lo_i, K_hi_i].
-        v_lo = np.zeros(N)
-        v_hi = np.zeros(N)
-        for j in range(N):
-            S_lo = 0
-            S_hi = 0
-            # S_k = Σ_{k<j} L_{j,k} v_k, with each term interval-bounded
-            for k in range(j):
-                Ljk = L[j, k]
-                Ljkv_lo_k = Ljk * v_lo[k]
-                Ljkv_hi_k = Ljk * v_hi[k]
-                # Depending on the signs of Ljk and v_k, the contribution to S_lo and S_hi can swap.
-                Sk_lo = min(Ljkv_lo_k, Ljkv_hi_k)
-                Sk_hi = max(Ljkv_lo_k, Ljkv_hi_k)
-                S_lo += Sk_lo
-                S_hi += Sk_hi
+    q_lo, q_hi = _q_bounds(K_lo, K_hi, L_inv, float(lambda_max), xp)
+    if q_bounds is not None:
+        xp.maximum(q_lo, q_bounds[0], out=q_lo)
+        xp.minimum(q_hi, q_bounds[1], out=q_hi)
 
-            # N_j = k_j - S_j, where k_j is in [K_lo_i[j], K_hi_i[j]]
-            N_lo = K_lo_i[j] - S_hi
-            N_hi = K_hi_i[j] - S_lo
-
-            # v_j = N_j/L_{jj}
-            Ljj = L[j, j]
-            v_lo[j] = N_lo / Ljj
-            v_hi[j] = N_hi / Ljj
-
-        # Q = v^T v, with each term interval-bounded
-        Q_lo = 0
-        Q_hi = 0
-        for j in range(N):
-            v2_lo = v_lo[j] * v_lo[j]
-            v2_hi = v_hi[j] * v_hi[j]
-            # If v_j_lo < 0 < v_j_hi, then the minimum of v_j^2 is 0 and the maximum is max(v2_lo, v2_hi).
-            if v_lo[j] < 0 and v_hi[j] > 0:
-                Q_lo += 0
-                Q_hi += max(v2_lo, v2_hi)
-            else:
-                Q_lo += min(v2_lo, v2_hi)
-                Q_hi += max(v2_lo, v2_hi)
-
-        # var = sigma_f_2 - Q, ensuring non-negativity
-        var_lo = max(1e-12, sigma_f_2 - Q_hi)
-        var_hi = max(1e-12, sigma_f_2 - Q_lo)
-
-        # sig = sqrt(var)
-        sig_lo_i = np.sqrt(var_lo)
-        sig_hi_i = np.sqrt(var_hi)
-
-        if scaled_output:
-            sig_lo.append(sig_lo_i)
-            sig_hi.append(sig_hi_i)
-        else:
-            sig_lo.append(y_train_std * sig_lo_i)
-            sig_hi.append(y_train_std * sig_hi_i)
-
-    return np.array(sig_lo), np.array(sig_hi)
-
-def _sigma_bounds_vectorized(K_lo, K_hi, L, n, N, sigma_f_2, y_train_std, scaled_output, cp):
-    # Read L's scalars from one host copy: indexing a device array per (j, i)
-    # would force O(N^2) blocking device-to-host transfers.
-    L = to_numpy(L)
-
-    # Reuse K_lo/K_hi buffers in-place as v_lo/v_hi to avoid an additional
-    # pair of (n, N) allocations on GPU.
-    v_lo = K_lo
-    v_hi = K_hi
-
-    sig_lo = cp.zeros(n, dtype=cp.float64) # Q_hi accumulator, initialized to 0
-    sig_hi = cp.zeros(n, dtype=cp.float64) # Q_lo accumulator, initialized to 0
-
-    S_lo = cp.empty(n, dtype=cp.float64)
-    S_hi = cp.empty(n, dtype=cp.float64)
-    tmp0 = cp.empty(n, dtype=cp.float64)
-    tmp1 = cp.empty(n, dtype=cp.float64)
-    mask_cross = cp.empty(n, dtype=bool)
-    mask_pos = cp.empty(n, dtype=bool)
-
-    # Forward substitution to compute v_lo and v_hi
-    for j in range(N):
-        # Initialize the sum S for the j-th column of L.
-        S_lo[...] = 0.0
-        S_hi[...] = 0.0
-        # S_j = sum_{i=0}^{j-1} L[j, i] * v[:, i]
-        for i in range(j):
-            Lji = float(L[j, i])
-            # The sign of Lji determines whether to use v_lo or v_hi for the bounds of S.
-            if Lji >= 0.0:
-                # S_lo += Lji * v_lo[:, i]
-                cp.multiply(v_lo[:, i], Lji, out=tmp0)
-                cp.add(S_lo, tmp0, out=S_lo)
-                # S_hi += Lji * v_hi[:, i]
-                cp.multiply(v_hi[:, i], Lji, out=tmp0)
-                cp.add(S_hi, tmp0, out=S_hi)
-            else:
-                # S_lo += Lji * v_hi[:, i]
-                cp.multiply(v_hi[:, i], Lji, out=tmp0)
-                cp.add(S_lo, tmp0, out=S_lo)
-                # S_hi += Lji * v_lo[:, i]
-                cp.multiply(v_lo[:, i], Lji, out=tmp0)
-                cp.add(S_hi, tmp0, out=S_hi)
-
-        # N_j = K_j - S_j
-        cp.subtract(K_lo[:, j], S_hi, out=tmp0)
-        cp.subtract(K_hi[:, j], S_lo, out=tmp1)
-        # v_j = N_j / L[j, j]
-        Ljj = float(L[j, j])
-        cp.divide(tmp0, Ljj, out=v_lo[:, j])
-        cp.divide(tmp1, Ljj, out=v_hi[:, j])
-
-        # Q_hi += max(v_lo^2, v_hi^2)
-        cp.multiply(v_lo[:, j], v_lo[:, j], out=tmp0)
-        cp.multiply(v_hi[:, j], v_hi[:, j], out=tmp1)
-        cp.minimum(tmp0, tmp1, out=S_lo)  # staged for Q_lo
-        cp.maximum(tmp0, tmp1, out=tmp0)
-        cp.add(sig_lo, tmp0, out=sig_lo) # accumulate Q_hi
-
-        # Q_lo += min(v_lo^2, v_hi^2), except 0 when interval crosses zero.
-        cp.less(v_lo[:, j], 0.0, out=mask_cross)
-        cp.greater(v_hi[:, j], 0.0, out=mask_pos)
-        cp.logical_and(mask_cross, mask_pos, out=mask_cross)
-        S_lo[mask_cross] = 0.0
-        cp.add(sig_hi, S_lo, out=sig_hi) # accumulate Q_lo
-
-    # var = sigma_f_2 - Q
-    cp.subtract(sigma_f_2, sig_lo, out=sig_lo)
-    cp.subtract(sigma_f_2, sig_hi, out=sig_hi)
-    # var > 0
-    cp.maximum(sig_lo, 1e-12, out=sig_lo)
-    cp.maximum(sig_hi, 1e-12, out=sig_hi)
-    # sigma = sqrt(var)
-    cp.sqrt(sig_lo, out=sig_lo)
-    cp.sqrt(sig_hi, out=sig_hi)
+    # var = sigma_f_2 - Q, ensuring non-negativity; sigma = sqrt(var)
+    sig_lo = q_hi  # Q_hi -> sig_lo, reusing the buffer
+    sig_hi = q_lo  # Q_lo -> sig_hi
+    xp.subtract(sigma_f_2, sig_lo, out=sig_lo)
+    xp.subtract(sigma_f_2, sig_hi, out=sig_hi)
+    xp.maximum(sig_lo, 1e-12, out=sig_lo)
+    xp.maximum(sig_hi, 1e-12, out=sig_hi)
+    xp.sqrt(sig_lo, out=sig_lo)
+    xp.sqrt(sig_hi, out=sig_hi)
     if not scaled_output:
-        cp.multiply(sig_lo, y_train_std, out=sig_lo)
-        cp.multiply(sig_hi, y_train_std, out=sig_hi)
+        xp.multiply(sig_lo, y_train_std, out=sig_lo)
+        xp.multiply(sig_hi, y_train_std, out=sig_hi)
 
     return sig_lo, sig_hi
 
+def sigma_bound_factors(L) -> tuple:
+    """
+    Return (L^{-1}, λ_max(L L^T)) on the host, the GP-only factors used by
+    ``sigma_bounds``; compute once per trained GP and pass them in.
+    """
+    L = np.asarray(to_numpy(L), dtype=np.float64)
+    from scipy.linalg import solve_triangular
+
+    L_inv = solve_triangular(L, np.eye(L.shape[0]), lower=True)
+    lambda_max = float(np.linalg.eigvalsh(L @ L.T)[-1])
+    return L_inv, lambda_max
+
+def _q_bounds(K_lo, K_hi, L_inv, lambda_max, xp):
+    """Bounds (A) and (B) on Q = ||L^{-1} k||^2 described in ``sigma_bounds``."""
+    L_inv_pos = xp.maximum(L_inv, 0.0).T  # (N, N), transposed for K @ L_inv^T
+    L_inv_neg = xp.minimum(L_inv, 0.0).T
+
+    # (A) v bounds, shape (n, N)
+    v_lo = K_lo @ L_inv_pos
+    v_lo += K_hi @ L_inv_neg
+    v_hi = K_hi @ L_inv_pos
+    v_hi += K_lo @ L_inv_neg
+
+    # Q_lo = Σ min over [v_lo, v_hi] of v^2 = Σ (max(v_lo, 0)^2 + min(v_hi, 0)^2)
+    # (at most one of the two terms is nonzero per entry).
+    q_hi = xp.maximum(xp.abs(v_lo), xp.abs(v_hi))
+    xp.multiply(q_hi, q_hi, out=q_hi)
+    q_hi = xp.sum(q_hi, axis=1)
+    xp.maximum(v_lo, 0.0, out=v_lo)
+    xp.minimum(v_hi, 0.0, out=v_hi)
+    xp.multiply(v_lo, v_lo, out=v_lo)
+    xp.multiply(v_hi, v_hi, out=v_hi)
+    v_lo += v_hi
+    q_lo = xp.sum(v_lo, axis=1)
+    del v_lo, v_hi
+
+    # (B) Q >= ||K_lo||^2 / λ_max
+    q_lo_B = xp.sum(K_lo * K_lo, axis=1)
+    xp.divide(q_lo_B, lambda_max, out=q_lo_B)
+    xp.maximum(q_lo, q_lo_B, out=q_lo)
+    return q_lo, q_hi
+
 
 def ei_bounds(
-    mu_lo, 
-    mu_hi, 
-    sig_lo, 
+    mu_lo,
+    mu_hi,
+    sig_lo,
     sig_hi,
-    n: int, 
-    y_min: float, 
+    n: int,
+    y_min: float,
     *,
-    backend: BackendName = "auto", 
+    backend: BackendName = "auto",
     validation: bool = True,
     pad: float = 1e-12,
+    log: bool = False,
 ) -> tuple:
     """
-    IA bounds for EI across all boxes:
-      EI = N * Phi(Z) + sigma * phi(Z), where N = f_min - mu, Z = N / sigma.
+    Exact EI (or log EI) range over the rectangle [mu_lo, mu_hi] x [sig_lo, sig_hi]:
+      EI(mu, sigma) = sigma * h((f_min - mu) / sigma),  h(z) = phi(z) + z Phi(z),
+    is decreasing in mu (dEI/dmu = -Phi(z)) and increasing in sigma
+    (dEI/dsigma = phi(z)), so
+      EI_lo = EI(mu_hi, sig_lo),  EI_hi = EI(mu_lo, sig_hi).
+    This is the tightest bound given the mu/sigma intervals (interval arithmetic
+    through Z, Phi and phi separately overestimates it). Evaluated through the
+    stable log_h, so there is no cancellation or underflow for z << 0.
 
     Parameters
     ----------
@@ -526,19 +441,21 @@ def ei_bounds(
     validation : bool, optional
         If True, validate shapes/sizes.
     pad : float, optional, default=1e-12
-        Small positive number to avoid division by zero.
+        Sigma values below ``pad`` are treated as zero (EI -> max(f_min - mu, 0)).
+    log : bool, default=False
+        Return bounds on log EI instead of EI (-inf where EI is exactly 0).
 
     Returns
     -------
     (ei_lo, ei_hi) : tuple[np.ndarray or cupy.ndarray, np.ndarray or cupy.ndarray]
-        EI bounds per box, shape (n,).
+        EI (or log EI) bounds per box, shape (n,).
     """
     # Convert inputs to the appropriate array type based on the backend.
     xp = _array_module(backend)
-    mu_lo = xp.asarray(mu_lo)
-    mu_hi = xp.asarray(mu_hi)
-    sig_lo = xp.asarray(sig_lo)
-    sig_hi = xp.asarray(sig_hi)
+    mu_lo = xp.asarray(mu_lo, dtype=xp.float64)
+    mu_hi = xp.asarray(mu_hi, dtype=xp.float64)
+    sig_lo = xp.asarray(sig_lo, dtype=xp.float64)
+    sig_hi = xp.asarray(sig_hi, dtype=xp.float64)
 
     # Validate input shapes if requested.
     if validation:
@@ -548,188 +465,21 @@ def ei_bounds(
             raise ValueError("sig_lo and sig_hi must have the same shape.")
         if mu_lo.shape != sig_lo.shape:
             raise ValueError("mu and sigma bounds must have the same shape.")
-        
-    # Check if using numpy or cupy for the computation.
-    if xp is np:
-        # Serial computation for numpy (more efficient for small n).
-        return _ei_bounds_numpy(mu_lo, mu_hi, sig_lo, sig_hi, n, y_min, pad=pad)
-    else:
-        # Vectorized computation for GPU backends (more efficient for large n).
-        return _ei_bounds_vectorized(mu_lo, mu_hi, sig_lo, sig_hi, n, y_min, xp, pad=pad)
-    
-def _ei_bounds_numpy(mu_lo, mu_hi, sig_lo, sig_hi, n, y_min, pad):
-    from scipy.stats import norm
-    ei_lo = []
-    ei_hi = []
-    for i in range(n):
-        # Get the bounds for the i-th box
-        mu_lo_i, mu_hi_i = mu_lo[i], mu_hi[i]
-        sig_lo_i, sig_hi_i = sig_lo[i], sig_hi[i]
 
-        # N bounds
-        N_lo = y_min - mu_hi_i
-        N_hi = y_min - mu_lo_i
+    ei_lo = _log_ei_corner(mu_hi, sig_lo, y_min, pad, xp, backend)
+    ei_hi = _log_ei_corner(mu_lo, sig_hi, y_min, pad, xp, backend)
+    if not log:
+        xp.exp(ei_lo, out=ei_lo)
+        xp.exp(ei_hi, out=ei_hi)
+    return ei_lo, ei_hi
 
-        # Handle sigma == 0 cases
-        if sig_hi_i == 0:
-            ei_lo.append(0.0)
-            ei_hi.append(0.0)
-            continue
-        elif sig_lo_i == 0:
-            # If sig_lo_i == 0 but sig_hi_i > 0, we can still compute bounds using sig_hi_i for the upper bound and 0 for the lower bound.
-            sig_lo_i = pad  # small positive number to avoid division by zero
-            flag_ei_lo_0 = True
-        else:
-            flag_ei_lo_0 = False
-
-        # J = 1/sigma bounds
-        J_lo = 1.0 / sig_hi_i
-        J_hi = 1.0 / sig_lo_i
-        if flag_ei_lo_0:
-            sig_lo_i = 0.0  # reset to zero for the lower bound case
-
-        # Z = N * J bounds
-        Z_lo = min(min(N_lo * J_lo, N_lo * J_hi), min(N_hi * J_lo, N_hi * J_hi))
-        Z_hi = max(max(N_lo * J_lo, N_lo * J_hi), max(N_hi * J_lo, N_hi * J_hi))
-
-        # Phi bounds (monotone)
-        Phi_lo = norm.cdf(Z_lo)
-        Phi_hi = norm.cdf(Z_hi)
-
-        # phi bounds (unimodal, symmetric)
-        norm_pdf_Z_lo = norm.pdf(Z_lo)
-        norm_pdf_Z_hi = norm.pdf(Z_hi)
-        phi_lo = min(norm_pdf_Z_lo, norm_pdf_Z_hi)
-        if Z_lo <= 0 <= Z_hi:
-            phi_hi = _INV_SQRT2PI
-        else:
-            phi_hi = max(norm_pdf_Z_lo, norm_pdf_Z_hi)
-
-        # U = N * Phi, V = sigma * phi bounds
-        U_lo = min(min(N_lo * Phi_lo, N_lo * Phi_hi), min(N_hi * Phi_lo, N_hi * Phi_hi))
-        U_hi = max(max(N_lo * Phi_lo, N_lo * Phi_hi), max(N_hi * Phi_lo, N_hi * Phi_hi))    
-        V_lo = min(min(sig_lo_i * phi_lo, sig_lo_i * phi_hi), min(sig_hi_i * phi_lo, sig_hi_i * phi_hi))
-        V_hi = max(max(sig_lo_i * phi_lo, sig_lo_i * phi_hi), max(sig_hi_i * phi_lo, sig_hi_i * phi_hi))
-
-        # EI = U + V bounds
-        EI_lo = U_lo + V_lo
-        EI_hi = U_hi + V_hi
-
-        # If sigma was exactly zero, EI is zero
-        if flag_ei_lo_0:
-            ei_lo.append(0.0)
-        else:
-            ei_lo.append(max(EI_lo, 0))
-        ei_hi.append(max(EI_hi, 0))
-
-    return np.array(ei_lo), np.array(ei_hi)
-
-def _ei_bounds_vectorized(mu_lo, mu_hi, sig_lo, sig_hi, n, y_min, cp, *, pad):
-    inv_pad = 1.0 / pad
-
-    # Create buffers for intermediate computations.
-    # N shares with V
-    N_lo = cp.empty(n, dtype=cp.float64)
-    N_hi = cp.empty(n, dtype=cp.float64)
-    # J shares with Phi
-    J_lo = cp.empty(n, dtype=cp.float64)
-    J_hi = cp.empty(n, dtype=cp.float64)
-    # Z shares with phi
-    Z_lo = cp.empty(n, dtype=cp.float64)
-    Z_hi = cp.empty(n, dtype=cp.float64)
-    tmp = cp.empty(n, dtype=cp.float64)
-    mask0 = cp.empty(n, dtype=bool)
-    mask1 = cp.empty(n, dtype=bool)
-
-    # N = y_min - mu
-    cp.subtract(y_min, mu_hi, out=N_lo)
-    cp.subtract(y_min, mu_lo, out=N_hi)
-
-    # J bounds = 1/sigma without divide-by-zero warnings.
-    cp.equal(sig_hi, 0.0, out=mask0)
-    J_lo[...] = inv_pad
-    J_lo[~mask0] = 1.0 / sig_hi[~mask0]
-    cp.equal(sig_lo, 0.0, out=mask1)
-    J_hi[...] = inv_pad
-    J_hi[~mask1] = 1.0 / sig_lo[~mask1]
-
-    # Z = N * J.
-    _interval_product_bounds(N_lo, N_hi, J_lo, J_hi, cp, Z_lo, Z_hi, tmp)
-
-    # Phi(Z), stored in J buffers.
-    _norm_cdf(Z_lo, cp, out=J_lo)
-    _norm_cdf(Z_hi, cp, out=J_hi)
-
-    # Track where [Z_lo, Z_hi] crosses zero (needed for phi upper bound).
-    cp.less_equal(Z_lo, 0.0, out=mask0)
-    cp.greater_equal(Z_hi, 0.0, out=mask1)
-    cp.logical_and(mask0, mask1, out=mask0)
-
-    # phi(Z), stored in Z buffers.
-    _norm_pdf(Z_lo, cp, out=Z_lo)
-    _norm_pdf(Z_hi, cp, out=Z_hi)
-    cp.maximum(Z_lo, Z_hi, out=tmp)
-    cp.minimum(Z_lo, Z_hi, out=Z_lo)
-    Z_hi[...] = tmp
-    Z_hi[mask0] = _INV_SQRT2PI
-
-    # U = N * Phi, stored in EI buffers for now.
-    EI_lo = cp.empty(n, dtype=cp.float64)
-    EI_hi = cp.empty(n, dtype=cp.float64)
-    _interval_product_bounds(N_lo, N_hi, J_lo, J_hi, cp, EI_lo, EI_hi, tmp)
-
-    # V = sigma * phi, stored in N buffers.
-    _interval_product_bounds(sig_lo, sig_hi, Z_lo, Z_hi, cp, N_lo, N_hi, tmp)
-
-    # EI = U + V
-    cp.add(EI_lo, N_lo, out=EI_lo)
-    cp.add(EI_hi, N_hi, out=EI_hi)
-    cp.maximum(EI_lo, 0.0, out=EI_lo)
-    cp.maximum(EI_hi, 0.0, out=EI_hi)
-
-    # If sigma interval hits zero exactly, enforce the same EI conventions as before.
-    cp.equal(sig_hi, 0.0, out=mask0)
-    EI_hi[mask0] = 0.0
-    cp.equal(sig_lo, 0.0, out=mask1)
-    cp.logical_or(mask0, mask1, out=mask1)
-    EI_lo[mask1] = 0.0
-
-    return EI_lo, EI_hi
-
-def _interval_product_bounds(a_lo, a_hi, b_lo, b_hi, xp, out_lo, out_hi, tmp):
-    """Compute interval bounds for elementwise products [a_lo, a_hi] * [b_lo, b_hi]."""
-    xp.multiply(a_lo, b_lo, out=out_lo)
-    out_hi[...] = out_lo
-
-    xp.multiply(a_lo, b_hi, out=tmp)
-    xp.minimum(out_lo, tmp, out=out_lo)
-    xp.maximum(out_hi, tmp, out=out_hi)
-
-    xp.multiply(a_hi, b_lo, out=tmp)
-    xp.minimum(out_lo, tmp, out=out_lo)
-    xp.maximum(out_hi, tmp, out=out_hi)
-
-    xp.multiply(a_hi, b_hi, out=tmp)
-    xp.minimum(out_lo, tmp, out=out_lo)
-    xp.maximum(out_hi, tmp, out=out_hi)
-
-def _norm_cdf(z, xp, *, out=None):
-    """Exact standard normal CDF on cupy arrays, with output reuse."""
-    from cupyx.scipy.special import ndtr
-
-    z = xp.asarray(z, dtype=xp.float64)
-    if out is None:
-        out = xp.empty_like(z)
-    return ndtr(z, out=out)
-
-def _norm_pdf(z,xp, *, out=None):
-    z = xp.asarray(z, dtype=xp.float64)
-    if out is None:
-        out = xp.empty_like(z)
-
-    # PDF(z) = (1 / sqrt(2*pi)) * exp(-0.5 * z^2)
-    xp.multiply(z, z, out=out)
-    xp.multiply(out, -0.5, out=out)
-    xp.exp(out, out=out)
-    xp.multiply(out, _INV_SQRT2PI, out=out)
+def _log_ei_corner(mu, sig, y_min, pad, xp, backend):
+    """log EI(mu, sig) elementwise, with the sigma -> 0 limit log(max(y_min - mu, 0))."""
+    tiny = sig < pad
+    sig_safe = xp.where(tiny, 1.0, sig)
+    out = log_expected_improvement(mu, sig_safe, y_min, backend=backend)
+    if bool(xp.any(tiny)):
+        improvement = xp.maximum(y_min - mu, 0.0)
+        with np.errstate(divide="ignore"):
+            out = xp.where(tiny, xp.log(improvement), out)
     return out

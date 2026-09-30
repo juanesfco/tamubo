@@ -1,0 +1,9 @@
+autobound==0.1.7
+cupy-cuda13x==14.2.0
+jax[cuda13]==0.8.2
+matplotlib
+numpy
+pytest
+scikit-learn
+scipy
+typing_extensions

@@ -20,9 +20,9 @@ from tamubo.utils import (
     resolve_backend,
     to_numpy,
 )
-from tamubo.acquisition_functions import expected_improvement
+from tamubo.acquisition_functions import expected_improvement, log_expected_improvement
 from tamubo.gpugp.posterior import gp_posterior
-from .bounds import rbf_k_bounds, mu_bounds, sigma_bounds, ei_bounds
+from .bounds import rbf_k_bounds, mu_bounds, sigma_bounds, sigma_bound_factors, ei_bounds
 from .partition import split_boxes
 
 def _normalize_epsilon(epsilon: np.ndarray | float, dim: int) -> np.ndarray:
@@ -56,6 +56,8 @@ class _GPState:
     X_train: Any
     alpha: Any
     L: Any
+    L_inv: Any  # L^{-1}, for the sigma bounds
+    K_inv: Any  # (K + sigma_n^2 I)^{-1}, for the AutoBound variance bounds
     length_scale: Any
     unit_design: Any
 
@@ -72,7 +74,9 @@ def _resolve_devices(xp, n_gpus: int | None) -> list[int | None]:
     return [main] + [i for i in range(available) if i != main][: n - 1]
 
 
-def _build_gp_state(xp, device: int | None, X: np.ndarray, gp, unit_design: np.ndarray) -> _GPState:
+def _build_gp_state(
+    xp, device: int | None, X: np.ndarray, gp, unit_design: np.ndarray, L_inv: np.ndarray
+) -> _GPState:
     """Copy the trained GP's arrays to `device` (built from host arrays, no peer copies)."""
     params = gp.kernel_.get_params()
     with (xp.cuda.Device(device) if device is not None else nullcontext()):
@@ -81,6 +85,8 @@ def _build_gp_state(xp, device: int | None, X: np.ndarray, gp, unit_design: np.n
             X_train=xp.asarray(X, dtype=xp.float64),
             alpha=xp.asarray(gp.alpha_, dtype=xp.float64).reshape(-1),
             L=xp.asarray(gp.L_, dtype=xp.float64),
+            L_inv=xp.asarray(L_inv, dtype=xp.float64),
+            K_inv=xp.asarray(L_inv.T @ L_inv, dtype=xp.float64),
             length_scale=xp.asarray(params["k1__k2__length_scale"], dtype=xp.float64),
             unit_design=xp.asarray(unit_design, dtype=xp.float64),
         )
@@ -206,6 +212,10 @@ def exactbo(
     backend: BackendName = "auto",
     n_gpus: int | None = None,
     box_sampling: str = "lhs",
+    acquisition: str = "logei",
+    bound_method: str = "autobound",
+    autobound_degree: int = 2,
+    autobound_batch_size: int = 8192,
     predict_batch_size: int | None = None,
     bounds_batch_size: int | None = None,
     max_target_boxes: int | None = None,
@@ -226,8 +236,11 @@ def exactbo(
     epsilon_X : float or ndarray, shape (d,)
         Partition termination threshold(s) for the input space.
     epsilon_ei : float
-        Threshold for the expected improvement values in the GP's
-        standardized target space.
+        Pruning tolerance: a box is discarded once its acquisition upper bound
+        is within ``epsilon_ei`` of the best sampled value. With
+        ``acquisition="logei"`` it is a tolerance on log EI (relative: 0.1
+        keeps boxes that could beat the best EI by more than ~10.5%); with
+        ``"ei"`` it is absolute, in the GP's standardized target space.
     gp : sklearn-like regressor
         Surrogate model with .fit/.predict plus sklearn GP attributes.
     f : callable
@@ -245,6 +258,20 @@ def exactbo(
         Where EI is sampled inside each analyzed/active box: ``"lhs"`` at 2**d
         centered Latin-hypercube points, ``"center"`` only at the box center
         (2**d times fewer posterior evaluations and less sampling memory).
+    acquisition : {"logei", "ei"}, default="logei"
+        Score sampled points and bound boxes with the numerically stable log EI
+        (finite even where EI underflows to 0) or with plain EI. Sets the
+        meaning of ``epsilon_ei``.
+    bound_method : {"autobound", "interval"}, default="autobound"
+        ``"interval"`` bounds each kernel entry separately (cheap, loose for
+        large boxes). ``"autobound"`` also bounds the posterior mean and
+        variance as whole functions of x with AutoBound Taylor enclosures
+        (requires ``jax`` and ``autobound``) and keeps the tighter of the two.
+    autobound_degree : int, default=2
+        Taylor degree for ``bound_method="autobound"``.
+    autobound_batch_size : int, default=8192
+        Boxes per AutoBound call (per GPU); memory is ~125 kB per box at
+        N=32, d=10, degree 2.
     predict_batch_size : int, optional
         Max number of query points per GP posterior prediction call during
         partitioning (per GPU). If None, an automatic memory-aware value is used.
@@ -332,6 +359,10 @@ def exactbo(
             backend=backend_info.selected,
             n_gpus=n_gpus,
             box_sampling=box_sampling,
+            acquisition=acquisition,
+            bound_method=bound_method,
+            autobound_degree=autobound_degree,
+            autobound_batch_size=autobound_batch_size,
             predict_batch_size=predict_batch_size,
             bounds_batch_size=bounds_batch_size,
             max_target_boxes=max_target_boxes,
@@ -376,6 +407,10 @@ def exactbo_partitioning(
     backend: BackendName = "auto",
     n_gpus: int | None = None,
     box_sampling: str = "lhs",
+    acquisition: str = "logei",
+    bound_method: str = "autobound",
+    autobound_degree: int = 2,
+    autobound_batch_size: int = 8192,
     predict_batch_size: int | None = None,
     bounds_batch_size: int | None = None,
     max_target_boxes: int | None = None,
@@ -395,8 +430,9 @@ def exactbo_partitioning(
     epsilon_X : float or ndarray, shape (d,)
         Partition termination threshold(s) for the input space.
     epsilon_ei : float
-        Threshold for the expected improvement values in the GP's
-        standardized target space.
+        Pruning tolerance on the acquisition values: log EI for
+        ``acquisition="logei"``, EI in the GP's standardized target space for
+        ``"ei"``.
     gp : sklearn-like regressor
         Surrogate model with .fit/.predict plus sklearn GP attributes.
     iteration : int
@@ -411,6 +447,20 @@ def exactbo_partitioning(
     box_sampling : {"lhs", "center"}, default="lhs"
         Sample EI at 2**d centered Latin-hypercube points per box, or only at
         the box center.
+    acquisition : {"logei", "ei"}, default="logei"
+        Score sampled points and bound boxes with the numerically stable log EI
+        (finite even where EI underflows to 0) or with plain EI. Sets the
+        meaning of ``epsilon_ei``.
+    bound_method : {"autobound", "interval"}, default="autobound"
+        ``"interval"`` bounds each kernel entry separately (cheap, loose for
+        large boxes). ``"autobound"`` also bounds the posterior mean and
+        variance as whole functions of x with AutoBound Taylor enclosures
+        (requires ``jax`` and ``autobound``) and keeps the tighter of the two.
+    autobound_degree : int, default=2
+        Taylor degree for ``bound_method="autobound"``.
+    autobound_batch_size : int, default=8192
+        Boxes per AutoBound call (per GPU); memory is ~125 kB per box at
+        N=32, d=10, degree 2.
     predict_batch_size : int, optional
         Max number of query points per GP posterior prediction call (per GPU).
         If None, an automatic memory-aware value is used.
@@ -476,16 +526,26 @@ def exactbo_partitioning(
     else:
         raise ValueError(f"box_sampling must be 'lhs' or 'center', got {box_sampling!r}.")
     points_per_box = unit_design.shape[0]
+    if acquisition not in ("logei", "ei"):
+        raise ValueError(f"acquisition must be 'logei' or 'ei', got {acquisition!r}.")
+    use_log = acquisition == "logei"
+    if bound_method == "autobound":
+        from .autobound_bounds import taylor_mu_q_bounds
+    elif bound_method != "interval":
+        raise ValueError(f"bound_method must be 'autobound' or 'interval', got {bound_method!r}.")
+    # GP-only factors of the sigma bounds, computed once on the host.
+    L_inv, lambda_max = sigma_bound_factors(gp.L_)
     # One copy of the trained GP per device; per-box work is sharded across them.
     states = [
-        _build_gp_state(xp, device, X, gp, unit_design)
+        _build_gp_state(xp, device, X, gp, unit_design, L_inv)
         for device in _resolve_devices(xp, n_gpus)
     ]
     _prepare_devices(xp, states)
     # Per-box GPU work estimates that decide how many devices a call uses:
-    # EI bounds do ~3 N^2 elementwise ops per box (sigma forward substitution);
+    # interval EI bounds do a few N^2 ops per box (sigma GEMMs); AutoBound's
+    # degree-2 enclosure carries N*d^2 coefficients through ~100s of ops;
     # sampling evaluates the posterior (~N^2 each) at points_per_box points per box.
-    bounds_work_per_box = 3.0 * N * N
+    bounds_work_per_box = 3.0 * N * N + (600.0 * N * d * d if bound_method == "autobound" else 0.0)
     sample_work_per_box = float(points_per_box) * N * N
     w = bounds_U[0] - bounds_L[0]  # Bounds with per dimension (d,)
     epsilon_X = xp.asarray(epsilon_X, dtype=xp.float64)
@@ -495,17 +555,27 @@ def exactbo_partitioning(
     n_target_start = 1
     idx_best_global = 0
     n_total = 1
+    # Best sampled point over all partitions (the incumbent). Children are sampled
+    # at new points, so a partition's best can be below an earlier one; pruning
+    # against the incumbent is valid (it is an attained value) and never weaker.
+    best_x_incumbent = None
+    best_score_incumbent = -math.inf
 
     # Initialize log
     log = _init_log(logMask)
+    if logMask:
+        log["partitions"] = []
 
-    def _finalize_result(best_x, ei_max_value: float) -> BOResult:
+    def _finalize_result(best_x, score_max: float) -> BOResult:
         best_x_result = to_numpy(best_x).astype(np.float64, copy=False)
         if logMask:
             t1 = now()
+            ei_max_scaled = math.exp(score_max) if use_log else score_max
             log["time"] = t1 - t0
-            log["ei_max"] = float(ei_max_value * y_train_std)
-            log["ei_max_scaled"] = float(ei_max_value)
+            log["ei_max"] = float(ei_max_scaled * y_train_std)
+            log["ei_max_scaled"] = float(ei_max_scaled)
+            if use_log:
+                log["log_ei_max_scaled"] = float(score_max)
         return BOResult(X=best_x_result, log=log)
 
     def _predict_with_std(state, points):
@@ -603,6 +673,25 @@ def exactbo_partitioning(
                 backend=backend,
                 validation=validation,
             )
+            q_bounds = None
+            if bound_method == "autobound":
+                # Whole-function Taylor bounds; keep the tighter of both methods.
+                ab_mu_lo, ab_mu_hi, ab_q_lo, ab_q_hi = taylor_mu_q_bounds(
+                    chunk_L,
+                    chunk_U,
+                    state.X_train,
+                    state.alpha,
+                    state.K_inv,
+                    state.length_scale,
+                    sigma_f_2,
+                    xp=xp,
+                    degree=autobound_degree,
+                    batch_size=autobound_batch_size,
+                )
+                xp.maximum(mu_lo, ab_mu_lo, out=mu_lo)
+                xp.minimum(mu_hi, ab_mu_hi, out=mu_hi)
+                q_bounds = (ab_q_lo, ab_q_hi)
+                del ab_mu_lo, ab_mu_hi
             sig_lo, sig_hi = sigma_bounds(
                 K_lo,
                 K_hi,
@@ -614,6 +703,9 @@ def exactbo_partitioning(
                 scaled_output=True,
                 backend=backend,
                 validation=validation,
+                L_inv=state.L_inv,
+                lambda_max=lambda_max,
+                q_bounds=q_bounds,
             )
             _, ei_hi_chunk = ei_bounds(
                 mu_lo,
@@ -624,9 +716,10 @@ def exactbo_partitioning(
                 y_min_scaled,
                 backend=backend,
                 validation=validation,
+                log=use_log,
             )
             ei_hi[start:end] = ei_hi_chunk
-            del K_lo, K_hi, mu_lo, mu_hi, sig_lo, sig_hi, ei_hi_chunk
+            del K_lo, K_hi, mu_lo, mu_hi, sig_lo, sig_hi, ei_hi_chunk, q_bounds
         return (ei_hi,)
 
     def _sampled_box_best_ei(state, boxes_L, boxes_U):
@@ -666,7 +759,8 @@ def exactbo_partitioning(
             sigma_chunk_lat = xp.sqrt(
                 xp.clip(sigma_chunk**2 - sigma_n_2, 1e-12, None)
             )
-            ei_chunk = expected_improvement(
+            acquisition_fn = log_expected_improvement if use_log else expected_improvement
+            ei_chunk = acquisition_fn(
                 mu_chunk,
                 sigma_chunk_lat,
                 y_min_scaled,
@@ -817,9 +911,11 @@ def exactbo_partitioning(
             bounds_U_target[idx_ei_max_analyze_local] - bounds_L_target[idx_ei_max_analyze_local]
         )  # (d,)
         del analyze_best_points, ei_analyze
+        if ei_max_analyze > best_score_incumbent:
+            best_x_incumbent, best_score_incumbent = best_x_analyze, ei_max_analyze
 
-        # Active boxes are the ones where ei_hi is higher than ei_max_analyze plus epsilon_ei,
-        active_boxes_mask = ei_hi > (ei_max_analyze + epsilon_ei)  # (n_target_start,)
+        # Active boxes are the ones where ei_hi is higher than the incumbent plus epsilon_ei,
+        active_boxes_mask = ei_hi > (best_score_incumbent + epsilon_ei)  # (n_target_start,)
         n_active = int(xp.sum(active_boxes_mask))
         
         # No active boxes and max EI box is smaller than epsilon_X, return the best point found
@@ -837,7 +933,7 @@ def exactbo_partitioning(
             #        "bounds_U": np.asarray(bounds_U),
             #        "target_boxes_mask": np.zeros((n,), dtype=bool),
             #    }
-            return _finalize_result(best_x_analyze, ei_max_analyze)
+            return _finalize_result(best_x_incumbent, best_score_incumbent)
         else:
             # Ensure the box with the highest analyzed EI is also active.
             active_boxes_mask[idx_ei_max_analyze_local] = True
@@ -867,10 +963,22 @@ def exactbo_partitioning(
         best_x_active = xp.array(active_best_points[idx_best], dtype=xp.float64)
         w_max_ei_active = bounds_U_target[idx_best_local] - bounds_L_target[idx_best_local]  # (d,)
         del active_best_points
+        if ei_max_active > best_score_incumbent:
+            best_x_incumbent, best_score_incumbent = best_x_active, ei_max_active
 
-        # Target boxes are the ones where ei_hi is more than epsilon_ei plus ei_max.
-        target_boxes_mask[:n_target_start] = ei_hi > (ei_max_active + epsilon_ei)
+        # Target boxes are the ones where ei_hi is more than epsilon_ei plus the incumbent.
+        target_boxes_mask[:n_target_start] = ei_hi > (best_score_incumbent + epsilon_ei)
         n_target = int(xp.sum(target_boxes_mask))
+        if logMask:
+            log["partitions"].append({
+                "n_boxes": int(n_target_start),
+                "n_analyze": n_analyze,
+                "n_active": n_active,
+                "n_target": n_target,
+                "max_ei_hi": max_ei_hi,
+                "best": best_score_incumbent,
+                "time": now() - t0,
+            })
 
         # No target boxes and max EI box is smaller than epsilon_X, return the best point found
         if n_target == 0 and xp.all(w_max_ei_active < epsilon_X):
@@ -887,7 +995,7 @@ def exactbo_partitioning(
             #        "bounds_U": np.asarray(bounds_U),
             #        "target_boxes_mask": np.zeros((n,), dtype=bool),
             #    }
-            return _finalize_result(best_x_active, ei_max_active)
+            return _finalize_result(best_x_incumbent, best_score_incumbent)
         else:
             # Ensure the box with the highest active EI is also a target box.
             idx_best_global = int(idx_best_local)
@@ -903,7 +1011,7 @@ def exactbo_partitioning(
             keep = min(max_target_boxes, n_target)
             # Target boxes are a subset of active boxes, so use active ordering
             # directly and avoid the expensive searchsorted/multi-sort path.
-            target_in_active_mask = ei_hi[active_local_idx] > (ei_max_active + epsilon_ei)
+            target_in_active_mask = ei_hi[active_local_idx] > (best_score_incumbent + epsilon_ei)
             target_in_active_mask[idx_best] = True
             target_local_idx = active_local_idx[target_in_active_mask]
             target_ei_active = ei_active[target_in_active_mask]
@@ -933,7 +1041,7 @@ def exactbo_partitioning(
             print(
                 f"  Boxes: {n_total}, Analyzed: {n_analyze}, Active: {n_active}, Target: {n_target},\n"
                 f"  Max EI_hi: {max_ei_hi:.6f}, Max EI Analyzed: {ei_max_analyze:.6f}, Max EI Active: {ei_max_active:.6f},\n" 
-                f"  Max Width: {w_max}."
+                f"  Incumbent: {best_score_incumbent:.6f}, Max Width: {w_max}."
             )
 
         # Uncomment this for 2D animations
@@ -963,4 +1071,4 @@ def exactbo_partitioning(
                 backend=backend,
                 validation=validation,
             )
-    return _finalize_result(best_x_active, ei_max_active)
+    return _finalize_result(best_x_incumbent, best_score_incumbent)

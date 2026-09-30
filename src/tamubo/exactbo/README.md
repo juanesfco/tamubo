@@ -34,7 +34,9 @@ from tamubo.exactbo import (
 
 - `run.py`: ExactBO loop and partitioning implementation.
 - `partition.py`: NumPy and CuPy box splitting behind `split_boxes(...)`.
-- `bounds.py`: GP kernel/mean/standard-deviation/EI bound propagation.
+- `bounds.py`: GP kernel/mean/standard-deviation/EI interval bounds.
+- `autobound_bounds.py`: AutoBound (JAX) Taylor-enclosure bounds on the
+  posterior mean and variance; imported only when `bound_method="autobound"`.
 - `plot2D.py`: 2D plotting and animation helpers.
 - `__init__.py`: package exports.
 
@@ -67,6 +69,47 @@ Peak sampling memory per GPU is set by `predict_batch_size` (points per
 posterior call). Center sampling lowers it only when a GPU's share of sampled
 boxes is below that cap; with multiple GPUs each GPU gets 1/n of the boxes, so
 `"center"` plus several GPUs is what brings large 10-d searches within memory.
+
+### Acquisition: log EI
+
+`acquisition="logei"` (default) scores sampled points and bounds boxes with log
+EI, computed stably after LogEI (Ament et al., NeurIPS 2023): EI underflows to
+0 (and cancels catastrophically before that) once z = (y_min - mu)/sigma drops
+below ~-38, which in 10-d covers most of the space far from the data; log EI
+stays finite and ordered there. `epsilon_ei` is then a tolerance on log EI,
+i.e. relative: a box is pruned once its upper bound is below
+`exp(epsilon_ei)` times the incumbent EI (`0.1` ~ 10.5%). `acquisition="ei"`
+keeps the absolute tolerance in the GP's standardized target space.
+
+### Bounds
+
+Each box gets an upper bound on the acquisition over the box; boxes whose
+bound is within `epsilon_ei` of the incumbent (the best sampled value over all
+partitions so far) are pruned. Upper bounds are built as:
+
+1. Kernel entries: exact per-entry range of `k(x, x_i)` over the box.
+2. Mean: `k^T alpha` split by the sign of alpha (interval), intersected with
+   the AutoBound range (below).
+3. Variance: `Q = ||L^{-1} k||^2`. Each `v_j = (L^{-1} k)_j` is linear in k, so
+   its range over the kernel box is exact from the sign split of `L^{-1}`
+   (unlike interval forward substitution, whose intervals widen row by row);
+   also `Q >= ||k_lo||^2 / lambda_max(K + sigma_n^2 I)`. Intersected with the
+   AutoBound range of Q.
+4. EI: EI is decreasing in mu and increasing in sigma, so its exact range over
+   the (mu, sigma) rectangle is `[EI(mu_hi, sig_lo), EI(mu_lo, sig_hi)]`.
+
+`bound_method="autobound"` (default) adds Taylor enclosures from
+[AutoBound](https://github.com/google/autobound) of mu(x) and Q(x) as whole
+functions of x around the box center. Per-entry intervals ignore that all
+kernel entries depend on the same x, so with mixed-sign alpha they overestimate
+mu by ~sum |alpha_i| (k_hi_i - k_lo_i), which only shrinks linearly with the box
+width; the Taylor remainder shrinks like width^degree. On the 10-d experiment-2
+GP, the mean bound's overestimate shrinks ~9x at 10 trisections, ~70x at 20
+and ~250x at 50 compared with the interval bound (on the largest boxes both are
+loose and the interval one can win, hence the intersection). `autobound_degree=3`
+is tighter still but ~60x slower at d=10. The first call per run compiles two
+XLA programs (a few seconds); set `JAX_COMPILATION_CACHE_DIR` to reuse them
+across runs. `bound_method="interval"` skips AutoBound (no JAX needed).
 
 ### NumPy vs CuPy
 
@@ -137,8 +180,13 @@ print(result.X.shape, result.y.shape)
 - `epsilon_X` may be a scalar or a per-dimension array with shape `(d,)`.
 - `normalize_to_unit_cube=True` runs the internal search on `[0, 1]^d` while
   still evaluating the objective in the original finite bounds.
-- `predict_batch_size`, `bounds_batch_size`, and `max_target_boxes` are exposed
-  for memory/performance control on large runs.
+- `predict_batch_size`, `bounds_batch_size`, `autobound_batch_size` and
+  `max_target_boxes` are exposed for memory/performance control on large runs.
+  `max_target_boxes` keeps the best boxes by sampled EI, so a run that hits the
+  cap is a heuristic search, not an exact one.
+- With `logMask=True`, `log["partitions"]` records per-partition box counts,
+  the largest upper bound, the incumbent and the elapsed time. See
+  `experiments/exactbo/experiment3/` for the bound-tightness study.
 - `plot_f(...)` works independently for 2D problems.
 - `plot_log(...)` and `plot_opt(...)` expect partition snapshots (`p0`, `p1`,
   ...) in the log structure. The current `exactbo(..., logMask=True)` runner

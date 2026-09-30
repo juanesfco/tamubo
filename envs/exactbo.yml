@@ -11,3 +11,7 @@ dependencies:
   - cuda-version=12.9
   - ipykernel
   - pip
+  - pip:
+      - jax[cuda12]==0.8.2
+      - autobound==0.1.7
+      - typing_extensions
