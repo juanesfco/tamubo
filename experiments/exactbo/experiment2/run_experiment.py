@@ -229,6 +229,7 @@ def _run_framework(
             max_iters=max_iters,
             max_partitions=int(exactbo_cfg["max_partitions"]),
             backend=str(exactbo_cfg.get("backend", "auto")),
+            box_sampling=str(exactbo_cfg.get("box_sampling", "lhs")),
             predict_batch_size=exactbo_cfg.get("predict_batch_size"),
             bounds_batch_size=exactbo_cfg.get("bounds_batch_size"),
             max_target_boxes=exactbo_cfg.get("max_target_boxes"),

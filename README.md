@@ -18,11 +18,13 @@ Use the environment that matches your workflow:
 
 ## ExactBO Backends
 
-`tamubo.exactbo` now supports a backend selector with CPU fallback:
+`tamubo.exactbo` supports a backend selector with CPU fallback:
 
-- `backend="numpy"`: sequential CPU path (current stable implementation).
-- `backend="cupynumeric"`: vectorized GPU-oriented path (requires `cupynumeric`).
-- `backend="auto"`: picks `cupynumeric` when available, else falls back to `numpy`.
+- `backend="numpy"`: sequential CPU path.
+- `backend="cupy"`: vectorized GPU path (requires `cupy`). Per-box work is
+  split across all visible GPUs of the node (single process); limit it with
+  `n_gpus=`.
+- `backend="auto"`: picks `cupy` when a GPU is visible, else falls back to `numpy`.
 
 Unified entry point:
 
@@ -48,13 +50,14 @@ print(result.X.shape, result.y.shape)
 
 There are multiple ways to run `tamubo.exactbo`:
 
-1. `conda` (recommended, most stable): `envs/exactbo.yml`
+1. `conda` (recommended): `envs/exactbo.yml`
 2. `pip` build: `envs/exactbo.txt`
-3. `pip` fallback without `cupynumeric`: `envs/exactbo_nocp.txt`
+3. `pip` CPU-only fallback (no `cupy`): `envs/exactbo_cpu.txt`
 
-### Option 1: Conda (Most Stable)
+### Option 1: Conda (Recommended)
 
-Use this when possible. It has the same hardware/runtime expectations as Legate and requires an NVIDIA GPU.
+Requires an NVIDIA GPU; conda-forge's `cupy` brings its own CUDA libraries.
+Solves on both `linux-64` and `linux-aarch64`.
 
 ```bash
 git clone https://github.com/juanesfco/tamubo.git
@@ -77,9 +80,10 @@ pip install -r envs/exactbo.txt
 pip install -e .
 ```
 
-If `cupynumeric` cannot be built/resolved in your environment, use the fallback below.
+The `cupy-cuda12x` wheel uses the system CUDA 12 runtime; on clusters load it
+first (on TAMU Vision: `module load CUDA/12.9.1`).
 
-### Option 3: Pip Fallback Without cupynumeric
+### Option 3: Pip CPU-Only Fallback
 
 ```bash
 git clone https://github.com/juanesfco/tamubo.git
@@ -87,7 +91,7 @@ cd tamubo
 python -m venv venvs/tamubo_exactbo
 source venvs/tamubo_exactbo/bin/activate
 pip install -U pip
-pip install -r envs/exactbo_nocp.txt
+pip install -r envs/exactbo_cpu.txt
 pip install -e .
 ```
 
@@ -101,13 +105,11 @@ For BO scripts that depend on `torch`, use the NVIDIA PyTorch container setup:
 
 See [`envs/pytorch/README.md`](envs/pytorch/README.md) for full usage.
 
-This torch container does not include `cupynumeric`.
-
 ## Environment Strategy
 
 Use one environment per usage:
 
-- `exactbo`: `envs/exactbo.yml`, `envs/exactbo.txt`, `envs/exactbo_nocp.txt`
+- `exactbo`: `envs/exactbo.yml`, `envs/exactbo.txt`, `envs/exactbo_cpu.txt`
 - `bo` (torch-based): `envs/pytorch/`
 - `envs/gpugp.yml` (planned)
 - `envs/mobbo.yml` (planned)
@@ -120,7 +122,7 @@ tamubo/
 ├── envs/                         # environments by usage/framework
 │   ├── exactbo.yml
 │   ├── exactbo.txt
-│   ├── exactbo_nocp.txt
+│   ├── exactbo_cpu.txt
 │   └── pytorch/
 ├── examples/                     # lightweight runnable demos
 │   ├── bo/
@@ -148,7 +150,7 @@ Use `development/` for work-in-progress and keep that work on dedicated branches
 
 Suggested flow:
 
-1. Create a feature branch (example: `dev/exactbo-cupynumeric`).
+1. Create a feature branch (example: `dev/exactbo-multigpu`).
 2. Iterate in `development/`.
 3. Promote mature outputs:
    - reusable library code -> `src/tamubo/`

@@ -12,5 +12,4 @@ python-dateutil==2.9.0.post0
 scikit-learn==1.8.0
 scipy==1.17.0
 six==1.17.0
--e git+https://github.com/juanesfco/tamubo.git@94b48d5e0e2b7dba60c2d56bcbfaf3475e63d6c0#egg=tamubo
 threadpoolctl==3.6.0

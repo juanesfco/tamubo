@@ -33,7 +33,7 @@ from tamubo.exactbo import (
 ## Package Layout
 
 - `run.py`: ExactBO loop and partitioning implementation.
-- `partition.py`: NumPy and cuPyNumeric box splitting behind `split_boxes(...)`.
+- `partition.py`: NumPy and CuPy box splitting behind `split_boxes(...)`.
 - `bounds.py`: GP kernel/mean/standard-deviation/EI bound propagation.
 - `plot2D.py`: 2D plotting and animation helpers.
 - `__init__.py`: package exports.
@@ -43,8 +43,37 @@ from tamubo.exactbo import (
 The current runner accepts:
 
 - `backend="numpy"`: sequential NumPy path.
-- `backend="cupynumeric"`: vectorized cuPyNumeric path.
-- `backend="auto"`: chooses cuPyNumeric when available, otherwise NumPy.
+- `backend="cupy"`: vectorized CuPy path.
+- `backend="auto"`: chooses CuPy when a GPU is visible, otherwise NumPy.
+
+### Multiple GPUs (CuPy)
+
+`exactbo(..., n_gpus=None)` splits the per-box work — EI upper bounds and the
+2^d sampled points per box, which dominate the run time — row-wise across the
+visible GPUs of one node, one thread per GPU in a single process. Box storage,
+reductions and splitting stay on the current GPU. `n_gpus=None` uses every
+visible GPU (under Slurm: the GPUs allocated to the job); `predict_batch_size`
+and `bounds_batch_size` apply per GPU.
+
+### Box sampling
+
+`box_sampling` sets where EI is sampled inside each analyzed/active box:
+
+- `"lhs"` (default): 2^d centered Latin-hypercube points per box.
+- `"center"`: the box center only — 2^d times fewer GP posterior evaluations
+  (1024x at d=10).
+
+Peak sampling memory per GPU is set by `predict_batch_size` (points per
+posterior call). Center sampling lowers it only when a GPU's share of sampled
+boxes is below that cap; with multiple GPUs each GPU gets 1/n of the boxes, so
+`"center"` plus several GPUs is what brings large 10-d searches within memory.
+
+### NumPy vs CuPy
+
+Box splitting breaks ties between equal-width dimensions with `argsort`.
+CuPy's `argsort` is stable; NumPy's default batched `argsort` is not, so boxes
+with tied widths can be split in a different dimension order (equally valid
+children, possibly a different trajectory).
 
 The resolved backend is available on `result.backend.selected` when using
 `exactbo(...)`.

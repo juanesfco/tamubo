@@ -1,43 +1,19 @@
 from __future__ import annotations
 
-from importlib import import_module
 from typing import Any
 
 import numpy as np
 from scipy.stats import norm
 
-from tamubo.utils import BackendName, resolve_backend
+from tamubo.utils import BackendName, get_array_module as _array_module
 
 __all__ = ["expected_improvement"]
-
-def _array_module(backend: BackendName = "auto"):
-    """Return the resolved array module (`numpy` or `cupynumeric`)."""
-    backend_info = resolve_backend(backend)
-    if backend_info.selected == "numpy":
-        return np
-    # Import cupynumeric only when it is the selected backend.
-    return import_module("cupynumeric")
-
-def _erf_approx(x: Any, xp) -> Any:
-    """Abramowitz & Stegun 7.1.26 approximation of erf(x)."""
-    p = 0.3275911
-    a1 = 0.254829592
-    a2 = -0.284496736
-    a3 = 1.421413741
-    a4 = -1.453152027
-    a5 = 1.061405429
-
-    sign = xp.sign(x)
-    ax = xp.abs(x)
-    t = 1.0 / (1.0 + p * ax)
-    y = 1.0 - (((((a5 * t + a4) * t + a3) * t + a2) * t + a1) * t) * xp.exp(-ax * ax)
-    return sign * y
 
 def _norm_cdf(z: Any, xp) -> Any:
     if xp is np:
         return norm.cdf(z)
-    sqrt2 = xp.sqrt(2.0)
-    return 0.5 * (1.0 + _erf_approx(z / sqrt2, xp))
+    from cupyx.scipy.special import ndtr
+    return ndtr(z)
 
 def _norm_pdf(z: Any, xp) -> Any:
     if xp is np:
@@ -63,7 +39,7 @@ def expected_improvement(
         Predictive standard deviations (non-zero).
     y_min : float
         Best observed objective value (broadcastable to mu/sigma).
-    backend : {"auto", "numpy", "cupynumeric"}, default="auto"
+    backend : {"auto", "numpy", "cupy"}, default="auto"
         Backend used for array ops.
     """
 

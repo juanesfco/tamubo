@@ -1,29 +1,20 @@
 from __future__ import annotations
 
-from importlib import import_module
 from typing import Any
 import warnings
 
 import numpy as np
 
-from tamubo.utils import BackendName, resolve_backend
+from tamubo.utils import BackendName, get_array_module as _array_module, to_numpy
 
 __all__ = ["gp_posterior"]
 
 
-def _array_module(backend: BackendName = "auto"):
-    """Return the resolved array module (`numpy` or `cupynumeric`)."""
-    backend_info = resolve_backend(backend)
-    if backend_info.selected == "numpy":
-        return np
-    return import_module("cupynumeric")
-
-
 def _to_python_bool(value: Any) -> bool:
-    """Convert numpy/cupynumeric scalar booleans into plain Python bool."""
+    """Convert numpy/cupy scalar booleans into plain Python bool."""
     if isinstance(value, (bool, np.bool_)):
         return bool(value)
-    return bool(np.asarray(value).item())
+    return bool(to_numpy(value).item())
 
 
 def _rbf_kernel(X, Y, length_scale, sigma_f_squared, xp):
@@ -96,7 +87,7 @@ def gp_posterior(
         Return posterior covariance matrix.
     include_noise : bool, default=True
         If True, include white-noise variance in predictive variance/covariance.
-    backend : {"auto", "numpy", "cupynumeric"}, default="auto"
+    backend : {"auto", "numpy", "cupy"}, default="auto"
         Array backend.
     validation : bool, default=True
         Validate input dimensions and consistency.

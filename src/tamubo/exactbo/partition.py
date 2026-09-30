@@ -1,19 +1,8 @@
 from __future__ import annotations
 
-from importlib import import_module
-
 import numpy as np
 
-from tamubo.utils import BackendName, resolve_backend
-
-
-def _array_module(backend: BackendName = "auto"):
-    """Return the resolved array module (`numpy` or `cupynumeric`)."""
-    backend_info = resolve_backend(backend)
-    if backend_info.selected == "numpy":
-        return np
-    # Import cupynumeric only when it is the selected backend.
-    return import_module("cupynumeric")
+from tamubo.utils import BackendName, get_array_module as _array_module
 
 
 def split_boxes(
@@ -33,13 +22,13 @@ def split_boxes(
 
     Parameters
     ----------
-    bounds_L : np.ndarray or cupynumeric.ndarray, shape (n, d)
+    bounds_L : np.ndarray or cupy.ndarray, shape (n, d)
         Lower bounds of the hyperboxes.
-    bounds_U : np.ndarray or cupynumeric.ndarray, shape (n, d)
+    bounds_U : np.ndarray or cupy.ndarray, shape (n, d)
         Upper bounds of the hyperboxes.
-    active_boxes_mask : np.ndarray or cupynumeric.ndarray, shape (n,)
+    active_boxes_mask : np.ndarray or cupy.ndarray, shape (n,)
         Boolean mask indicating which boxes to split.
-    domain_width : np.ndarray or cupynumeric.ndarray or scalar, shape (d,) or ()
+    domain_width : np.ndarray or cupy.ndarray or scalar, shape (d,) or ()
         Domain widths used to normalize box widths for split ordering.
     n : int
         Number of input hyperboxes.
@@ -48,16 +37,16 @@ def split_boxes(
     keep_inactive : bool, default=True
         If True, inactive boxes are appended unchanged to the output.
         If False, only split active boxes are returned.
-    backend : {"auto", "numpy", "cupynumeric"}, default="auto"
+    backend : {"auto", "numpy", "cupy"}, default="auto"
         Backend used for array ops.
     validation : bool, default=True
         Run additional checks for validation purposes (not optimized).
 
     Returns
     -------
-    bounds_L_out : np.ndarray or cupynumeric.ndarray, shape (nt*(2*d+1) + (n-nt), d)
+    bounds_L_out : np.ndarray or cupy.ndarray, shape (nt*(2*d+1) + (n-nt), d)
         Lower bounds of the output boxes (split actives + unchanged inactives).
-    bounds_U_out : np.ndarray or cupynumeric.ndarray, shape (nt*(2*d+1) + (n-nt), d)
+    bounds_U_out : np.ndarray or cupy.ndarray, shape (nt*(2*d+1) + (n-nt), d)
         Upper bounds of the output boxes (split actives + unchanged inactives).
     """
     # Convert inputs to the appropriate array type based on the backend.   
@@ -73,13 +62,13 @@ def split_boxes(
         assert bounds_U.shape == (n, d), f"bounds_U must have shape (n, d), got {bounds_U.shape}"
         assert active_boxes_mask.shape == (n,), f"active_boxes_mask must have shape (n,), got {active_boxes_mask.shape}"
 
-    # Check if using numpy or cupynumeric
+    # Check if using numpy or cupy
     if xp is np:
         # Serial computation for numpy (more efficient for small n).
         return _split_boxes_numpy(bounds_L, bounds_U, active_boxes_mask, domain_width, n, d, keep_inactive=keep_inactive)
     else:
-        # Vectorized computation for cupynumeric (more efficient for large n).
-        return _split_boxes_cupynumeric(bounds_L, bounds_U, active_boxes_mask, domain_width, n, d, keep_inactive=keep_inactive)
+        # Vectorized computation for cupy (more efficient for large n).
+        return _split_boxes_vectorized(bounds_L, bounds_U, active_boxes_mask, domain_width, n, d, xp, keep_inactive=keep_inactive)
 
 
 def _split_boxes_numpy(bounds_L, bounds_U, active_boxes_mask, domain_width, n, d, *, keep_inactive=True):
@@ -154,9 +143,7 @@ def _split_boxes_numpy(bounds_L, bounds_U, active_boxes_mask, domain_width, n, d
     return np.array(bounds_L_out), np.array(bounds_U_out)
 
 
-def _split_boxes_cupynumeric(bounds_L, bounds_U, active_boxes_mask, domain_width, n, d, *, keep_inactive=True):
-    import cupynumeric as cp
-
+def _split_boxes_vectorized(bounds_L, bounds_U, active_boxes_mask, domain_width, n, d, cp, *, keep_inactive=True):
     # Get the bounds of the active boxes.
     active_bounds_L = bounds_L[active_boxes_mask] # (nt, d)
     active_bounds_U = bounds_U[active_boxes_mask] # (nt, d)

@@ -1,23 +1,12 @@
 from __future__ import annotations
 
-from importlib import import_module
-
 import numpy as np
 import math
 
-from tamubo.utils import BackendName, resolve_backend
+from tamubo.utils import BackendName, get_array_module as _array_module, to_numpy
 
 # Constants reused across helper calls.
-_SQRT2 = math.sqrt(2.0)
 _INV_SQRT2PI = 1.0 / math.sqrt(2.0 * math.pi)
-
-def _array_module(backend: BackendName = "auto"):
-    """Return the resolved array module (`numpy` or `cupynumeric`)."""
-    backend_info = resolve_backend(backend)
-    if backend_info.selected == "numpy":
-        return np
-    # Import cupynumeric only when it is the selected backend.
-    return import_module("cupynumeric")
 
 
 # Define rbf_k_bounds
@@ -38,10 +27,10 @@ def rbf_k_bounds(
 
     Parameters
     ----------
-    bounds_L, bounds_U : np.ndarray or cupynumeric.ndarray
+    bounds_L, bounds_U : np.ndarray or cupy.ndarray
         Lower/upper bounds for n boxes. Accepts shape (n,d),
         with box coordinates stored consecutively by dimension.
-    xi : np.ndarray or cupynumeric.ndarray
+    xi : np.ndarray or cupy.ndarray
         Query points in R^d with shape (d,).
     n : int
         Number of boxes.
@@ -51,14 +40,14 @@ def rbf_k_bounds(
         Kernel variance from the trained GP.
     length_scale : float or array-like of shape (d,)
         RBF length scale from the trained GP.
-    backend : {"auto", "numpy", "cupynumeric"}, default="auto"
+    backend : {"auto", "numpy", "cupy"}, default="auto"
         Backend used for array ops.
     validation: default=True
         Validate dimensions of inputs.
 
     Returns
     -------
-    (K_lo, K_hi) : tuple[np.ndarray or cupynumeric.ndarray, np.ndarray or cupynumeric.ndarray]
+    (K_lo, K_hi) : tuple[np.ndarray or cupy.ndarray, np.ndarray or cupy.ndarray]
         Lower and upper kernel bounds for each box, each with shape (n,).
     """
     # Convert inputs to the appropriate array type based on the backend.
@@ -105,7 +94,7 @@ def rbf_k_bounds(
 
         return xp.array(K_lo), xp.array(K_hi)
     
-    # Vectorized computation for cupynumeric (more efficient for large n).
+    # Vectorized computation for cupy (more efficient for large n).
     else:
         # Create empty buffers for the intermediate distance calculations
         diff_lo = xp.empty((n, d), dtype=xp.float64) # (n,d)
@@ -170,9 +159,9 @@ def mu_bounds(
 
     Parameters
     ----------
-    alpha : np.ndarray or cupynumeric.ndarray
+    alpha : np.ndarray or cupy.ndarray
         GP dual coefficients (typically gp.alpha_), shape (N,).
-    K_lo, K_hi : np.ndarray or cupynumeric.ndarray
+    K_lo, K_hi : np.ndarray or cupy.ndarray
         Lower/upper kernel bounds between each box and each training point,
         each with shape (n, N).
     n : int
@@ -186,14 +175,14 @@ def mu_bounds(
     scaled_output : bool, default=False
         If True, return bounds in the GP's standardized target space.
         If False, return bounds in the original target scale.
-    backend : {"auto", "numpy", "cupynumeric"}, default="auto"
+    backend : {"auto", "numpy", "cupy"}, default="auto"
         Backend used for array ops.
     validation : bool, default=True
         If True, validate shapes and sizes.
 
     Returns
     -------
-    (mu_lo, mu_hi) : tuple[np.ndarray or cupynumeric.ndarray, np.ndarray or cupynumeric.ndarray]
+    (mu_lo, mu_hi) : tuple[np.ndarray or cupy.ndarray, np.ndarray or cupy.ndarray]
         Lower and upper bounds on the mean for each box, each with shape (n,).
     """
     # Convert inputs to the appropriate array type based on the backend.
@@ -240,7 +229,7 @@ def mu_bounds(
         
         return xp.array(mu_lo), xp.array(mu_hi)
     
-    # Vectorized computation for cupynumeric (more efficient for large n).
+    # Vectorized computation for cupy (more efficient for large n).
     else:
         # Split alpha into positive/negative parts to avoid (n, N) intermediates.
         alpha_pos = xp.empty_like(alpha)
@@ -292,9 +281,9 @@ def sigma_bounds(
 
     Parameters
     ----------
-    K_lo, K_hi : np.ndarray or cupynumeric.ndarray
+    K_lo, K_hi : np.ndarray or cupy.ndarray
         Kernel bounds per box vs training points, shape (n, N).
-    L : np.ndarray or cupynumeric.ndarray
+    L : np.ndarray or cupy.ndarray
         Cholesky factor (N, N) of K + σ_n^2 I (lower triangular).
     n : int
         Number of boxes.
@@ -307,14 +296,14 @@ def sigma_bounds(
     scaled_output : bool, default=False
         If True, return bounds in the GP's standardized target space.
         If False, return bounds in the original target scale.
-    backend : {"auto", "numpy", "cupynumeric"}, default="auto"
+    backend : {"auto", "numpy", "cupy"}, default="auto"
         Backend used for array ops.
     validation : bool, default=True
         If True, validate shapes and sizes.
 
     Returns
     -------
-    (sig_lo, sig_hi) : tuple[np.ndarray or cupynumeric.ndarray, np.ndarray or cupynumeric.ndarray]
+    (sig_lo, sig_hi) : tuple[np.ndarray or cupy.ndarray, np.ndarray or cupy.ndarray]
         Lower/upper sigma bounds per box, each shape (n,).
     """
     # Convert inputs to the appropriate array type based on the backend.
@@ -332,7 +321,7 @@ def sigma_bounds(
         if K_lo.shape[1] != L.shape[0]:
             raise ValueError("K_lo/K_hi second dim must match L size.")
 
-    # Check if using numpy or cupynumeric for the computation.
+    # Check if using numpy or cupy for the computation.
     if xp is np:
         # Serial computation for numpy (more efficient for small n).
         return _sigma_bounds_numpy(
@@ -346,8 +335,8 @@ def sigma_bounds(
             scaled_output,
         )
     else:
-        # Vectorized computation for cupynumeric (more efficient for large n).
-        return _sigma_bounds_cupynumeric(
+        # Vectorized computation for GPU backends (more efficient for large n).
+        return _sigma_bounds_vectorized(
             K_lo,
             K_hi,
             L,
@@ -356,6 +345,7 @@ def sigma_bounds(
             sigma_f_2,
             y_train_std,
             scaled_output,
+            xp,
         )
     
 def _sigma_bounds_numpy(K_lo, K_hi, L, n, N, sigma_f_2, y_train_std, scaled_output):
@@ -423,8 +413,11 @@ def _sigma_bounds_numpy(K_lo, K_hi, L, n, N, sigma_f_2, y_train_std, scaled_outp
 
     return np.array(sig_lo), np.array(sig_hi)
 
-def _sigma_bounds_cupynumeric(K_lo, K_hi, L, n, N, sigma_f_2, y_train_std, scaled_output):
-    import cupynumeric as cp
+def _sigma_bounds_vectorized(K_lo, K_hi, L, n, N, sigma_f_2, y_train_std, scaled_output, cp):
+    # Read L's scalars from one host copy: indexing a device array per (j, i)
+    # would force O(N^2) blocking device-to-host transfers.
+    L = to_numpy(L)
+
     # Reuse K_lo/K_hi buffers in-place as v_lo/v_hi to avoid an additional
     # pair of (n, N) allocations on GPU.
     v_lo = K_lo
@@ -520,15 +513,15 @@ def ei_bounds(
 
     Parameters
     ----------
-    mu_lo, mu_hi : np.ndarray or cupynumeric.ndarray
+    mu_lo, mu_hi : np.ndarray or cupy.ndarray
         Mean bounds per box, shape (n,).
-    sig_lo, sig_hi : np.ndarray or cupynumeric.ndarray
+    sig_lo, sig_hi : np.ndarray or cupy.ndarray
         Sigma bounds per box, shape (n,), sig_lo >= 0.
     n : int
         Number of boxes.
     y_min : float
         Minimum of training targets in the same scale as ``mu_*`` and ``sig_*``.
-    backend : {"auto", "numpy", "cupynumeric"}, default="auto"
+    backend : {"auto", "numpy", "cupy"}, default="auto"
         Backend used for array ops.
     validation : bool, optional
         If True, validate shapes/sizes.
@@ -537,7 +530,7 @@ def ei_bounds(
 
     Returns
     -------
-    (ei_lo, ei_hi) : tuple[np.ndarray or cupynumeric.ndarray, np.ndarray or cupynumeric.ndarray]
+    (ei_lo, ei_hi) : tuple[np.ndarray or cupy.ndarray, np.ndarray or cupy.ndarray]
         EI bounds per box, shape (n,).
     """
     # Convert inputs to the appropriate array type based on the backend.
@@ -556,13 +549,13 @@ def ei_bounds(
         if mu_lo.shape != sig_lo.shape:
             raise ValueError("mu and sigma bounds must have the same shape.")
         
-    # Check if using numpy or cupynumeric for the computation.
+    # Check if using numpy or cupy for the computation.
     if xp is np:
         # Serial computation for numpy (more efficient for small n).
         return _ei_bounds_numpy(mu_lo, mu_hi, sig_lo, sig_hi, n, y_min, pad=pad)
     else:
-        # Vectorized computation for cupynumeric (more efficient for large n).
-        return _ei_bounds_cupynumeric(mu_lo, mu_hi, sig_lo, sig_hi, n, y_min, pad=pad)
+        # Vectorized computation for GPU backends (more efficient for large n).
+        return _ei_bounds_vectorized(mu_lo, mu_hi, sig_lo, sig_hi, n, y_min, xp, pad=pad)
     
 def _ei_bounds_numpy(mu_lo, mu_hi, sig_lo, sig_hi, n, y_min, pad):
     from scipy.stats import norm
@@ -631,8 +624,7 @@ def _ei_bounds_numpy(mu_lo, mu_hi, sig_lo, sig_hi, n, y_min, pad):
 
     return np.array(ei_lo), np.array(ei_hi)
 
-def _ei_bounds_cupynumeric(mu_lo, mu_hi, sig_lo, sig_hi, n, y_min, pad):
-    import cupynumeric as cp
+def _ei_bounds_vectorized(mu_lo, mu_hi, sig_lo, sig_hi, n, y_min, cp, *, pad):
     inv_pad = 1.0 / pad
 
     # Create buffers for intermediate computations.
@@ -665,8 +657,8 @@ def _ei_bounds_cupynumeric(mu_lo, mu_hi, sig_lo, sig_hi, n, y_min, pad):
     _interval_product_bounds(N_lo, N_hi, J_lo, J_hi, cp, Z_lo, Z_hi, tmp)
 
     # Phi(Z), stored in J buffers.
-    _norm_cdf(Z_lo, cp, out=J_lo, tmp=tmp)
-    _norm_cdf(Z_hi, cp, out=J_hi, tmp=tmp)
+    _norm_cdf(Z_lo, cp, out=J_lo)
+    _norm_cdf(Z_hi, cp, out=J_hi)
 
     # Track where [Z_lo, Z_hi] crosses zero (needed for phi upper bound).
     cp.less_equal(Z_lo, 0.0, out=mask0)
@@ -721,72 +713,14 @@ def _interval_product_bounds(a_lo, a_hi, b_lo, b_hi, xp, out_lo, out_hi, tmp):
     xp.minimum(out_lo, tmp, out=out_lo)
     xp.maximum(out_hi, tmp, out=out_hi)
 
-# Normal CDF/PDF using erf approximation for cupynumeric, since it doesn't have scipy.stats.norm.
-def _erf_approx(x, xp, *, out=None):
-    """
-    Approximate erf(x) using Abramowitz & Stegun 7.1.26, which has absolute error < 1.5e-7.
-    With module selection and output reuse.
-    """
-    x = xp.asarray(x, dtype=xp.float64)
-    if out is None:
-        out = xp.empty_like(x)
-    
-    # Coefficients
-    p = 0.3275911
-    a1 = 0.254829592
-    a2 = -0.284496736
-    a3 = 1.421413741
-    a4 = -1.453152027
-    a5 = 1.061405429
-    sign = xp.sign(x)
+def _norm_cdf(z, xp, *, out=None):
+    """Exact standard normal CDF on cupy arrays, with output reuse."""
+    from cupyx.scipy.special import ndtr
 
-    # Buffers for intermediate computations
-    ax = xp.empty_like(x)
-    t = xp.empty_like(x)
-    poly = xp.empty_like(x)
-
-    # t = 1 / (1 + p * |x|)
-    xp.abs(x, out=ax)
-    xp.multiply(ax, p, out=t)
-    xp.add(t, 1.0, out=t)
-    xp.divide(1.0, t, out=t)
-
-    # poly = a5*t^5 + a4*t^4 + a3*t^3 + a2*t^2 + a1*t
-    xp.multiply(t, a5, out=poly)
-    xp.add(poly, a4, out=poly)
-    xp.multiply(poly, t, out=poly)
-    xp.add(poly, a3, out=poly)
-    xp.multiply(poly, t, out=poly)
-    xp.add(poly, a2, out=poly)
-    xp.multiply(poly, t, out=poly)
-    xp.add(poly, a1, out=poly)
-    xp.multiply(poly, t, out=poly)
-
-    # exp(-x^2) = exp(-ax), where ax = x^2
-    xp.multiply(ax, ax, out=ax)
-    xp.multiply(ax, -1.0, out=ax)
-    xp.exp(ax, out=ax)
-
-    # erf = sign * (1 - poly * exp(-x^2))
-    xp.multiply(poly, ax, out=poly)
-    xp.subtract(1.0, poly, out=out)
-    xp.multiply(out, sign, out=out)
-
-    return out
-
-def _norm_cdf(z,xp, *, out=None, tmp=None):
     z = xp.asarray(z, dtype=xp.float64)
     if out is None:
         out = xp.empty_like(z)
-    if tmp is None:
-        tmp = xp.empty_like(z)
-
-    # CDF(z) = 0.5 * (1 + erf(z / sqrt(2)))
-    xp.divide(z, _SQRT2, out=tmp)
-    _erf_approx(tmp, xp, out=tmp)
-    xp.add(tmp, 1.0, out=tmp)
-    xp.multiply(tmp, 0.5, out=out)
-    return out
+    return ndtr(z, out=out)
 
 def _norm_pdf(z,xp, *, out=None):
     z = xp.asarray(z, dtype=xp.float64)

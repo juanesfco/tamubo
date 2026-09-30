@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from importlib import import_module
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import nullcontext
 from dataclasses import dataclass
-from typing import Callable
+from typing import Any, Callable
 import math
 import time as pytime
 
@@ -15,7 +16,9 @@ from tamubo.utils import (
     _from_unit_cube,
     _init_log,
     _normalize_problem_to_unit_cube,
+    get_array_module as _array_module,
     resolve_backend,
+    to_numpy,
 )
 from tamubo.acquisition_functions import expected_improvement
 from tamubo.gpugp.posterior import gp_posterior
@@ -31,70 +34,138 @@ def _normalize_epsilon(epsilon: np.ndarray | float, dim: int) -> np.ndarray:
         return eps
     raise ValueError(f"epsilon must be scalar or shape ({dim},), got {eps.shape}")
 
-def _array_module(backend: BackendName = "auto"):
-    """Return the resolved array module (`numpy` or `cupynumeric`)."""
-    backend_info = resolve_backend(backend)
-    if backend_info.selected == "numpy":
-        return np
-    # Import cupynumeric only when it is the selected backend.
-    return import_module("cupynumeric")
-
 def _get_timer(xp):
-    if xp.__name__ == "numpy":
+    """Return a zero-argument clock in seconds that waits for pending GPU work."""
+    if xp is np:
         return pytime.perf_counter
-    else:
-        legatetime = getattr(import_module("legate.timing"), "time")
-        return lambda: legatetime()
+    stream = xp.cuda.get_current_stream()
+
+    def cupy_now() -> float:
+        # Kernels launch asynchronously; sync so elapsed time covers them.
+        stream.synchronize()
+        return pytime.perf_counter()
+
+    return cupy_now
 
 
-def _force_materialization(backend: BackendName) -> None:
-    """
-    Force completion of deferred backend work.
+@dataclass
+class _GPState:
+    """Trained-GP arrays used by the per-box work, resident on one device."""
 
-    For cuPyNumeric/Legate this first issues a mapping fence to flush the
-    scheduler window and limit overlap of downstream mappings, then issues a
-    blocking execution fence so all previously launched work finishes before
-    control returns to Python.
-    """
-    backend_info = resolve_backend(backend)
-    if backend_info.selected == "numpy":
+    device: int | None  # None for numpy (host)
+    X_train: Any
+    alpha: Any
+    L: Any
+    length_scale: Any
+    unit_design: Any
+
+
+def _resolve_devices(xp, n_gpus: int | None) -> list[int | None]:
+    """Device ids to spread per-box work over; the current device comes first."""
+    if xp is np:
+        return [None]
+    available = xp.cuda.runtime.getDeviceCount()
+    n = available if n_gpus is None else int(n_gpus)
+    if not 1 <= n <= available:
+        raise ValueError(f"n_gpus must be between 1 and {available} (visible GPUs), got {n_gpus}.")
+    main = xp.cuda.Device().id
+    return [main] + [i for i in range(available) if i != main][: n - 1]
+
+
+def _build_gp_state(xp, device: int | None, X: np.ndarray, gp, unit_design: np.ndarray) -> _GPState:
+    """Copy the trained GP's arrays to `device` (built from host arrays, no peer copies)."""
+    params = gp.kernel_.get_params()
+    with (xp.cuda.Device(device) if device is not None else nullcontext()):
+        return _GPState(
+            device=device,
+            X_train=xp.asarray(X, dtype=xp.float64),
+            alpha=xp.asarray(gp.alpha_, dtype=xp.float64).reshape(-1),
+            L=xp.asarray(gp.L_, dtype=xp.float64),
+            length_scale=xp.asarray(params["k1__k2__length_scale"], dtype=xp.float64),
+            unit_design=xp.asarray(unit_design, dtype=xp.float64),
+        )
+
+
+# Least GPU work (boxes x N^2 x points per box) worth giving an extra GPU. Each
+# extra GPU costs a few ms of host time per call (thread, peer copies and its own
+# Python kernel launches, serialized by the GIL); ~1e10 units is ~70 ms of H200
+# time, so smaller calls stay on fewer GPUs.
+_MIN_WORK_PER_GPU = 1e10
+
+# One persistent worker thread per extra GPU. cuBLAS/cuSOLVER handles are per
+# thread and allocate device memory outside cupy's pool, so they must be created
+# once, up front: created lazily in a fresh thread, they can fail
+# (CUSOLVER_STATUS_INTERNAL_ERROR) once the pool has cached the device's memory.
+_GPU_WORKERS: dict[int, ThreadPoolExecutor] = {}
+
+
+def _create_library_handles(xp, device: int) -> None:
+    xp.cuda.Device(device).use()
+    xp.cuda.device.get_cublas_handle()
+    xp.cuda.device.get_cusolver_handle()
+
+
+def _gpu_worker(xp, device: int) -> ThreadPoolExecutor:
+    worker = _GPU_WORKERS.get(device)
+    if worker is None:
+        worker = ThreadPoolExecutor(max_workers=1, thread_name_prefix=f"exactbo-gpu{device}")
+        worker.submit(_create_library_handles, xp, device).result()
+        _GPU_WORKERS[device] = worker
+    return worker
+
+
+def _prepare_devices(xp, states: list[_GPState]) -> None:
+    """Create library handles for every device before large allocations begin."""
+    if xp is np:
         return
-    get_legate_runtime = getattr(import_module("legate.core"), "get_legate_runtime")
-    runtime = get_legate_runtime()
-    runtime.issue_mapping_fence()
-    runtime.issue_execution_fence(block=True)
-
-def _get_store_target(backend: BackendName):
-    backend_info = resolve_backend(backend)
-    if backend_info.selected == "numpy":
-        return None
-    StoreTarget = getattr(import_module("legate.core"), "StoreTarget")
-    return StoreTarget
+    with xp.cuda.Device(states[0].device):
+        xp.cuda.device.get_cublas_handle()
+        xp.cuda.device.get_cusolver_handle()
+    for state in states[1:]:
+        _gpu_worker(xp, state.device)
 
 
-def _offload_arrays_to_sysmem(
-    backend: BackendName,
-    *arrays,
-    store_target=None,
-    materialize: bool = True,
-) -> None:
-    """Move backend arrays to system memory so device buffers can be released."""
-    if store_target is None:
-        store_target = _get_store_target(backend)
-    if store_target is None:
-        return
+def _run_sharded(xp, fn, states: list[_GPState], boxes_L, boxes_U, work_per_box: float) -> tuple:
+    """
+    Run ``fn(state, boxes_L, boxes_U) -> tuple of per-box arrays`` with the
+    boxes split row-wise into contiguous shards over as many devices as the
+    call's work justifies, and return the outputs concatenated in the original
+    box order on the first device.
 
-    offloaded = False
-    for array in arrays:
-        if array is None:
-            continue
-        offload = getattr(array, "offload_to", None)
-        if callable(offload):
-            offload(store_target.SYSMEM)
-            offloaded = True
+    The first device's shard runs in the calling thread and every other shard
+    in that device's persistent worker thread, so host-side syncs inside ``fn``
+    on one device do not stall the others.
+    """
+    n = int(boxes_L.shape[0])
+    n_devices = min(len(states), n, int(n * work_per_box // _MIN_WORK_PER_GPU))
+    if n_devices <= 1:
+        return fn(states[0], boxes_L, boxes_U)
+    states = states[:n_devices]
 
-    if offloaded and materialize:
-        _force_materialization(backend)
+    main = states[0].device
+    edges = np.linspace(0, n, len(states) + 1).astype(np.int64)
+    # Shards are read from the main device by the workers; finish its pending work first.
+    xp.cuda.Device(main).synchronize()
+
+    def work(k: int) -> tuple:
+        state = states[k]
+        start, end = int(edges[k]), int(edges[k + 1])
+        with xp.cuda.Device(state.device):
+            # ndarray.copy() places the copy on the current device, even across devices.
+            out = fn(state, boxes_L[start:end].copy(), boxes_U[start:end].copy())
+            xp.cuda.Device(state.device).synchronize()
+        return out
+
+    futures = [_gpu_worker(xp, states[k].device).submit(work, k) for k in range(1, len(states))]
+    shard_outputs = [work(0)] + [future.result() for future in futures]
+
+    gathered = tuple(
+        xp.concatenate([out[i].copy() for out in shard_outputs])
+        for i in range(len(shard_outputs[0]))
+    )
+    # The peer copies read worker memory; keep it alive until they complete.
+    xp.cuda.Device(main).synchronize()
+    return gathered
 
 
 def _centered_latin_hypercube_unit(n_points: int, dim: int) -> np.ndarray:
@@ -133,6 +204,8 @@ def exactbo(
     max_partitions: int,
     *,
     backend: BackendName = "auto",
+    n_gpus: int | None = None,
+    box_sampling: str = "lhs",
     predict_batch_size: int | None = None,
     bounds_batch_size: int | None = None,
     max_target_boxes: int | None = None,
@@ -163,11 +236,18 @@ def exactbo(
         Outer BO iterations.
     max_partitions : int
         Max partition loops per BO iteration.
-    backend : {"auto", "numpy", "cupynumeric"}, default="auto"
-        Execution backend.
+    backend : {"auto", "numpy", "cupy"}, default="auto"
+        Execution backend. ``"auto"`` uses cupy when a GPU is visible.
+    n_gpus : int, optional
+        cupy only: number of visible GPUs the per-box work is split across
+        (single process). None uses all visible GPUs.
+    box_sampling : {"lhs", "center"}, default="lhs"
+        Where EI is sampled inside each analyzed/active box: ``"lhs"`` at 2**d
+        centered Latin-hypercube points, ``"center"`` only at the box center
+        (2**d times fewer posterior evaluations and less sampling memory).
     predict_batch_size : int, optional
         Max number of query points per GP posterior prediction call during
-        partitioning. If None, an automatic memory-aware value is used.
+        partitioning (per GPU). If None, an automatic memory-aware value is used.
     bounds_batch_size : int, optional
         Max number of target boxes processed per bounds chunk during
         partitioning. If None, an automatic memory-aware value is used.
@@ -250,6 +330,8 @@ def exactbo(
             gp,
             max_partitions,
             backend=backend_info.selected,
+            n_gpus=n_gpus,
+            box_sampling=box_sampling,
             predict_batch_size=predict_batch_size,
             bounds_batch_size=bounds_batch_size,
             max_target_boxes=max_target_boxes,
@@ -273,9 +355,8 @@ def exactbo(
         # Update data
         X = np.vstack((X, Xn))  # (N+1,d)
         y = np.hstack((y, yn))  # (N+1,)
-        _force_materialization(backend)
-        
-    
+
+
     X_result = (
         _from_unit_cube(X, physical_bounds, validation=False)
         if physical_bounds is not None
@@ -293,6 +374,8 @@ def exactbo_partitioning(
     max_partitions: int,
     *,
     backend: BackendName = "auto",
+    n_gpus: int | None = None,
+    box_sampling: str = "lhs",
     predict_batch_size: int | None = None,
     bounds_batch_size: int | None = None,
     max_target_boxes: int | None = None,
@@ -320,13 +403,19 @@ def exactbo_partitioning(
         Current BO iteration.
     max_partitions : int
         Max partition loops per BO iteration.
-    backend : {"auto", "numpy", "cupynumeric"}, default="auto"
+    backend : {"auto", "numpy", "cupy"}, default="auto"
         Backend used for array ops.
+    n_gpus : int, optional
+        cupy only: number of visible GPUs the per-box EI-bound and sampling
+        work is split across. None uses all visible GPUs.
+    box_sampling : {"lhs", "center"}, default="lhs"
+        Sample EI at 2**d centered Latin-hypercube points per box, or only at
+        the box center.
     predict_batch_size : int, optional
-        Max number of query points per GP posterior prediction call.
+        Max number of query points per GP posterior prediction call (per GPU).
         If None, an automatic memory-aware value is used.
     bounds_batch_size : int, optional
-        Max number of target boxes processed per bounds chunk.
+        Max number of target boxes processed per bounds chunk (per GPU).
         If None, an automatic memory-aware value is used.
     max_target_boxes : int, optional
         Hard cap for the number of target boxes kept per partition.
@@ -344,30 +433,23 @@ def exactbo_partitioning(
         Next design point, backend resolution info and log.
     """
     xp = _array_module(backend)
-    store_target = _get_store_target(backend)
-    
-    # Copy of X for partitioning, converted to backend array
-    Xc = xp.asarray(X, dtype=xp.float64)
 
-    # Initialize boxes
+    # Initialize boxes on the main (current) device
     ## One row per box (initially one box)
     ## One column per dimension
-    bounds_L = xp.asarray([bounds[:, 0]], dtype=xp.float64)  # (n,d)
-    bounds_U = xp.asarray([bounds[:, 1]], dtype=xp.float64)  # (n,d)
+    bounds_L = xp.asarray(bounds[np.newaxis, :, 0], dtype=xp.float64)  # (n,d)
+    bounds_U = xp.asarray(bounds[np.newaxis, :, 1], dtype=xp.float64)  # (n,d)
 
-    # GP hyperparameters
+    # GP hyperparameters (host scalars)
     gp_kernel_params = gp.kernel_.get_params()
     sigma_f_2 = gp_kernel_params["k1__k1__constant_value"]
     sigma_n_2 = gp_kernel_params["k2__noise_level"]
-    length_scale = xp.asarray(gp_kernel_params["k1__k2__length_scale"], dtype=xp.float64)
-    alpha = xp.asarray(gp.alpha_, dtype=xp.float64).reshape(-1)
     y_train_std = float(np.asarray(gp._y_train_std, dtype=np.float64).ravel()[0])
     y_train_mean = float(np.asarray(gp._y_train_mean, dtype=np.float64).ravel()[0])
-    L = xp.asarray(gp.L_, dtype=xp.float64)  # (N,N)
-    y_min_scaled = xp.min(gp.y_train_)
+    y_min_scaled = float(np.min(gp.y_train_))
 
     # Partition parameters
-    N = Xc.shape[0]  # Number of data points
+    N = X.shape[0]  # Number of data points
     d = bounds.shape[0]  # Number of dimensions
     if predict_batch_size is None:
         predict_batch_size = max(1, int((128 * 1024**2) // max(16 * N, 16)))
@@ -386,11 +468,25 @@ def exactbo_partitioning(
         if max_target_boxes <= 0:
             raise ValueError("max_target_boxes must be a positive integer.")
     stride = 2 * d + 1
-    lhs_points_per_box = int(2**d)
-    lhs_unit_design = xp.asarray(
-        _centered_latin_hypercube_unit(lhs_points_per_box, d),
-        dtype=xp.float64,
-    )
+    # Points (in box-relative [0, 1]^d coordinates) where EI is sampled in each box.
+    if box_sampling == "lhs":
+        unit_design = _centered_latin_hypercube_unit(int(2**d), d)
+    elif box_sampling == "center":
+        unit_design = np.full((1, d), 0.5)
+    else:
+        raise ValueError(f"box_sampling must be 'lhs' or 'center', got {box_sampling!r}.")
+    points_per_box = unit_design.shape[0]
+    # One copy of the trained GP per device; per-box work is sharded across them.
+    states = [
+        _build_gp_state(xp, device, X, gp, unit_design)
+        for device in _resolve_devices(xp, n_gpus)
+    ]
+    _prepare_devices(xp, states)
+    # Per-box GPU work estimates that decide how many devices a call uses:
+    # EI bounds do ~3 N^2 elementwise ops per box (sigma forward substitution);
+    # sampling evaluates the posterior (~N^2 each) at points_per_box points per box.
+    bounds_work_per_box = 3.0 * N * N
+    sample_work_per_box = float(points_per_box) * N * N
     w = bounds_U[0] - bounds_L[0]  # Bounds with per dimension (d,)
     epsilon_X = xp.asarray(epsilon_X, dtype=xp.float64)
     partition = 0
@@ -403,56 +499,30 @@ def exactbo_partitioning(
     # Initialize log
     log = _init_log(logMask)
 
-    def _offload_arrays(*arrays, materialize: bool = True) -> None:
-        _offload_arrays_to_sysmem(
-            backend,
-            *arrays,
-            store_target=store_target,
-            materialize=materialize,
-        )
-
     def _finalize_result(best_x, ei_max_value: float) -> BOResult:
-        best_x_result = np.asarray(best_x, dtype=np.float64)
+        best_x_result = to_numpy(best_x).astype(np.float64, copy=False)
         if logMask:
             t1 = now()
-            if xp.__name__ == "numpy":
-                log["time"] = t1 - t0
-            else:
-                log["time"] = (t1 - t0) / 1e6  # Convert microseconds to seconds for Legate
+            log["time"] = t1 - t0
             log["ei_max"] = float(ei_max_value * y_train_std)
             log["ei_max_scaled"] = float(ei_max_value)
-
-        _offload_arrays(
-            best_x,
-            Xc,
-            bounds_L,
-            bounds_U,
-            length_scale,
-            alpha,
-            L,
-            lhs_unit_design,
-            epsilon_X,
-            target_boxes_mask,
-            w,
-            w_max,
-        )
         return BOResult(X=best_x_result, log=log)
 
-    def _predict_with_std(points):
+    def _predict_with_std(state, points):
         points = xp.asarray(points, dtype=xp.float64)
         n_points = int(points.shape[0])
         if n_points <= predict_batch_size:
-            if xp.__name__ == "numpy":
+            if xp is np:
                 mu_chunk, sigma_chunk = gp.predict(np.asarray(points), return_std=True)
                 mu_chunk = (mu_chunk - y_train_mean) / y_train_std
                 sigma_chunk = sigma_chunk / y_train_std
             else:
                 mu_chunk, sigma_chunk = gp_posterior(
                     points,
-                    X_train=Xc,
-                    alpha=alpha,
-                    L=L,
-                    length_scale=length_scale,
+                    X_train=state.X_train,
+                    alpha=state.alpha,
+                    L=state.L,
+                    length_scale=state.length_scale,
                     sigma_f_squared=sigma_f_2,
                     sigma_n_squared=sigma_n_2,
                     y_train_mean=y_train_mean,
@@ -472,17 +542,17 @@ def exactbo_partitioning(
         for start in range(0, n_points, predict_batch_size):
             end = min(start + predict_batch_size, n_points)
             chunk = points[start:end]
-            if xp.__name__ == "numpy":
+            if xp is np:
                 mu_chunk, sigma_chunk = gp.predict(np.asarray(chunk), return_std=True)
                 mu_chunk = (mu_chunk - y_train_mean) / y_train_std
                 sigma_chunk = sigma_chunk / y_train_std
             else:
                 mu_chunk, sigma_chunk = gp_posterior(
                     chunk,
-                    X_train=Xc,
-                    alpha=alpha,
-                    L=L,
-                    length_scale=length_scale,
+                    X_train=state.X_train,
+                    alpha=state.alpha,
+                    L=state.L,
+                    length_scale=state.length_scale,
                     sigma_f_squared=sigma_f_2,
                     sigma_n_squared=sigma_n_2,
                     y_train_mean=y_train_mean,
@@ -494,10 +564,9 @@ def exactbo_partitioning(
                 )
             mu[start:end] = xp.asarray(mu_chunk, dtype=xp.float64)
             sigma[start:end] = xp.asarray(sigma_chunk, dtype=xp.float64)
-            _force_materialization(backend)
         return mu, sigma
 
-    def _ei_hi_bounds_chunked(bounds_L_target, bounds_U_target):
+    def _ei_hi_bounds_chunked(state, bounds_L_target, bounds_U_target):
         n_target = int(bounds_L_target.shape[0])
         ei_hi = xp.empty((n_target,), dtype=xp.float64)
         for start in range(0, n_target, bounds_batch_size):
@@ -509,7 +578,7 @@ def exactbo_partitioning(
             K_lo = xp.empty((chunk_n, N), dtype=xp.float64)
             K_hi = xp.empty((chunk_n, N), dtype=xp.float64)
             for i in range(N):
-                xi = Xc[i]
+                xi = state.X_train[i]
                 K_lo[:, i], K_hi[:, i] = rbf_k_bounds(
                     chunk_L,
                     chunk_U,
@@ -517,13 +586,13 @@ def exactbo_partitioning(
                     chunk_n,
                     d,
                     sigma_f_2,
-                    length_scale,
+                    state.length_scale,
                     backend=backend,
                     validation=validation,
                 )
 
             mu_lo, mu_hi = mu_bounds(
-                alpha,
+                state.alpha,
                 K_lo,
                 K_hi,
                 chunk_n,
@@ -537,7 +606,7 @@ def exactbo_partitioning(
             sig_lo, sig_hi = sigma_bounds(
                 K_lo,
                 K_hi,
-                L,
+                state.L,
                 chunk_n,
                 N,
                 sigma_f_2,
@@ -557,24 +626,10 @@ def exactbo_partitioning(
                 validation=validation,
             )
             ei_hi[start:end] = ei_hi_chunk
-            _offload_arrays(
-                K_lo,
-                K_hi,
-                mu_lo,
-                mu_hi,
-                sig_lo,
-                sig_hi,
-                ei_hi_chunk,
-                materialize=False,
-            )
             del K_lo, K_hi, mu_lo, mu_hi, sig_lo, sig_hi, ei_hi_chunk
-            # cuPyNumeric/Legate can defer chunk work aggressively. Fence here so
-            # the helper does not accumulate a large pending graph across dozens
-            # of chunks before the next reduction/mask operation forces it.
-            _force_materialization(backend)
-        return ei_hi
+        return (ei_hi,)
 
-    def _sampled_box_best_ei(boxes_L, boxes_U):
+    def _sampled_box_best_ei(state, boxes_L, boxes_U):
         n_boxes = int(boxes_L.shape[0])
         if n_boxes == 0:
             return (
@@ -584,7 +639,7 @@ def exactbo_partitioning(
 
         best_points = xp.empty((n_boxes, d), dtype=xp.float64)
         best_ei = xp.empty((n_boxes,), dtype=xp.float64)
-        boxes_per_chunk = max(1, predict_batch_size // lhs_points_per_box)
+        boxes_per_chunk = max(1, predict_batch_size // points_per_box)
 
         for start in range(0, n_boxes, boxes_per_chunk):
             if verbose:
@@ -597,16 +652,16 @@ def exactbo_partitioning(
 
             sampled_points = (
                 chunk_L[:, xp.newaxis, :]
-                + lhs_unit_design[xp.newaxis, :, :] * chunk_width[:, xp.newaxis, :]
-            )  # (chunk_n, 2**d, d)
-            flat_points = sampled_points.reshape((chunk_n * lhs_points_per_box, d))
+                + state.unit_design[xp.newaxis, :, :] * chunk_width[:, xp.newaxis, :]
+            )  # (chunk_n, points_per_box, d)
+            flat_points = sampled_points.reshape((chunk_n * points_per_box, d))
 
-            mu_chunk, sigma_chunk = _predict_with_std(flat_points)
+            mu_chunk, sigma_chunk = _predict_with_std(state, flat_points)
             mu_chunk = xp.asarray(mu_chunk, dtype=xp.float64).reshape(
-                (chunk_n, lhs_points_per_box)
+                (chunk_n, points_per_box)
             )
             sigma_chunk = xp.asarray(sigma_chunk, dtype=xp.float64).reshape(
-                (chunk_n, lhs_points_per_box)
+                (chunk_n, points_per_box)
             )
             sigma_chunk_lat = xp.sqrt(
                 xp.clip(sigma_chunk**2 - sigma_n_2, 1e-12, None)
@@ -616,7 +671,7 @@ def exactbo_partitioning(
                 sigma_chunk_lat,
                 y_min_scaled,
                 backend=backend,
-            )  # (chunk_n, 2**d)
+            )  # (chunk_n, points_per_box)
 
             best_idx = xp.argmax(ei_chunk, axis=1).reshape((chunk_n, 1))
             best_ei[start:end] = xp.take_along_axis(
@@ -634,16 +689,6 @@ def exactbo_partitioning(
                 axis=1,
             ).reshape((chunk_n, d))
 
-            _offload_arrays(
-                sampled_points,
-                flat_points,
-                mu_chunk,
-                sigma_chunk,
-                sigma_chunk_lat,
-                ei_chunk,
-                gather_idx,
-                materialize=False,
-            )
             del (
                 chunk_L,
                 chunk_U,
@@ -657,7 +702,6 @@ def exactbo_partitioning(
                 best_idx,
                 gather_idx,
             )
-            _force_materialization(backend)
 
         return best_points, best_ei
 
@@ -732,8 +776,10 @@ def exactbo_partitioning(
 
         if verbose:
             print(f"  Start target boxes: {n}, to analyze: {bounds_L_target.shape[0]}, Best global box index: {idx_best_global}.")
-        # Compute EI upper bounds in chunks to cap peak GPU memory.
-        ei_hi = _ei_hi_bounds_chunked(bounds_L_target, bounds_U_target)
+        # Compute EI upper bounds in chunks to cap peak GPU memory, sharded across GPUs.
+        (ei_hi,) = _run_sharded(
+            xp, _ei_hi_bounds_chunked, states, bounds_L_target, bounds_U_target, bounds_work_per_box
+        )
         if verbose:
             print(f"  Computed EI upper bounds for {ei_hi.shape[0]} target boxes.")
 
@@ -749,11 +795,15 @@ def exactbo_partitioning(
         analyze_box_mask[preserved_analyze_idx] = True
         analyze_local_idx = xp.where(analyze_box_mask)[0]  # (n_analyze,)
         n_analyze = int(analyze_local_idx.shape[0])
-        # Sample 2**d Latin-hypercube points within each analyzed box and retain
+        # Sample EI within each analyzed box (per box_sampling) and retain
         # the best sampled EI per box in standardized target space.
-        analyze_best_points, ei_analyze = _sampled_box_best_ei(
+        analyze_best_points, ei_analyze = _run_sharded(
+            xp,
+            _sampled_box_best_ei,
+            states,
             bounds_L_target[analyze_local_idx],
             bounds_U_target[analyze_local_idx],
+            sample_work_per_box,
         )  # ((n_analyze, d), (n_analyze,))
         if verbose:
             print(f"  Analyzed {ei_analyze.shape[0]} boxes with EI within {epsilon_ei} of max EI_hi.")
@@ -766,7 +816,6 @@ def exactbo_partitioning(
         w_max_ei_analyzed = (
             bounds_U_target[idx_ei_max_analyze_local] - bounds_L_target[idx_ei_max_analyze_local]
         )  # (d,)
-        _offload_arrays(analyze_best_points, ei_analyze)
         del analyze_best_points, ei_analyze
 
         # Active boxes are the ones where ei_hi is higher than ei_max_analyze plus epsilon_ei,
@@ -796,13 +845,17 @@ def exactbo_partitioning(
 
         # Check the active boxes.
         active_local_idx = xp.where(active_boxes_mask)[0] # (n_active,)
-        # Sample 2**d Latin-hypercube points within each active box and retain
+        # Sample EI within each active box (per box_sampling) and retain
         # the best sampled EI per box.
         if verbose:
             print(f"  Active boxes with EI_hi > max EI_analyze + epsilon_ei: {n_active}.")
-        active_best_points, ei_active = _sampled_box_best_ei(
+        active_best_points, ei_active = _run_sharded(
+            xp,
+            _sampled_box_best_ei,
+            states,
             bounds_L_target[active_local_idx],
             bounds_U_target[active_local_idx],
+            sample_work_per_box,
         )  # ((n_active, d), (n_active,))
         if verbose:
             print(f"  Sampled best points for {ei_active.shape[0]} active boxes with EI_hi > max EI_analyze + epsilon_ei.")
@@ -813,7 +866,6 @@ def exactbo_partitioning(
         # Find best point among the active boxes and the width of the box with the highest active EI
         best_x_active = xp.array(active_best_points[idx_best], dtype=xp.float64)
         w_max_ei_active = bounds_U_target[idx_best_local] - bounds_L_target[idx_best_local]  # (d,)
-        _offload_arrays(active_best_points)
         del active_best_points
 
         # Target boxes are the ones where ei_hi is more than epsilon_ei plus ei_max.
@@ -872,7 +924,6 @@ def exactbo_partitioning(
 
         # Calculate position of the best point in next partition
         idx_best_global_next = int(xp.sum(target_boxes_mask[:idx_best_global]))
-        _offload_arrays(ei_hi, ei_active)
         del ei_hi, ei_active, analyze_box_mask, active_boxes_mask, analyze_local_idx, active_local_idx
         
         # Update maximum width of active boxes
@@ -901,8 +952,6 @@ def exactbo_partitioning(
 
         # Split active boxes (don't if its the last partition)
         if partition < max_partitions:
-            prev_bounds_L = bounds_L
-            prev_bounds_U = bounds_U
             bounds_L, bounds_U = split_boxes(
                 bounds_L,
                 bounds_U,
@@ -914,9 +963,4 @@ def exactbo_partitioning(
                 backend=backend,
                 validation=validation,
             )
-            _offload_arrays(prev_bounds_L, prev_bounds_U, materialize=False)
-            del prev_bounds_L, prev_bounds_U
-            #if verbose:
-            #    print("  Materializing split output before next EI-upper-bound pass.")
-            _force_materialization(backend)
     return _finalize_result(best_x_active, ei_max_active)

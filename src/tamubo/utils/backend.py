@@ -1,75 +1,93 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import cache
+from importlib import import_module
 from importlib.util import find_spec
 from typing import Literal
 
-BackendName = Literal["auto", "numpy", "cupynumeric", "cuda", "cpu"]
-SelectedBackend = Literal["numpy", "cupynumeric", "cuda", "cpu"]
-__all__ = ["BackendName", "SelectedBackend", "BackendInfo", "has_cupynumeric", "resolve_backend"]
+import numpy as np
+
+# "cuda"/"cpu" label the torch device of BoTorch results; the array backends
+# used by tamubo.exactbo are "numpy" and "cupy".
+BackendName = Literal["auto", "numpy", "cupy", "cuda", "cpu"]
+SelectedBackend = Literal["numpy", "cupy", "cuda", "cpu"]
+__all__ = [
+    "BackendName",
+    "SelectedBackend",
+    "BackendInfo",
+    "has_cupy",
+    "resolve_backend",
+    "get_array_module",
+    "to_numpy",
+]
 
 @dataclass(frozen=True)
 class BackendInfo:
     """Resolved backend configuration."""
     requested: BackendName
     selected: SelectedBackend
-    cupynumeric_available: bool
+    cupy_available: bool
 
-def has_cupynumeric() -> bool:
-    """Return True when cupynumeric can be imported in this environment."""
-    return find_spec("cupynumeric") is not None
+@cache
+def has_cupy() -> bool:
+    """Return True when cupy is installed and can see at least one GPU."""
+    if find_spec("cupy") is None:
+        return False
+    import cupy
 
+    try:
+        return cupy.cuda.runtime.getDeviceCount() > 0
+    except (RuntimeError, OSError):
+        # No driver/GPU on this node (e.g. a login node) or CUDA libraries missing.
+        return False
+
+@cache
 def resolve_backend(backend: BackendName = "auto") -> BackendInfo:
     """
     Resolve execution backend.
 
     Parameters
     ----------
-    backend : {"auto", "numpy", "cupynumeric", "cuda", "cpu"}, default="auto"
-        Requested backend.
+    backend : {"auto", "numpy", "cupy", "cuda", "cpu"}, default="auto"
+        Requested backend. ``"auto"`` picks cupy when a GPU is available,
+        otherwise numpy.
 
     Returns
     -------
     BackendInfo
         Final backend selection plus availability information.
     """
-    cupynumeric_available = has_cupynumeric()
-    if backend not in ("auto", "numpy", "cupynumeric", "cuda", "cpu"):
+    if backend not in ("auto", "numpy", "cupy", "cuda", "cpu"):
         raise ValueError(
-            f"Unsupported backend '{backend}'. Choose from 'auto', 'numpy', 'cupynumeric', 'cuda', 'cpu'."
+            f"Unsupported backend '{backend}'. Choose from 'auto', 'numpy', 'cupy', 'cuda', 'cpu'."
         )
-    if backend == "numpy":
-        return BackendInfo(
-            requested="numpy",
-            selected="numpy",
-            cupynumeric_available=cupynumeric_available,
+    cupy_available = has_cupy()
+    if backend == "cupy" and not cupy_available:
+        raise RuntimeError(
+            "backend='cupy' was requested, but cupy is not installed or no GPU is visible. "
+            "Install cupy-cuda12x and run on a GPU node, or use backend='numpy'."
         )
-    if backend == "cupynumeric":
-        if not cupynumeric_available:
-            raise ImportError(
-                "backend='cupynumeric' was requested, but cupynumeric is not installed. "
-                "Install cupynumeric/legate or use backend='numpy' or backend='auto'."
-            )
-        return BackendInfo(
-            requested="cupynumeric",
-            selected="cupynumeric",
-            cupynumeric_available=True,
-        )
-    if backend == "cuda":
-        return BackendInfo(
-            requested="cuda",
-            selected="cuda",
-            cupynumeric_available=cupynumeric_available,
-        )
-    if backend == "cpu":
-        return BackendInfo(
-            requested="cpu",
-            selected="cpu",
-            cupynumeric_available=cupynumeric_available,
-        )
-    selected: SelectedBackend = "cupynumeric" if cupynumeric_available else "numpy"
-    return BackendInfo(
-        requested="auto",
-        selected=selected,
-        cupynumeric_available=cupynumeric_available,
+    if backend == "auto":
+        selected: SelectedBackend = "cupy" if cupy_available else "numpy"
+    else:
+        selected = backend
+    return BackendInfo(requested=backend, selected=selected, cupy_available=cupy_available)
+
+def get_array_module(backend: BackendName = "auto"):
+    """Return the array module (`numpy` or `cupy`) for a backend."""
+    selected = resolve_backend(backend).selected
+    if selected == "numpy":
+        return np
+    if selected == "cupy":
+        return import_module("cupy")
+    raise ValueError(
+        f"backend='{selected}' is a torch device label, not an array backend; use 'numpy' or 'cupy'."
     )
+
+def to_numpy(array):
+    """Copy a numpy/cupy array (or scalar) to a host numpy array."""
+    # cupy forbids implicit np.asarray() on device arrays; .get() is its explicit copy.
+    if type(array).__module__.split(".")[0] == "cupy":
+        return array.get()
+    return np.asarray(array)
