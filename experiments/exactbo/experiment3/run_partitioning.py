@@ -55,6 +55,7 @@ def main() -> None:
         gp,
         args.max_partitions,
         backend=args.backend,
+        box_sampling="lhs",  # the results in README.md use 1024 LHS points per box
         acquisition=args.acquisition,
         bound_method=args.bound_method,
         validation=False,

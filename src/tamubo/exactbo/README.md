@@ -61,9 +61,10 @@ and `bounds_batch_size` apply per GPU.
 
 `box_sampling` sets where EI is sampled inside each analyzed/active box:
 
-- `"lhs"` (default): 2^d centered Latin-hypercube points per box.
-- `"center"`: the box center only — 2^d times fewer GP posterior evaluations
-  (1024x at d=10).
+- `"center"` (default): the box center only.
+- `"lhs"`: 2^d centered Latin-hypercube points per box — 2^d times more GP
+  posterior evaluations (1024x at d=10). It finds a higher incumbent per box,
+  so it can prune more, but it costs far more time and memory.
 
 Peak sampling memory per GPU is set by `predict_batch_size` (points per
 posterior call). Center sampling lowers it only when a GPU's share of sampled

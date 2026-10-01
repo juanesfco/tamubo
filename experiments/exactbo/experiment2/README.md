@@ -62,11 +62,13 @@ Slurm logs go to `logs/` (git-ignored). The environment is described in the
 repository README (pip build: `envs/exactbo.txt`).
 
 Memory: with the current config (problem10d, `epsilon_X=1e-5`,
-`predict_batch_size = bounds_batch_size = 1e8`) the default `"lhs"` sampling
-runs out of GPU memory on one H200 and on eight. Setting
-`"box_sampling": "center"` under `"exactbo"` completes: 144 s of partitioning
-on 8 GPUs, or 839 s on 1 GPU with `predict_batch_size` lowered to `2e7`; both
-select the same point.
+`predict_batch_size = bounds_batch_size = 1e8`) `"lhs"` sampling runs out of
+GPU memory on 1 and 8 H200s. With `"box_sampling": "center"` (the default) and
+both batch sizes at `2e7`, 3 iterations complete on 2 GPUs in ~16-30 min each
+(see `experiments/exactbo/experiment4/README.md`, step 4). Note that
+`max_target_boxes = 1e7` fires in ~40% of the partitions there, so those runs
+are not exact; without the cap the 10-d search runs out of memory at partition
+11.
 
 ## Plot results
 
@@ -89,8 +91,8 @@ Use `--output-dir` to override either mode's default destination.
 ## Notes
 
 - BoTorch workflows require `torch`, `botorch`, and `gpytorch`.
-- `exactbo.box_sampling` in `experiment_config.json`: `"lhs"` (default, 2^d
-  points per box) or `"center"` (box center only).
+- `exactbo.box_sampling` in `experiment_config.json`: `"center"` (default, box
+  center only) or `"lhs"` (2^d points per box).
 - Use `framework` in `experiment_config.json` with values:
   - `exactbo` (table label `exactBO`)
   - `botorch_grid` (table label `gridBO`)

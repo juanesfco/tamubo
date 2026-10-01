@@ -229,7 +229,7 @@ def _run_framework(
             max_iters=max_iters,
             max_partitions=int(exactbo_cfg["max_partitions"]),
             backend=str(exactbo_cfg.get("backend", "auto")),
-            box_sampling=str(exactbo_cfg.get("box_sampling", "lhs")),
+            box_sampling=str(exactbo_cfg.get("box_sampling", "center")),
             acquisition=str(exactbo_cfg.get("acquisition", "logei")),
             bound_method=str(exactbo_cfg.get("bound_method", "autobound")),
             autobound_degree=int(exactbo_cfg.get("autobound_degree", 2)),

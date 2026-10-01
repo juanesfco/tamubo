@@ -211,7 +211,7 @@ def exactbo(
     *,
     backend: BackendName = "auto",
     n_gpus: int | None = None,
-    box_sampling: str = "lhs",
+    box_sampling: str = "center",
     acquisition: str = "logei",
     bound_method: str = "autobound",
     autobound_degree: int = 2,
@@ -254,10 +254,11 @@ def exactbo(
     n_gpus : int, optional
         cupy only: number of visible GPUs the per-box work is split across
         (single process). None uses all visible GPUs.
-    box_sampling : {"lhs", "center"}, default="lhs"
-        Where EI is sampled inside each analyzed/active box: ``"lhs"`` at 2**d
-        centered Latin-hypercube points, ``"center"`` only at the box center
-        (2**d times fewer posterior evaluations and less sampling memory).
+    box_sampling : {"center", "lhs"}, default="center"
+        Where EI is sampled inside each analyzed/active box: ``"center"`` only
+        at the box center, ``"lhs"`` at 2**d centered Latin-hypercube points
+        (2**d times more posterior evaluations and sampling memory; a higher
+        incumbent, so it can prune more).
     acquisition : {"logei", "ei"}, default="logei"
         Score sampled points and bound boxes with the numerically stable log EI
         (finite even where EI underflows to 0) or with plain EI. Sets the
@@ -406,7 +407,7 @@ def exactbo_partitioning(
     *,
     backend: BackendName = "auto",
     n_gpus: int | None = None,
-    box_sampling: str = "lhs",
+    box_sampling: str = "center",
     acquisition: str = "logei",
     bound_method: str = "autobound",
     autobound_degree: int = 2,
@@ -444,9 +445,9 @@ def exactbo_partitioning(
     n_gpus : int, optional
         cupy only: number of visible GPUs the per-box EI-bound and sampling
         work is split across. None uses all visible GPUs.
-    box_sampling : {"lhs", "center"}, default="lhs"
-        Sample EI at 2**d centered Latin-hypercube points per box, or only at
-        the box center.
+    box_sampling : {"center", "lhs"}, default="center"
+        Sample EI only at the box center, or at 2**d centered Latin-hypercube
+        points per box.
     acquisition : {"logei", "ei"}, default="logei"
         Score sampled points and bound boxes with the numerically stable log EI
         (finite even where EI underflows to 0) or with plain EI. Sets the

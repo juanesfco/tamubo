@@ -20,9 +20,12 @@ set -euo pipefail
 REPO_ROOT="${SLURM_SUBMIT_DIR}"
 EXP_DIR="${REPO_ROOT}/experiments/exactbo/experiment2"
 CONFIG_PATH="${1:-${EXP_DIR}/experiment_config.json}"
+export PYTHONUNBUFFERED=1  # show progress in the log as it happens
 
 # cupy-cuda12x loads the CUDA runtime/NVRTC libraries from the system toolkit.
 module load CUDA/12.9.1
 source "${REPO_ROOT}/envs/tamubo_exactbo/bin/activate"
+# Reuse JAX's AutoBound compilations across jobs (~2-4 s per program and GPU).
+export JAX_COMPILATION_CACHE_DIR="${JAX_COMPILATION_CACHE_DIR:-${HOME}/.cache/jax_compilation_cache}"
 
 python "${EXP_DIR}/run_experiment.py" --config "${CONFIG_PATH}"

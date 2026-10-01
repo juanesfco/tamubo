@@ -22,6 +22,8 @@ export PYTHONUNBUFFERED=1
 
 module load CUDA/12.9.1
 source "${REPO_ROOT}/envs/tamubo_exactbo/bin/activate"
+# Reuse JAX's AutoBound compilations across jobs (~2-4 s per program and GPU).
+export JAX_COMPILATION_CACHE_DIR="${JAX_COMPILATION_CACHE_DIR:-${HOME}/.cache/jax_compilation_cache}"
 cd "${BENCH}"
 
 python bench_multigpu.py --dims 2 5 10 --preset moderate --iters 3 --out "${OUT}"
