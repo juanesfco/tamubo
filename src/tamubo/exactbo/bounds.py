@@ -360,6 +360,82 @@ def sigma_bounds(
 
     return sig_lo, sig_hi
 
+def q_cs_weights(
+    bounds_L,
+    bounds_U,
+    X_train,
+    length_scale,
+    sigma_f_2: float,
+    K_inv,
+    *,
+    backend: BackendName = "auto",
+) -> tuple:
+    """
+    Per-box weights of the Cauchy-Schwarz lower bound on Q (``q_cs_lower``):
+    w = (K + σ_n^2 I)^{-1} k(x0) at the box center x0, and Q(x0) = k(x0)^T w.
+
+    Returns
+    -------
+    (w, q0) : arrays of shape (n, N) and (n,)
+    """
+    xp = _array_module(backend)
+    x0 = 0.5 * (xp.asarray(bounds_L) + xp.asarray(bounds_U))
+    X_train = xp.asarray(X_train)
+    k0 = xp.empty((x0.shape[0], X_train.shape[0]), dtype=xp.float64)
+    for i in range(X_train.shape[0]):
+        diff = (x0 - X_train[i]) / length_scale
+        k0[:, i] = xp.sum(diff * diff, axis=1)
+    xp.multiply(k0, -0.5, out=k0)
+    xp.exp(k0, out=k0)
+    xp.multiply(k0, sigma_f_2, out=k0)
+    w = k0 @ xp.asarray(K_inv)  # K_inv is symmetric
+    xp.multiply(k0, w, out=k0)
+    q0 = xp.sum(k0, axis=1)
+    return w, q0
+
+
+def q_cs_lower(K_lo, K_hi, w, q0, *, s_lo=None, backend: BackendName = "auto"):
+    """
+    Lower bound on Q(x) = k(x)^T (K + σ_n^2 I)^{-1} k(x) over each box from
+    Cauchy-Schwarz in the (K + σ_n^2 I)^{-1} inner product: for any vector w,
+
+        (k^T w)^2 <= (k^T K^{-1} k) (w^T K w),  so  Q(x) >= (k(x)^T w)^2 / (w^T K w).
+
+    With w = K^{-1} k(x0) (``q_cs_weights``), w^T K w = Q(x0) and the bound is
+    exact at the box center; only the linear function k(x)^T w has to be bounded
+    over the box, which, like the mean, is much easier than the quadratic form Q.
+    Its lower bound is the sign split of w over the kernel-entry bounds, raised
+    to ``s_lo`` if given (e.g. an AutoBound enclosure of k(x)^T w).
+
+    Parameters
+    ----------
+    K_lo, K_hi : arrays, shape (n, N)
+        Kernel bounds per box vs training points.
+    w, q0 : arrays, shape (n, N) and (n,)
+        From ``q_cs_weights``.
+    s_lo : array, shape (n,), optional
+        Another valid lower bound on k(x)^T w over each box.
+
+    Returns
+    -------
+    q_lo : array, shape (n,)
+    """
+    xp = _array_module(backend)
+    s = xp.maximum(w, 0.0)
+    xp.multiply(s, K_lo, out=s)
+    neg = xp.minimum(w, 0.0)
+    xp.multiply(neg, K_hi, out=neg)
+    s += neg
+    del neg
+    s = xp.sum(s, axis=1)
+    if s_lo is not None:
+        xp.maximum(s, s_lo, out=s)
+    xp.maximum(s, 0.0, out=s)
+    xp.multiply(s, s, out=s)
+    positive = q0 > 0
+    return xp.where(positive, s / xp.where(positive, q0, 1.0), 0.0)
+
+
 def sigma_bound_factors(L) -> tuple:
     """
     Return (L^{-1}, λ_max(L L^T)) on the host, the GP-only factors used by

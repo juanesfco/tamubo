@@ -56,6 +56,7 @@ def main() -> None:
         args.max_partitions,
         backend=args.backend,
         box_sampling="lhs",  # the results in README.md use 1024 LHS points per box
+        split_ratio=0.0,  # ... and split every dimension
         acquisition=args.acquisition,
         bound_method=args.bound_method,
         validation=False,

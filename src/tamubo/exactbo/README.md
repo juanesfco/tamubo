@@ -50,12 +50,17 @@ The current runner accepts:
 
 ### Multiple GPUs (CuPy)
 
-`exactbo(..., n_gpus=None)` splits the per-box work — EI upper bounds and the
-2^d sampled points per box, which dominate the run time — row-wise across the
-visible GPUs of one node, one thread per GPU in a single process. Box storage,
-reductions and splitting stay on the current GPU. `n_gpus=None` uses every
-visible GPU (under Slurm: the GPUs allocated to the job); `predict_batch_size`
-and `bounds_batch_size` apply per GPU.
+`exactbo(..., n_gpus=None)` spreads the partition search over the visible GPUs
+of one node, one thread per GPU in a single process. Each partition's parents
+(the previous targets, see below) are split into contiguous ranges with about
+equal numbers of children, one per GPU. Each GPU rebuilds, bounds and samples
+its own children and keeps their EI bounds and masks, so both box storage and
+work scale with the number of GPUs. Only scalars (best bound, incumbent), the
+few analyzed boxes and the rebalanced parents cross GPUs. Small partitions stay
+on fewer GPUs. `n_gpus=None` uses every visible GPU (under Slurm: the GPUs
+allocated to the job); `predict_batch_size` and `bounds_batch_size` apply per
+GPU. Results match a single GPU up to rounding (the same partitions and
+targets).
 
 ### Box sampling
 
@@ -70,6 +75,29 @@ Peak sampling memory per GPU is set by `predict_batch_size` (points per
 posterior call). Center sampling lowers it only when a GPU's share of sampled
 boxes is below that cap; with multiple GPUs each GPU gets 1/n of the boxes, so
 `"center"` plus several GPUs is what brings large 10-d searches within memory.
+
+### Box splitting
+
+`split_ratio` sets which dimensions a target box is trisected along:
+
+- `r` in (0, 1] (default `1/3`): widths are measured in units of the GP length
+  scales and a box is split only along the dimensions within `r` of its widest
+  (`1` is DIRECT's longest-side rule), skipping dimensions already narrower
+  than `epsilon_X`. A box split along m dimensions has 2m + 1 children.
+- `0`: every dimension, 2d + 1 children per box (the rule before experiment 5).
+
+The bounds depend on width over length scale, so splitting directions where
+the GP is nearly flat multiplies boxes without tightening anything. On the
+experiment-2 problems the uncapped search with `split_ratio=1/3` converges in
+seconds (10-d: 69 partitions, < 1.5 GB) where splitting every dimension runs
+out of 141 GB of GPU memory; see `experiments/exactbo/experiment5`. Any
+partition keeps the search exact.
+
+Each partition's boxes are the children of the previous partition's targets.
+The partition loop stores only those parents and one acquisition bound per
+child (8 bytes instead of 16d), and rebuilds the children from their parents in
+chunks of `2**24` boxes whenever they are bounded, sampled or become the next
+targets. Results do not depend on the chunk size.
 
 ### Acquisition: log EI
 
@@ -95,7 +123,14 @@ partitions so far) are pruned. Upper bounds are built as:
    its range over the kernel box is exact from the sign split of `L^{-1}`
    (unlike interval forward substitution, whose intervals widen row by row);
    also `Q >= ||k_lo||^2 / lambda_max(K + sigma_n^2 I)`. Intersected with the
-   AutoBound range of Q.
+   AutoBound range of Q and with a Cauchy-Schwarz bound, which is what makes
+   sigma's upper bound tight: for any w, `(k^T w)^2 <= Q * w^T K w`, so with
+   `w = K^{-1} k(x0)` at the box center, `Q(x) >= (k(x)^T w)^2 / Q(x0)`. It is
+   exact at x0 and only needs a lower bound of the linear `k(x)^T w`, obtained
+   like the mean's (sign split, plus AutoBound). On the boxes where the exact
+   10-d BO loop ran out of memory it lowers the EI bound by a median of ~6
+   nats and prunes 99.6% of them instead of 80%
+   (`experiments/exactbo/experiment5`).
 4. EI: EI is decreasing in mu and increasing in sigma, so its exact range over
    the (mu, sigma) rectangle is `[EI(mu_hi, sig_lo), EI(mu_lo, sig_hi)]`.
 

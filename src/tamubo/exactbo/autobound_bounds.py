@@ -75,22 +75,24 @@ _jb._broadcast_in_dim_pushforward_fun = _broadcast_in_dim_pushforward
 
 
 @lru_cache(maxsize=None)
-def _range_fn(degree: int):
+def _range_fn(degree: int, weighted: bool = False):
     """
-    Jitted ``(boxes_L, boxes_U, gp arrays) -> (lo, hi)`` with lo/hi of shape (n, 2)
-    bounding [mu(x), Q(x)] over each box. GP arrays are arguments, not closure
+    Jitted ``(boxes_L, boxes_U, [weights,] gp arrays) -> (lo, hi)`` with lo/hi of
+    shape (n, 2) bounding [mu(x), Q(x)] over each box, or (n, 3) also bounding
+    k(x)^T w with one weight vector w per box. GP arrays are arguments, not closure
     constants, so one compilation serves every GP with the same (N, d) and chunk size.
     """
 
-    def per_box(box_L, box_U, X_train, alpha, K_inv, length_scale, sigma_f_2):
+    def per_box(box_L, box_U, w, X_train, alpha, K_inv, length_scale, sigma_f_2):
         # AutoBound supports neither stack nor concatenate; combine outputs with basis vectors.
-        e_mu = jnp.array([1.0, 0.0])
-        e_q = jnp.array([0.0, 1.0])
+        n_out = 3 if weighted else 2
+        e_mu, e_q = jnp.eye(n_out)[0], jnp.eye(n_out)[1]
 
         def mu_q(x):
             diff = (x - X_train) / length_scale
             k = sigma_f_2 * jnp.exp(-0.5 * jnp.sum(diff * diff, axis=1))  # (N,)
-            return e_mu * (k @ alpha) + e_q * (k @ (K_inv @ k))
+            out = e_mu * (k @ alpha) + e_q * (k @ (K_inv @ k))
+            return out + jnp.eye(3)[2] * (k @ w) if weighted else out
 
         x0 = 0.5 * (box_L + box_U)
         enclosure = _ab.taylor_bounds(mu_q, degree)(x0, (box_L, box_U)).coefficients
@@ -98,12 +100,18 @@ def _range_fn(degree: int):
         lo, hi = _ea.enclose_enclosure(enclosure, (box_L - x0, box_U - x0), 0, jnp)[0]
         return lo, hi
 
-    return jax.jit(jax.vmap(per_box, in_axes=(0, 0, None, None, None, None, None)))
+    if weighted:
+        return jax.jit(jax.vmap(per_box, in_axes=(0, 0, 0, None, None, None, None, None)))
+    unweighted = jax.vmap(lambda bL, bU, *gp: per_box(bL, bU, None, *gp), in_axes=(0, 0, None, None, None, None, None))
+    return jax.jit(unweighted)
 
 
 def _to_jax(array, device):
     if type(array).__module__.split(".")[0] == "cupy":
-        # Zero-copy; the array stays on its GPU.
+        # Zero-copy; the array stays on its GPU. XLA needs 16-byte aligned buffers,
+        # which views starting mid-array (e.g. at an odd row of 5-d boxes) are not.
+        if array.data.ptr % 16:
+            array = array.copy()
         return jax.dlpack.from_dlpack(array)
     return jax.device_put(np.asarray(array), device)
 
@@ -120,9 +128,11 @@ def taylor_mu_q_bounds(
     xp,
     degree: int = 2,
     batch_size: int = 8192,
+    weights=None,
 ):
     """
-    Bound mu(x) = k(x)^T alpha and Q(x) = k(x)^T K_inv k(x) over each box.
+    Bound mu(x) = k(x)^T alpha and Q(x) = k(x)^T K_inv k(x) over each box, and
+    optionally s(x) = k(x)^T w with one weight vector w per box.
 
     Parameters
     ----------
@@ -146,10 +156,12 @@ def taylor_mu_q_bounds(
         Boxes per jitted call. Degree-2 memory is ~O(batch_size * N * d^2). Calls
         with at most 512 boxes use a 512-box chunk instead; chunks are padded, so
         each run compiles at most two programs.
+    weights : array, shape (n, N), optional
+        Per-box weights w (e.g. ``bounds.q_cs_weights``) for s(x).
 
     Returns
     -------
-    (mu_lo, mu_hi, q_lo, q_hi) : arrays of shape (n,) in ``xp``.
+    (mu_lo, mu_hi, q_lo, q_hi[, s_lo, s_hi]) : arrays of shape (n,) in ``xp``.
     """
     n, d = int(bounds_L.shape[0]), int(bounds_L.shape[1])
     if xp is np:
@@ -174,27 +186,39 @@ def taylor_mu_q_bounds(
     gp_args = tuple(
         jax.device_put(a, device) for a in (X_pad, alpha_pad, K_inv_pad, length_scale)
     ) + (float(sigma_f_2),)
-    fn = _range_fn(int(degree))
+    weighted = weights is not None
+    fn = _range_fn(int(degree), weighted)
 
     chunk = _SMALL_BATCH if n <= _SMALL_BATCH else max(1, int(batch_size))
-    lo_out = xp.empty((n, 2), dtype=xp.float64)
-    hi_out = xp.empty((n, 2), dtype=xp.float64)
+    n_out = 3 if weighted else 2
+    lo_out = xp.empty((n, n_out), dtype=xp.float64)
+    hi_out = xp.empty((n, n_out), dtype=xp.float64)
     for start in range(0, n, chunk):
         end = min(start + chunk, n)
         box_L = xp.ascontiguousarray(bounds_L[start:end], dtype=xp.float64)
         box_U = xp.ascontiguousarray(bounds_U[start:end], dtype=xp.float64)
+        if weighted:
+            # Padded training points get weight 0, like their alpha and K_inv entries.
+            w = xp.zeros((end - start, N_pad), dtype=xp.float64)
+            w[:, :N] = weights[start:end]
         if end - start < chunk:
             # Pad with copies of the first box so the jitted shape never changes.
             pad = chunk - (end - start)
             box_L = xp.concatenate([box_L, xp.broadcast_to(box_L[:1], (pad, d))])
             box_U = xp.concatenate([box_U, xp.broadcast_to(box_U[:1], (pad, d))])
+            if weighted:
+                w = xp.concatenate([w, xp.broadcast_to(w[:1], (pad, N_pad))])
             if xp is not np:
                 xp.cuda.get_current_stream().synchronize()
-        lo, hi = fn(_to_jax(box_L, device), _to_jax(box_U, device), *gp_args)
+        box_args = (box_L, box_U, w) if weighted else (box_L, box_U)
+        if weighted and xp is not np:
+            xp.cuda.get_current_stream().synchronize()
+        lo, hi = fn(*(_to_jax(a, device) for a in box_args), *gp_args)
         if xp is np:
             lo_out[start:end] = np.asarray(lo)[: end - start]
             hi_out[start:end] = np.asarray(hi)[: end - start]
         else:
             lo_out[start:end] = xp.from_dlpack(lo)[: end - start]
             hi_out[start:end] = xp.from_dlpack(hi)[: end - start]
-    return lo_out[:, 0], hi_out[:, 0], lo_out[:, 1], hi_out[:, 1]
+    out = (lo_out[:, 0], hi_out[:, 0], lo_out[:, 1], hi_out[:, 1])
+    return out + (lo_out[:, 2], hi_out[:, 2]) if weighted else out

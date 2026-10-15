@@ -12,11 +12,11 @@
   "epsilon_X": 1e-5,
   "exactbo": {
     "epsilon_ei": 0.1,
-    "max_partitions": 100,
+    "max_partitions": 1000,
     "backend": "auto",
-    "predict_batch_size": 1e8,
-    "bounds_batch_size": 1e8,
-    "max_target_boxes": 1e7,
+    "predict_batch_size": 2e7,
+    "bounds_batch_size": 2e7,
+    "max_target_boxes": null,
     "validation": false
   },
   "botorch_grid": {

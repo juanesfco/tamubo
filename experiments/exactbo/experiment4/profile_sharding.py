@@ -84,7 +84,7 @@ def main() -> None:
     t = time.perf_counter()
     result = exactbo_partitioning(
         X, bounds, np.full(X.shape[1], 1e-5), 0.1, gp, args.max_partitions,
-        backend="cupy", n_gpus=args.n_gpus, box_sampling="lhs", acquisition=args.acquisition,
+        backend="cupy", n_gpus=args.n_gpus, box_sampling="lhs", split_ratio=0.0, acquisition=args.acquisition,
         validation=False, logMask=True,
     )
     total = time.perf_counter() - t

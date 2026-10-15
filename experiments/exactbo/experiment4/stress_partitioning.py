@@ -45,22 +45,21 @@ def peak_memory_gb() -> dict:
 
 
 def _report_splits(t0: float) -> None:
-    """Wrap exactbo's split_boxes to report each split; a run that runs out of memory usually dies there."""
+    """Wrap exactbo's split_child_counts to report each split (targets -> children); a run that runs
+    out of memory usually dies while bounding the next partition."""
     import tamubo.exactbo.run as run_mod
 
-    split = run_mod.split_boxes
+    count_children = run_mod.split_child_counts
     count = [0]
 
-    def split_with_progress(bounds_L, bounds_U, mask, *args, **kwargs):
+    def split_with_progress(bounds_L, *args, **kwargs):
         count[0] += 1
-        n_split = int(mask.sum())
-        print(f"PROGRESS split {count[0]}: {n_split} targets -> {n_split * (2 * bounds_L.shape[1] + 1)} boxes, "
-              f"t={time.perf_counter() - t0:.1f}s, before {peak_memory_gb()}", flush=True)
-        out = split(bounds_L, bounds_U, mask, *args, **kwargs)
-        print(f"PROGRESS split {count[0]} done, after {peak_memory_gb()}", flush=True)
-        return out
+        counts = count_children(bounds_L, *args, **kwargs)
+        print(f"PROGRESS split {count[0]}: {int(bounds_L.shape[0])} targets -> {int(counts.sum())} boxes, "
+              f"t={time.perf_counter() - t0:.1f}s, {peak_memory_gb()}", flush=True)
+        return counts
 
-    run_mod.split_boxes = split_with_progress
+    run_mod.split_child_counts = split_with_progress
 
 
 def main() -> None:
@@ -74,6 +73,8 @@ def main() -> None:
     ap.add_argument("--acquisition", default="logei", choices=["logei", "ei"])
     ap.add_argument("--bound-method", default="autobound", choices=["autobound", "interval"])
     ap.add_argument("--box-sampling", default="lhs", choices=["lhs", "center"])
+    ap.add_argument("--split-ratio", type=float, default=0.0,
+                    help="0 splits every dimension; >0 splits in GP length-scale units (see exactbo)")
     ap.add_argument("--autobound-degree", type=int, default=2)
     ap.add_argument("--autobound-batch-size", type=int, default=8192)
     ap.add_argument("--n-gpus", type=int, default=None, help="default: all visible GPUs")
@@ -102,6 +103,7 @@ def main() -> None:
         backend="cupy",
         n_gpus=args.n_gpus,
         box_sampling=args.box_sampling,
+        split_ratio=args.split_ratio,
         acquisition=args.acquisition,
         bound_method=args.bound_method,
         autobound_degree=args.autobound_degree,
@@ -139,6 +141,7 @@ def main() -> None:
 
     summary = dict(
         label=label, args=vars(args), elapsed_s=round(elapsed, 2), partitions=len(parts),
+        converged=bool(result.log.get("converged")),
         n_target=[int(r["n_target"]) for r in parts], incumbent=float(parts[-1]["best"]) if parts else None,
         ei_max_scaled=float(result.log["ei_max_scaled"]), x=np.asarray(result.X, dtype=float).ravel().tolist(),
         **{k: round(v, 2) for k, v in memory.items()},

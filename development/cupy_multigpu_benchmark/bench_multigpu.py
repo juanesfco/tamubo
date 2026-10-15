@@ -73,6 +73,7 @@ def run(d: int, preset: dict, n_gpus: int, iters: int, box_sampling: str = "lhs"
         X0=X0, bounds=bounds, epsilon_X=preset["eps_X"], epsilon_ei=preset["eps_ei"],
         gp=make_gp(d), f=levy, max_iters=iters, max_partitions=preset["max_partitions"],
         backend="cupy", n_gpus=n_gpus, box_sampling=box_sampling,
+        split_ratio=0.0,  # the README results split every dimension (large frontiers to shard)
         predict_batch_size=int(preset["batch"]), bounds_batch_size=int(preset["batch"]),
         max_target_boxes=int(preset["max_target"]),
         validation=False, logMask=True, normalize_to_unit_cube=True,

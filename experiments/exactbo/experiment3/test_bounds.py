@@ -10,6 +10,8 @@ small 4-d GP, so it runs in seconds (the AutoBound tests are skipped without
 """
 from __future__ import annotations
 
+import importlib.util
+
 import numpy as np
 import pytest
 from scipy.linalg import solve_triangular
@@ -19,7 +21,7 @@ from sklearn.gaussian_process.kernels import RBF, ConstantKernel, WhiteKernel
 
 from tamubo.acquisition_functions import expected_improvement, log_expected_improvement
 from tamubo.acquisition_functions.ei import log_h
-from tamubo.exactbo.bounds import ei_bounds, mu_bounds, rbf_k_bounds, sigma_bounds
+from tamubo.exactbo.bounds import ei_bounds, mu_bounds, q_cs_lower, q_cs_weights, rbf_k_bounds, sigma_bounds
 from tamubo.utils import has_cupy, to_numpy
 
 BACKENDS = ["numpy"] + (["cupy"] if has_cupy() else [])
@@ -217,3 +219,41 @@ def test_autobound_bounds_are_sound_and_tighten_mu(gp_problem, backend, depth):
     if depth >= 20:
         # Deep boxes: the Taylor enclosure is much tighter than per-entry intervals.
         assert np.median(mu_s.min(1) - mu_lo) < 0.5 * np.median(mu_s.min(1) - i_mu_lo)
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+@pytest.mark.parametrize("depth", [0, 3, 8, 20, 40])
+def test_cauchy_schwarz_q_bound_is_sound_and_tightens_sigma(gp_problem, backend, depth):
+    # Q >= (k^T w)^2 / Q(x0) with w = K^-1 k(x0): sound for any box, exact at the
+    # center, and (with or without the AutoBound bound on k^T w) a tighter sigma_hi.
+    P = gp_problem
+    xp = _xp(backend)
+    rng = np.random.default_rng(200 + depth)
+    lo, hi = _random_boxes(48, P["X"].shape[1], depth, rng)
+    _, sd_s = _sampled_posterior(P, lo, hi, 400, rng)
+    q_s = P["sf2"] - sd_s**2
+    n, d = lo.shape
+    N = P["X"].shape[0]
+    K_inv = np.linalg.inv(P["L"] @ P["L"].T)
+    L_, U_ = xp.asarray(lo), xp.asarray(hi)
+    K_lo, K_hi = xp.empty((n, N)), xp.empty((n, N))
+    for i in range(N):
+        K_lo[:, i], K_hi[:, i] = rbf_k_bounds(L_, U_, xp.asarray(P["X"][i]), n, d, P["sf2"], xp.asarray(P["ls"]),
+                                              backend=backend)
+    w, q0 = q_cs_weights(L_, U_, P["X"], xp.asarray(P["ls"]), P["sf2"], K_inv, backend=backend)
+    np.testing.assert_allclose(to_numpy(q0), q_s[:, -1], rtol=1e-8, atol=1e-12)  # last sample is the center
+    variants = [q_cs_lower(K_lo, K_hi, w, q0, backend=backend)]
+    if importlib.util.find_spec("autobound") is not None:
+        from tamubo.exactbo.autobound_bounds import taylor_mu_q_bounds
+
+        s_lo = taylor_mu_q_bounds(L_, U_, P["X"], P["alpha"], K_inv, P["ls"], P["sf2"], xp=xp, weights=w)[4]
+        variants.append(q_cs_lower(K_lo, K_hi, w, q0, s_lo=s_lo, backend=backend))
+    _, plain_sig_hi = _interval_bounds(P, lo, hi, backend)[2:]
+    for q_lo in variants:
+        assert np.all(to_numpy(q_lo) <= q_s.min(1) + TOL)
+        _, sig_hi = _interval_bounds(P, lo, hi, backend, q_bounds=(q_lo, xp.full((n,), np.inf)))[2:]
+        sig_hi = to_numpy(sig_hi)
+        assert np.all(sig_hi >= sd_s.max(1) - TOL) and np.all(sig_hi <= to_numpy(plain_sig_hi) + 1e-12)
+    if depth >= 8:
+        # Smaller boxes: the bound recovers most of Q, so sigma_hi tightens.
+        assert np.median(sig_hi - sd_s.max(1)) < 0.5 * np.median(to_numpy(plain_sig_hi) - sd_s.max(1))
