@@ -1,0 +1,1236 @@
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs,longtable,array}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{hyperref}
+\usepackage{microtype}
+\hypersetup{colorlinks=true,linkcolor=black,urlcolor=blue}
+\lstset{basicstyle=\ttfamily\small,frame=single,columns=fullflexible,keepspaces=true,showstringspaces=false,breaklines=true}
+\newcommand{\codepath}[1]{\nolinkurl{#1}}
+\newcommand{\R}{\mathbb{R}}
+\title{\textbf{AutoIA Software Manual}\\
+User Guide, Operations Reference, and Developer Maintenance Guide\\
+Version 0.21.0.dev1}
+\author{}
+\date{August 2026}
+\begin{document}
+\maketitle
+
+\begin{abstract}
+This manual explains how to install, use, diagnose, test, and modify AutoIA
+version 0.21.0.dev1.  It is written for two overlapping audiences.  The first is
+an engineering user who wants to run validated interval analysis on ordinary
+Python/NumPy code.  The second is a researcher/developer who needs to understand
+the source layout well enough to add a function, representation, semantic
+primitive, controller policy, performance backend, or many-box execution feature
+without violating the certification architecture.
+
+All code examples are complete Python fragments intended to be directly
+copyable.  The manual states the supported-language boundary explicitly; code
+that happens to work outside that boundary should not be treated as a stable
+Version-1 contract.
+\end{abstract}
+
+\tableofcontents
+\newpage
+
+%===============================================================================
+\section{Installation and project layout}
+%===============================================================================
+
+AutoIA 0.21.0.dev1 requires Python 3.10 or newer and NumPy 1.24 or newer.  SciPy
+is optional; it is needed only if the user's model itself imports SciPy and wants
+the supported SciPy normal/error-function syntax.
+
+To install the built wheel into an environment:
+\begin{lstlisting}[language=bash]
+python -m pip install autoia-0.21.0.dev1-py3-none-any.whl
+\end{lstlisting}
+
+To verify the installed version:
+\begin{lstlisting}[language=Python]
+import autoia
+print(autoia.__version__)
+# 0.21.0.dev1
+\end{lstlisting}
+
+The most important public imports are:
+\begin{lstlisting}[language=Python]
+from autoia import (
+    autoia,
+    autoia_subdivide,
+    autoia_adaptive_subdivide,
+    prepare,
+    Interval,
+    RigorousBinary64Backend,
+    RangePolicy,
+    SubdivisionPolicy,
+    BranchPolicy,
+)
+\end{lstlisting}
+
+%===============================================================================
+\section{First validated calculation}
+%===============================================================================
+
+The smallest useful example is:
+\begin{lstlisting}[language=Python]
+import numpy as np
+from autoia import autoia, Interval
+
+
+def model(p):
+    x = p[0]
+    return np.exp(x) + x*x
+
+
+result = autoia(
+    model,
+    [Interval(-0.2, 0.3)],
+    order=4,
+)
+
+print("lower =", result.lower)
+print("upper =", result.upper)
+print("width =", result.width)
+print("machine rigorous =", result.machine_rigorous)
+\end{lstlisting}
+
+If \texttt{autoia(...)} returns normally, the reported interval is intended to
+contain the exact real program output for every input in the supplied interval.
+If the requested statement cannot be certified, the function raises a typed
+\texttt{AutoIAError} subclass and returns no rigorous result.
+
+%===============================================================================
+\section{Specifying uncertain inputs}
+%===============================================================================
+
+For one uncertain scalar parameter use
+\begin{lstlisting}[language=Python]
+Interval(lower, upper)
+\end{lstlisting}
+with finite endpoints satisfying \texttt{lower <= upper}.
+
+For \(m\) uncertain inputs, pass a sequence of \(m\) intervals:
+\begin{lstlisting}[language=Python]
+box = [
+    Interval(90.0, 110.0),
+    Interval(900.0, 1100.0),
+    Interval(9.5, 10.5),
+]
+result = autoia(model, box)
+\end{lstlisting}
+
+The uncertainty model is currently a Cartesian box.  Correlated physical input
+sets such as ellipsoids, simplices encoded intrinsically, or arbitrary
+non-rectangular feasible sets are not yet first-class input-domain objects.  A
+user may still write algebraic relations in the model, but the declared uncertain
+parameters themselves are supplied as independent interval coordinates.
+
+%===============================================================================
+\section{Choosing a representation}
+%===============================================================================
+
+The public \texttt{representation=} option accepts:
+
+\begin{longtable}{p{0.22\textwidth}p{0.68\textwidth}}
+\toprule
+Value & Meaning and recommended use \\
+\midrule
+\endhead
+\texttt{"polynomial"} & Default.  Retains a sparse polynomial in the original uncertain inputs plus a rigorous interval remainder.  Usually the best starting point for smooth engineering models. \\
+\texttt{"generator"} & Retains the same physical-input polynomial plus shared auxiliary error generators.  Use when downstream reuse/cancellation of approximated vector/intermediate quantities matters. \\
+\texttt{"interval"} & Uses ordinary interval enclosures without retaining explicit polynomial dependence.  Robust fallback and useful near some exact function-domain boundaries, but usually less sharp for repeated dependence. \\
+\bottomrule
+\end{longtable}
+
+Example:
+\begin{lstlisting}[language=Python]
+result = autoia(
+    model,
+    [Interval(-1.0, 1.0)],
+    order=3,
+    representation="generator",
+)
+
+print(result.generator_ids)
+print(result.generator_matrix)
+\end{lstlisting}
+
+The generator representation is not automatically superior in every model.  It
+preserves additional error provenance at the cost of extra bookkeeping and can
+accumulate many generator IDs in long nonlinear computations.
+
+%===============================================================================
+\section{Polynomial order}
+%===============================================================================
+
+The \texttt{order} argument is a nonnegative integer controlling the maximum
+total degree retained in the polynomial representation.
+
+\begin{lstlisting}[language=Python]
+result = autoia(model, box, order=4)
+\end{lstlisting}
+
+Higher order can reduce the interval remainder by retaining more physical-input
+dependence, but increases polynomial coefficient count and range-analysis cost.
+The appropriate value is model-dependent.  Orders around 2--5 are the natural
+starting range for many small engineering examples in the current prototype.
+
+Changing \texttt{order} affects efficiency and sharpness, not the mathematical
+inclusion contract: discarded polynomial terms are rigorously transferred to
+remainder bounds.
+
+%===============================================================================
+\section{Supported scalar arithmetic}
+%===============================================================================
+
+The core supported scalar operations include:
+\begin{itemize}[leftmargin=*]
+\item addition and subtraction;
+\item multiplication;
+\item division when the denominator can be proved separated from zero;
+\item integer powers, including negative integer powers when zero is excluded;
+\item constant non-integer real powers on the supported positive-real branch.
+\end{itemize}
+
+Examples:
+\begin{lstlisting}[language=Python]
+def model(p):
+    x = p[0]
+    a = x*x + 2.0*x - 1.0
+    b = 1.0 / (2.0 + x*x)
+    c = (1.5 + x)**1.25
+    d = (2.0 + x)**-0.5
+    return np.array([a, b, c, d])
+\end{lstlisting}
+
+An uncertain exponent such as \texttt{x ** p[1]} is currently unsupported.
+
+%===============================================================================
+\section{Supported elementary and statistical functions}
+%===============================================================================
+
+The ordinary NumPy and standard-library forms of these scalar functions are
+supported when visible through the model's module/global namespace:
+\begin{lstlisting}[language=Python]
+np.sqrt(x)
+np.exp(x)
+np.log(x)
+np.sin(x)
+np.cos(x)
+
+math.sqrt(x)
+math.exp(x)
+math.log(x)
+math.sin(x)
+math.cos(x)
+math.erf(x)
+\end{lstlisting}
+
+AutoIA also exports:
+\begin{lstlisting}[language=Python]
+from autoia import (
+    erf,
+    standard_normal_pdf,
+    standard_normal_cdf,
+    normal_pdf,
+    normal_cdf,
+    norm_pdf,
+    norm_cdf,
+)
+\end{lstlisting}
+
+For a normal distribution with constant mean \texttt{mu} and standard deviation
+\texttt{sigma > 0}:
+\begin{lstlisting}[language=Python]
+def model(p):
+    x = p[0]
+    return np.array([
+        normal_pdf(x, mean=10.0, std=2.0),
+        normal_cdf(x, mean=10.0, std=2.0),
+    ])
+\end{lstlisting}
+
+The current normal convenience APIs require constant distribution parameters.
+Uncertain mean/standard deviation parameters are not yet supported by those
+front-end helpers.
+
+%===============================================================================
+\section{SciPy compatibility}
+%===============================================================================
+
+If SciPy is installed and the user model imports it, these common forms are
+recognized:
+\begin{lstlisting}[language=Python]
+import scipy
+
+scipy.special.erf(x)
+scipy.special.ndtr(x)
+
+scipy.stats.norm.pdf(x)
+scipy.stats.norm.cdf(x)
+scipy.stats.norm.pdf(x, loc=mu, scale=sigma)
+scipy.stats.norm.cdf(x, loc=mu, scale=sigma)
+\end{lstlisting}
+
+Frozen legacy normal distributions are supported:
+\begin{lstlisting}[language=Python]
+from scipy.stats import norm
+rv = norm(loc=2.0, scale=1.5)
+
+
+def model(p):
+    x = p[0]
+    return np.array([rv.pdf(x), rv.cdf(x)])
+\end{lstlisting}
+
+When available in the installed SciPy version, the newer
+\texttt{scipy.stats.Normal} object API is also recognized for PDF/CDF use.
+
+SciPy does not become proof code.  On validated inputs the local dispatcher
+routes these calls to AutoIA's own rigorous error-function/normal kernels.
+Numeric-only calls continue to use ordinary SciPy.
+
+%===============================================================================
+\section{NumPy arrays and ordinary engineering assembly}
+%===============================================================================
+
+Inside AutoIA's private execution namespace, common array constructors default to
+\texttt{dtype=object} when the user did not explicitly request a dtype.  This
+allows standard engineering assembly:
+\begin{lstlisting}[language=Python]
+import numpy as np
+
+
+def model(p):
+    k1, k2, force = p
+
+    A = np.zeros((2, 2))
+    b = np.zeros(2)
+
+    A[0, 0] = k1 + k2
+    A[0, 1] = -k2
+    A[1, 0] = -k2
+    A[1, 1] = k2
+
+    b[0] = force
+
+    return np.linalg.solve(A, b)
+\end{lstlisting}
+
+Supported constructors include common forms of \texttt{array}, \texttt{asarray},
+\texttt{zeros}, \texttt{ones}, \texttt{empty}, \texttt{full}, their
+\texttt{*\_like} variants, \texttt{eye}, and \texttt{identity}.
+
+Ordinary object-array indexing, slicing, reshape, transpose, stacking,
+concatenation, and item assignment are supported in the tested engineering cases.
+
+%===============================================================================
+\section{Broadcasting, reductions, and matrix composition}
+%===============================================================================
+
+Supported broadcasted scalar arithmetic includes cases where a numeric constant
+NumPy array created outside the model is combined with one validated scalar:
+\begin{lstlisting}[language=Python]
+COEFF = np.array([1.5, -2.0, 0.25])
+
+
+def model(p):
+    return COEFF * p[0]
+\end{lstlisting}
+
+The supported reduction subset includes:
+\begin{lstlisting}[language=Python]
+np.sum(A, axis=...)
+np.prod(A, axis=...)
+np.mean(A, axis=...)
+np.trace(A)
+\end{lstlisting}
+with common \texttt{axis} and \texttt{keepdims} behavior.  For validated
+reductions, omit \texttt{dtype} or use \texttt{dtype=object}.  General
+\texttt{where=} and \texttt{out=} semantics are not frozen.
+
+The tested 1D/2D composition subset includes:
+\begin{lstlisting}[language=Python]
+np.dot(a, b)
+np.matmul(A, x)
+A @ x
+np.inner(a, b)
+np.outer(a, b)
+\end{lstlisting}
+
+%===============================================================================
+\section{Norms}
+%===============================================================================
+
+The supported norm forms are:
+\begin{lstlisting}[language=Python]
+np.linalg.norm(x)             # vector Euclidean norm
+np.linalg.norm(x, ord=2)      # vector Euclidean norm
+np.linalg.norm(A)             # matrix Frobenius norm
+np.linalg.norm(A, ord="fro") # matrix Frobenius norm
+\end{lstlisting}
+
+For a vector \(x=(x_1,\ldots,x_n)^T\), the supported Euclidean norm is
+\[
+\|x\|_2=\sqrt{\sum_{i=1}^n x_i^2}.
+\]
+Matrix spectral \texttt{ord=2}, general \(p\)-norms, nuclear norms, and max-based
+norms are not currently supported.
+
+%===============================================================================
+\section{Semantic linear solves}
+%===============================================================================
+
+Use ordinary NumPy syntax:
+\begin{lstlisting}[language=Python]
+u = np.linalg.solve(A, b)
+\end{lstlisting}
+
+AutoIA recognizes this call and applies its semantic linear-system certificate.
+The entries of \texttt{A} and \texttt{b} may contain retained polynomial
+nonlinearity from earlier arithmetic or elementary functions.
+
+Multiple right-hand sides are supported:
+\begin{lstlisting}[language=Python]
+X = np.linalg.solve(A, B)
+\end{lstlisting}
+where \texttt{B} is a matrix with one right-hand side per column.
+
+The solve may fail with \texttt{CertificationError} if AutoIA cannot prove the
+matrix family nonsingular/contractive on the supplied box.  This is not
+necessarily evidence that the true matrix is singular.  Subdivision, a smaller
+input box, or a later stronger certifier may succeed.
+
+%===============================================================================
+\section{Uncertain Python branches}
+%===============================================================================
+
+Ordinary scalar conditionals are supported for the documented subset:
+\begin{lstlisting}[language=Python]
+def model(p):
+    x = p[0]
+
+    if x < -0.25:
+        y = -1.0 + x*x
+    elif x <= 0.5:
+        y = x*x
+    else:
+        y = 1.0 + x
+
+    return y*y + 0.1*x
+\end{lstlisting}
+
+Supported scalar comparisons include \texttt{<}, \texttt{<=}, \texttt{>},
+\texttt{>=}, \texttt{==}, and \texttt{!=}, plus scalar truth testing
+\texttt{if x:}.  Python short-circuit \texttt{and}/\texttt{or} works through the
+same scalar truth mechanism in the tested cases.
+
+If a predicate cannot be rigorously decided on the current box, AutoIA may split
+the input box or enumerate both feasible execution paths.  A branching model
+returns an \texttt{AutoIAPathwiseResult} with branch metadata in addition to
+global lower/upper bounds.
+
+%===============================================================================
+\section{Branch policy and resource limits}
+%===============================================================================
+
+The default branch policy is equivalent to:
+\begin{lstlisting}[language=Python]
+from autoia import BranchPolicy
+
+policy = BranchPolicy(
+    max_branches=64,
+    max_path_decisions=24,
+    max_split_depth_per_decision=2,
+    max_total_splits=64,
+    prefer_geometric_split=True,
+)
+\end{lstlisting}
+
+Use it with:
+\begin{lstlisting}[language=Python]
+result = autoia(model, box, branch_policy=policy)
+\end{lstlisting}
+
+If a hard path resource budget is exhausted before every feasible path is
+certified, AutoIA raises \texttt{ResourceLimitError}.  It does not silently drop
+paths.
+
+%===============================================================================
+\section{Range policies}
+%===============================================================================
+
+The default final range policy is adaptive.  The public policy object is:
+\begin{lstlisting}[language=Python]
+from autoia import RangePolicy
+
+policy = RangePolicy(
+    internal_method="termwise",
+    final_method="adaptive",
+    bernstein_max_coefficients=256,
+    proof_bernstein_max_coefficients=256,
+)
+\end{lstlisting}
+
+The supported internal methods are:
+\begin{itemize}[leftmargin=*]
+\item \texttt{"termwise"};
+\item \texttt{"monotonicity"};
+\item \texttt{"bernstein"};
+\item \texttt{"portfolio"}.
+\end{itemize}
+The final method may additionally be \texttt{"adaptive"}.
+
+Use either a \texttt{RangePolicy} object or the legacy convenience keyword
+options such as \texttt{range\_method}; do not pass both styles in the same call.
+
+%===============================================================================
+\section{Prescribed subdivision}
+%===============================================================================
+
+To force a Cartesian subdivision, use:
+\begin{lstlisting}[language=Python]
+from autoia import autoia_subdivide
+
+piecewise = autoia_subdivide(
+    model,
+    [Interval(-1.0, 1.0), Interval(0.0, 2.0)],
+    split_counts=[4, 2],
+    order=4,
+)
+\end{lstlisting}
+
+The \texttt{split\_counts} sequence contains one positive integer per input
+coordinate.  Each resulting subbox is independently certified.
+
+%===============================================================================
+\section{Adaptive subdivision}
+%===============================================================================
+
+Use:
+\begin{lstlisting}[language=Python]
+from autoia import autoia_adaptive_subdivide, SubdivisionPolicy
+
+policy = SubdivisionPolicy(
+    max_branches=16,
+    max_depth=6,
+    max_probe_directions=2,
+    min_structural_gain=0.05,
+    min_relative_width_gain=1.0e-3,
+    split_method="cheap",
+)
+
+result = autoia_adaptive_subdivide(
+    model,
+    box,
+    order=4,
+    subdivision_policy=policy,
+)
+\end{lstlisting}
+
+The release-oriented default \texttt{split\_method="cheap"} scores hypothetical
+splits from the existing polynomial and only certifies the selected child pair.
+Use \texttt{split\_method="lookahead"} to reproduce the expensive historical
+one-step lookahead research oracle.
+
+The current adaptive-subdivision controller does not generally compose with
+uncertain Python control flow.  For path-dependent models use ordinary path-aware
+\texttt{autoia(...)} or prescribed \texttt{autoia\_subdivide(...)} unless the
+current documentation explicitly states otherwise.
+
+%===============================================================================
+\section{Understanding result objects}
+%===============================================================================
+
+For an ordinary result:
+\begin{lstlisting}[language=Python]
+print(result.lower)
+print(result.upper)
+print(result.width)
+print(result.output_shape)
+print(result.lower_shaped)
+print(result.upper_shaped)
+print(result.width_shaped)
+print(result.machine_rigorous)
+print(result.representation_names)
+\end{lstlisting}
+
+The flat \texttt{lower}/\texttt{upper} arrays are retained for compatibility.
+Use the shaped properties to recover the model's returned array shape.
+
+In generator mode:
+\begin{lstlisting}[language=Python]
+print(result.generator_ids)
+print(result.generator_matrix)
+\end{lstlisting}
+Rows of \texttt{generator\_matrix} correspond to flattened outputs and columns
+correspond to shared generator IDs.
+
+The \texttt{objects} field contains the validated scalar representations.  It is
+intended primarily for research/diagnostic use; ordinary users usually need only
+bounds and diagnostics.
+
+%===============================================================================
+\section{Understanding pathwise results}
+%===============================================================================
+
+A path-aware result additionally exposes information such as:
+\begin{lstlisting}[language=Python]
+print(result.branch_results)
+print(result.branch_boxes)
+print(result.branch_decisions)
+print(result.branch_traces)
+print(result.path_events)
+\end{lstlisting}
+
+These records are useful when a wide global interval is caused by genuinely
+different program regimes.  They should also be examined when path budgets become
+large or a branch-local singularity prevents certification.
+
+%===============================================================================
+\section{Prepared sessions for repeated queries}
+%===============================================================================
+
+For repeated certification of the same program/configuration, use \texttt{prepare}
+instead of calling one-shot \texttt{autoia} repeatedly:
+\begin{lstlisting}[language=Python]
+from autoia import prepare, Interval
+
+session = prepare(
+    model,
+    order=4,
+    representation="generator",
+    cache_max_entries=256,
+)
+
+r1 = session.certify([
+    Interval(-1.0, 1.0),
+    Interval(0.0, 2.0),
+])
+
+r2 = session.certify([
+    Interval(-0.25, 0.25),
+    Interval(0.5, 1.0),
+])
+
+print(session.stats)
+print(r2.cache_info)
+\end{lstlisting}
+
+The session prepares the model's local dispatch once and reuses one audited
+trusted backend.
+
+%===============================================================================
+\section{Certificate cache behavior}
+%===============================================================================
+
+The session cache has three important query outcomes.
+
+\paragraph{Fresh certificate.}
+\begin{lstlisting}[language=Python]
+result.cache_info["kind"] == "fresh-certificate"
+\end{lstlisting}
+The engineering model was executed and a new proof was produced.
+
+\paragraph{Exact certificate hit.}
+\begin{lstlisting}[language=Python]
+result.cache_info["kind"] == "exact-certificate"
+\end{lstlisting}
+The exact same stored input endpoints were already certified; the model is not
+re-executed.
+
+\paragraph{Restricted certificate hit.}
+\begin{lstlisting}[language=Python]
+result.cache_info["kind"] == "restricted-certificate"
+\end{lstlisting}
+A previously certified parent box contained the new query, and AutoIA rigorously
+re-centered/re-ranged the stored polynomial/generator certificate on the new
+interior box without executing the model.
+
+The cache is bounded by \texttt{cache\_max\_entries}.  Set it to zero to disable
+persistent cache storage:
+\begin{lstlisting}[language=Python]
+session = prepare(model, cache_max_entries=0)
+\end{lstlisting}
+
+Use:
+\begin{lstlisting}[language=Python]
+session.clear_cache()
+\end{lstlisting}
+to remove stored certificates.
+
+%===============================================================================
+\section{Many-box finite collections}
+%===============================================================================
+
+A finite collection may be supplied as nested endpoint arrays:
+\begin{lstlisting}[language=Python]
+boxes = np.array([
+    [[-1.0, -0.8], [0.0, 0.2]],
+    [[-0.5, -0.3], [0.4, 0.6]],
+    [[ 0.1,  0.2], [0.8, 1.0]],
+], dtype=float)
+
+results = session.certify_many(
+    boxes,
+    parallel="serial",
+)
+\end{lstlisting}
+
+or as ordinary lists of \texttt{Interval} objects.
+
+For bounds-only output:
+\begin{lstlisting}[language=Python]
+lower, upper = session.certify_many_bounds(boxes)
+print(lower.shape)
+print(upper.shape)
+\end{lstlisting}
+If there are \(N\) boxes and \(r\) flattened scalar outputs, the arrays have
+shape \((N,r)\).
+
+%===============================================================================
+\section{CPU parallel many-box execution}
+%===============================================================================
+
+The supported modes are:
+\begin{lstlisting}[language=Python]
+parallel="serial"
+parallel="thread"
+parallel="process"
+\end{lstlisting}
+
+Example process mode:
+\begin{lstlisting}[language=Python]
+results = session.certify_many(
+    boxes,
+    parallel="process",
+    workers=8,
+    chunk_size=64,
+    use_cache=True,
+    allow_restriction=True,
+)
+\end{lstlisting}
+
+The model must be pickleable for process mode.  The safest pattern is a
+module-level function:
+\begin{lstlisting}[language=Python]
+# good for multiprocessing
+
+def engineering_model(p):
+    ...
+\end{lstlisting}
+A nested closure or lambda is generally not pickleable under the spawn execution
+mode.  Use serial/thread mode or move the model to module scope.
+
+Each worker process prepares the model once and creates its own audited trusted
+backend.  Session-local caches are not automatically shared across processes.
+For heavily overlapping boxes, one serial/shared session with certificate reuse
+may outperform process mode despite using fewer cores; benchmark the actual
+workload.
+
+%===============================================================================
+\section{Streaming millions of boxes}
+%===============================================================================
+
+Do not construct a list of one million full result objects if the downstream
+workflow only needs bounds.  Use a generator and the streaming API:
+\begin{lstlisting}[language=Python]
+from autoia import Interval, prepare
+
+
+def generate_boxes():
+    for i in range(1_000_000):
+        a = -1.0 + 2.0*i/1_000_000
+        yield [Interval(a, a + 1.0e-3)]
+
+
+session = prepare(model, order=3)
+
+for lower, upper in session.iter_bounds_many(
+    generate_boxes(),
+    parallel="process",
+    workers=8,
+    chunk_size=256,
+):
+    # Write to disk/database or update an aggregate.
+    consume(lower, upper)
+\end{lstlisting}
+
+The iterator keeps one executor alive and only a bounded number of chunks in
+flight.  This controls orchestration memory, although each individual AutoIA
+certification still uses the current Python-object representation internally.
+
+%===============================================================================
+\section{Session statistics}
+%===============================================================================
+
+Inspect:
+\begin{lstlisting}[language=Python]
+print(session.stats)
+\end{lstlisting}
+The returned \texttt{PreparedSessionStats} fields are:
+\begin{itemize}[leftmargin=*]
+\item \texttt{model\_preparations};
+\item \texttt{certify\_requests};
+\item \texttt{engineering\_model\_executions};
+\item \texttt{exact\_cache\_hits};
+\item \texttt{restricted\_cache\_hits};
+\item \texttt{cache\_misses};
+\item \texttt{cache\_entries}.
+\end{itemize}
+These statistics are especially useful for deciding whether a repeated-query
+workload is benefiting from mathematical certificate reuse or merely from CPU
+parallelism.
+
+%===============================================================================
+\section{Trusted reduction backend configuration}
+%===============================================================================
+
+The default backend chooses the historical scalar trusted reduction for short
+reductions and the vectorized outward pairwise implementation for longer ones.
+You can create an explicit backend:
+\begin{lstlisting}[language=Python]
+from autoia import RigorousBinary64Backend
+
+backend = RigorousBinary64Backend(
+    reduction_method="auto",
+    vectorized_reduction_min_terms=16,
+)
+
+result = autoia(model, box, backend=backend)
+\end{lstlisting}
+
+For research comparisons:
+\begin{lstlisting}[language=Python]
+reference_backend = RigorousBinary64Backend(
+    reduction_method="reference"
+)
+
+fast_backend = RigorousBinary64Backend(
+    reduction_method="vectorized"
+)
+\end{lstlisting}
+
+Different rigorous reduction orders can produce slightly different certified
+endpoints.  Bitwise identity is not a general requirement; containment is.
+
+%===============================================================================
+\section{Typed errors and how to respond}
+%===============================================================================
+
+Catch the common base class if an application wants one failure handler:
+\begin{lstlisting}[language=Python]
+from autoia import AutoIAError
+
+try:
+    result = autoia(model, box)
+except AutoIAError as exc:
+    print(type(exc).__name__)
+    print(exc)
+\end{lstlisting}
+
+Use the subtype to diagnose the problem:
+
+\begin{longtable}{p{0.28\textwidth}p{0.62\textwidth}}
+\toprule
+Exception & Meaning / likely response \\
+\midrule
+\endhead
+\texttt{InvalidInputError} & Malformed public call, invalid interval/order/policy/backend option.  Correct the call. \\
+\texttt{UnsupportedOperationError} & Program used syntax/operation outside the current supported subset.  Rewrite using supported operations or implement a validated extension. \\
+\texttt{CertificationError} & Supported mathematical operation was recognized but the requested proof failed, e.g. zero-crossing division or failed solve contraction.  Subdivide or improve the certifier. \\
+\texttt{ResourceLimitError} & Path/subdivision budget exhausted.  Increase a justified budget or reduce the box. \\
+\texttt{NumericalLimitError} & Trusted finite computation overflow/underflow or environment numerical limitation prevented a proof. \\
+\texttt{ModelExecutionError} & The user's ordinary Python model raised an exception or returned incompatible path shapes. \\
+\texttt{InternalAutoIAError} & AutoIA detected an internal inconsistency; treat this as a software defect and preserve a reproducible case. \\
+\bottomrule
+\end{longtable}
+
+%===============================================================================
+\section{Current supported-language boundaries}
+%===============================================================================
+
+Do not rely on the following as stable validated semantics unless later releases
+explicitly add them:
+\begin{itemize}[leftmargin=*]
+\item \texttt{np.max}, \texttt{np.min}, \texttt{np.maximum}, \texttt{np.minimum};
+\item general \texttt{abs}/sign/nonsmooth array operations;
+\item uncertain Boolean masks and \texttt{np.where} with uncertain masks;
+\item uncertain array indices or slices;
+\item arbitrary \texttt{einsum}/\texttt{tensordot} signatures;
+\item spectral/eigenvalue matrix norms;
+\item general uncertainty-dependent \texttt{while} loop termination;
+\item functions hidden inside compiled extensions or helpers whose globals are not
+visible to the local shadow dispatcher;
+\item arbitrary runtime-local imports inside the model body;
+\item general nonlinear root/ODE/eigen/optimization semantic primitives.
+\end{itemize}
+
+The correct behavior for unsupported semantics is fail closed, not silently
+coerce validated objects to ordinary floating point.
+
+%===============================================================================
+\section{Known boundary issue for sqrt/log}
+%===============================================================================
+
+A user interval may mathematically lie exactly on a valid domain boundary, such
+as \([0,4]\) for \(\sqrt{x}\).  The polynomial representation uses a rigorous
+symmetric centered envelope that can extend by a tiny amount below the original
+lower endpoint because of outward rounding.  AutoIA will not silently clip that
+negative proof interval.
+
+If this occurs, practical options are:
+\begin{itemize}[leftmargin=*]
+\item use the interval representation for that calculation if appropriate;
+\item subdivide or move the physical domain away from the exact boundary;
+\item wait for the planned richer boundary/domain representation before relying
+on polynomial-mode exact-boundary behavior.
+\end{itemize}
+
+%===============================================================================
+\section{Performance guidance for users}
+%===============================================================================
+
+For one or a few boxes:
+\begin{itemize}[leftmargin=*]
+\item start with \texttt{representation="polynomial"};
+\item use the default backend/range policy;
+\item increase polynomial order only when remainder/range width justifies the
+extra cost;
+\item inspect branching/subdivision only when the global result is too wide or a
+proof fails.
+\end{itemize}
+
+For many boxes over one program:
+\begin{itemize}[leftmargin=*]
+\item use \texttt{prepare};
+\item keep overlapping/interior queries in one session so certificate restriction
+can occur;
+\item inspect \texttt{session.stats};
+\item use process mode for many unrelated fresh boxes on a multicore CPU;
+\item use streaming bounds APIs for very large collections;
+\item benchmark cache reuse versus process parallelism on the actual workload.
+\end{itemize}
+
+The current implementation is not yet a true vectorized million-box polynomial
+kernel.  Step 9c freezes the API and safe reuse semantics before the numeric
+batch-buffer/GPU refactor.
+
+%===============================================================================
+\section{Developer setup and regression commands}
+%===============================================================================
+
+From the project root, run the complete suite:
+\begin{lstlisting}[language=bash]
+python -m unittest discover -s tests -p 'test*.py'
+\end{lstlisting}
+
+For the final 0.21.0.dev1 checkpoint the expected gate is:
+\begin{lstlisting}
+Ran 223 tests
+OK
+\end{lstlisting}
+
+Run the repeated-query audit:
+\begin{lstlisting}[language=bash]
+python tools/audit_manybox.py --boxes 40 --workers 4
+\end{lstlisting}
+
+Build a wheel without network build isolation when the environment already has
+setuptools:
+\begin{lstlisting}[language=bash]
+python -m pip wheel . --no-deps --no-build-isolation -w dist
+\end{lstlisting}
+
+Do not accept a performance change based only on a microbenchmark.  Run the
+historical regression suite plus the relevant independent exact/high-precision
+audit and an end-to-end engineering benchmark.
+
+%===============================================================================
+\section{Source tree for developers}
+%===============================================================================
+
+\begin{longtable}{p{0.30\textwidth}p{0.61\textwidth}}
+\toprule
+Location & What to change there \\
+\midrule
+\endhead
+\codepath{autoia/api.py} & Public one-box/subdivision signatures, validation, exception translation. \\
+\codepath{autoia/session.py} & Prepared session, cache, repeated-query orchestration, CPU parallelism. \\
+\codepath{autoia/trusted/} & Only proof-critical binary64 primitives and audited reductions/transcendentals.  Keep dependencies minimal. \\
+\codepath{autoia/polynomial/} & Sparse polynomial algebra, ranges, Bernstein, recentering. \\
+\codepath{autoia/enclosures/} & Representation semantics and arithmetic. \\
+\codepath{autoia/semantic/linear_solve.py} & Mathematical linear-system semantic primitive and its residual/contraction proof. \\
+\codepath{autoia/semantic/dispatch.py} & Private NumPy/math syntax routing. \\
+\codepath{autoia/semantic/scipy_dispatch.py} & Public SciPy syntax compatibility. \\
+\codepath{autoia/controller/branching.py} & Uncertain Python paths and piecewise execution. \\
+\codepath{autoia/controller/subdivision.py} & Prescribed/adaptive subdivision execution. \\
+\codepath{autoia/controller/split_scoring.py} & Cheap non-proof split-direction prediction. \\
+\codepath{autoia/elementary/taylor.py} & Taylor coefficients/remainders for smooth functions. \\
+\codepath{tests/} & Regression, boundary, exact-rational, high-precision, and integration tests. \\
+\codepath{tools/} & Larger randomized/audit/performance scripts that are not shipped as proof dependencies. \\
+\bottomrule
+\end{longtable}
+
+%===============================================================================
+\section{Adding a new supported elementary function}
+%===============================================================================
+
+A recommended development sequence is:
+\begin{enumerate}[leftmargin=*]
+\item State the real mathematical function and domain.
+\item Implement a trusted scalar/interval kernel or a trusted coefficient/domain
+bound in \codepath{autoia/trusted/elementary.py}.
+\item Add independent high-precision point and interval tests.
+\item Add Taylor coefficient intervals and a rigorous tail bound in
+\codepath{autoia/elementary/taylor.py}.
+\item Connect the function to representation-level composition in
+\codepath{autoia/enclosures/elementary.py}.
+\item Add NumPy/math/SciPy syntax only if it corresponds to a real public API
+users commonly write.
+\item Add polynomial, interval, generator, object-array, and composition tests.
+\item Add a standalone audit if the function is mathematically delicate.
+\end{enumerate}
+
+Do not make a platform library's ordinary transcendental return value a trusted
+endpoint merely because it is accurate in common cases.
+
+%===============================================================================
+\section{Adding a new semantic primitive}
+%===============================================================================
+
+For a future operation such as a nonlinear root, eigensystem, or ODE solver:
+\begin{enumerate}[leftmargin=*]
+\item Define the exact mathematical object being certified.
+\item Decide whether the goal is to certify the program algorithm as written or
+replace a recognized library call by its mathematical semantics.
+\item Build an ordinary floating-point proposal if useful.
+\item Derive an independent proof identity, e.g. residual/fixed-point/Krawczyk/
+energy argument.
+\item Implement the proof in \codepath{autoia/semantic/} using trusted low-level
+bounds.
+\item Add local dispatch for the recognized library syntax.
+\item Preserve a generic validated fallback when reasonable; otherwise fail with
+\texttt{UnsupportedOperationError} or \texttt{CertificationError} as appropriate.
+\item Add adversarial and near-singular tests, not only nominal examples.
+\end{enumerate}
+
+The key rule is: \emph{semantic recognition may change how the operation is
+computed, but not what mathematical claim is proved}.
+
+%===============================================================================
+\section{Adding or changing a representation}
+%===============================================================================
+
+Every new scalar representation must answer four questions:
+\begin{enumerate}[leftmargin=*]
+\item What exact set \(\Gamma_E(q)\) does the object represent?
+\item How is every supported arithmetic operation guaranteed to map input sets to
+an output superset?
+\item How are conversions to/from existing representations inclusion-preserving?
+\item How is a final scalar interval range obtained rigorously?
+\end{enumerate}
+
+Only after these are answered should the representation receive a promotion
+priority in \texttt{ValidatedValue} dispatch.
+
+For the shared-generator family, never merge two generator IDs solely because
+their coefficients or radii are numerically equal.  Equal IDs mean a proved
+shared auxiliary variable; different IDs mean independent auxiliary coordinates.
+
+%===============================================================================
+\section{Changing trusted arithmetic}
+%===============================================================================
+
+Treat \codepath{autoia/trusted/} as a small numerical proof library.
+
+Before changing it:
+\begin{itemize}[leftmargin=*]
+\item identify the exact-real quantity the function must contain;
+\item preserve or extend runtime environment audits;
+\item add exact-rational tests for algebraic operations;
+\item add independent high-precision tests for transcendental operations;
+\item test overflow, subnormal, zero, sign, and endpoint-adversarial cases;
+\item keep the historical scalar oracle available when introducing a faster
+vectorized path.
+\end{itemize}
+
+Do not call higher AutoIA layers from the trusted package.  Architecture boundary
+tests are designed to catch such inversions.
+
+%===============================================================================
+\section{Changing the many-box cache or parallel backend}
+%===============================================================================
+
+The current cache uses a bounded LRU dictionary plus a linear scan for the
+smallest containing certificate.  A future spatial index can replace this
+without changing the public \texttt{PreparedAutoIA} API.
+
+However, any new cache must preserve these rules:
+\begin{enumerate}[leftmargin=*]
+\item Cache entries are scoped to one fixed prepared model/configuration.
+\item Exact endpoint equality may reuse a certificate directly.
+\item Containment-based reuse must verify the new \emph{represented centered
+symmetric domain}, not merely the raw user interval, lies in the parent certified
+domain.
+\item Polynomial recentering must capture coordinate-shift and coefficient
+rounding rigorously.
+\item Per-request metadata should not mutate result objects previously handed to
+users.
+\item A cache miss must fall back to a normal fresh proof, not to an approximate
+answer.
+\end{enumerate}
+
+For process parallelism, remember that every worker owns a separate cache.  A
+future shared spatial certificate store will need explicit synchronization and
+serialization rules; it should not be introduced implicitly through global
+mutable proof state.
+
+%===============================================================================
+\section{GPU development guidance}
+%===============================================================================
+
+The current user-facing prepared/batch API is intentionally compatible with a
+future GPU backend, but the current \texttt{dtype=object} representation is not.
+A serious GPU implementation should introduce numeric structure-of-arrays buffers
+behind the existing tracing objects.
+
+A sensible staged plan is:
+\begin{enumerate}[leftmargin=*]
+\item GPU proposal kernels first: batched nominal solves, predictor coefficients,
+preconditioner proposals, controller estimates.  Revalidate on the CPU trusted
+backend.
+\item Numeric CPU batch buffers next, so the same memory model can be transferred
+to the GPU.
+\item Only later implement a proof-producing GPU backend using explicitly audited
+directed-rounding primitives.  Do not assume ordinary CuPy/cuBLAS reductions are
+rigorous.
+\end{enumerate}
+
+GPU support should plug into \texttt{PreparedAutoIA.certify\_many} or a compatible
+backend selection interface rather than introduce an unrelated user API.
+
+%===============================================================================
+\section{Release checklist for a code change}
+%===============================================================================
+
+Before treating a change as a checkpoint:
+\begin{enumerate}[leftmargin=*]
+\item Run the complete unit/regression suite.
+\item Run the relevant exact-rational or high-precision audit.
+\item Run at least one end-to-end engineering smoke test.
+\item If performance is claimed, compare against the previous checkpoint on the
+same workload and report both kernel and end-to-end timing.
+\item Build the wheel from the final source tree.
+\item Install that wheel into a clean target and run a smoke test through the
+installed package rather than the source checkout.
+\item Inspect wheel contents to ensure tests/development scaffolding are not
+shipped unintentionally.
+\item Update the mathematical contract, code map, user manual, and roadmap when
+the public semantics change.
+\item Keep a patch archive from the previous checkpoint as well as a complete
+source archive.
+\end{enumerate}
+
+%===============================================================================
+\section{Complete copyable example: nonlinear solve, branch, statistics, and repeated queries}
+%===============================================================================
+
+The following example uses several current capabilities together.
+
+\begin{lstlisting}[language=Python]
+import numpy as np
+from scipy.stats import norm
+
+from autoia import Interval, prepare
+
+
+def engineering_model(p):
+    x, y = p
+
+    A = np.zeros((2, 2))
+    A[0, 0] = 2.0 + 0.10*x*x
+    A[0, 1] = 0.20
+    A[1, 0] = -0.10*y
+    A[1, 1] = 1.50 + 0.05*np.exp(x)
+
+    b = np.zeros(2)
+    b[0] = 1.0 + 0.10*y
+    b[1] = 0.5 + 0.05*np.sin(x)
+
+    u = np.linalg.solve(A, b)
+
+    if x >= 0.0:
+        response = u[0] + u[1]*u[1]
+    else:
+        response = u[0] - u[1]
+
+    probability = norm.cdf(response, loc=0.5, scale=0.2)
+    return np.array([response, probability])
+
+
+session = prepare(
+    engineering_model,
+    order=4,
+    representation="generator",
+    cache_max_entries=256,
+)
+
+master = session.certify([
+    Interval(-0.5, 0.5),
+    Interval(-0.2, 0.2),
+])
+
+print("master lower:", master.lower)
+print("master upper:", master.upper)
+
+queries = [
+    [[-0.45, -0.30], [-0.10, 0.00]],
+    [[-0.20, -0.05], [ 0.00, 0.10]],
+    [[ 0.05,  0.15], [-0.05, 0.05]],
+    [[ 0.30,  0.40], [ 0.05, 0.15]],
+]
+
+lower, upper = session.certify_many_bounds(
+    queries,
+    parallel="serial",
+)
+
+print("lower bounds:")
+print(lower)
+print("upper bounds:")
+print(upper)
+print("session stats:")
+print(session.stats)
+\end{lstlisting}
+
+For a module-level model and many unrelated boxes, change
+\texttt{parallel="serial"} to \texttt{parallel="process"} and specify a worker
+count.  If the boxes lie inside a cached parent and are eligible for certificate
+restriction, a shared serial session can instead avoid the model/solve execution
+entirely for those queries.
+
+%===============================================================================
+\section{Final operational guidance}
+%===============================================================================
+
+AutoIA is most reliable when the user treats a returned certificate and a failed
+certificate differently.  A returned result is a mathematical claim about the
+supported program semantics on the declared box.  A failure is not automatically
+a statement that the engineering model is invalid; it may mean that the current
+representation, domain information, controller budget, or semantic certificate
+is insufficiently sharp.
+
+For development, preserve the same distinction in code: proposal logic may be
+optimized aggressively, but every accepted result must remain traceable to the
+trusted enclosure and semantic proof contracts.  The prepared-session layer adds
+a second important rule: reuse is safe only when a previously proved certificate
+is applied to a domain that has itself been rigorously shown to lie inside the
+parent certified domain.
+
+\end{document}

@@ -1,0 +1,1328 @@
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,mathtools}
+\usepackage{booktabs,longtable,array}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{tikz}
+\usepackage{hyperref}
+\usepackage{microtype}
+\usetikzlibrary{arrows.meta,positioning,fit,shapes.geometric,calc}
+\hypersetup{colorlinks=true,linkcolor=black,citecolor=black,urlcolor=blue}
+\lstset{basicstyle=\ttfamily\small,frame=single,columns=fullflexible,keepspaces=true,showstringspaces=false,breaklines=true}
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\Z}{\mathbb{Z}}
+\newcommand{\N}{\mathbb{N}}
+\newcommand{\Qdom}{\mathcal{Q}}
+\newcommand{\Pin}{\mathcal{P}_{\mathrm{in}}}
+\newcommand{\Yset}{\mathcal{Y}}
+\newcommand{\Hull}{\operatorname{hull}}
+\newcommand{\range}{\operatorname{range}}
+\newcommand{\midp}{\operatorname{mid}}
+\newcommand{\rad}{\operatorname{rad}}
+\newcommand{\fl}{\operatorname{fl}}
+\newcommand{\down}{\operatorname{down}}
+\newcommand{\up}{\operatorname{up}}
+\newcommand{\abs}[1]{\left|#1\right|}
+\newcommand{\norminf}[1]{\left\|#1\right\|_{\infty}}
+\newcommand{\GammaE}{\Gamma}
+\newcommand{\eps}{\varepsilon}
+\newcommand{\epsv}{\boldsymbol{\varepsilon}}
+\newcommand{\qv}{\mathbf{q}}
+\newcommand{\pv}{\mathbf{p}}
+\newcommand{\yv}{\mathbf{y}}
+\newcommand{\xv}{\mathbf{x}}
+\newcommand{\one}{\mathbf{1}}
+\newcommand{\zero}{\mathbf{0}}
+\title{\textbf{AutoIA: Mathematical Theory and Certification Architecture}\\
+A Self-Contained Specification Through Version 0.21.0.dev1}
+\author{}
+\date{August 2026}
+\begin{document}
+\maketitle
+
+\begin{abstract}
+AutoIA is a research implementation of automatic validated interval analysis for
+existing engineering Python/NumPy programs.  The central objective is to accept a
+deterministic engineering program, replace selected scalar and numerical operations
+by validated counterparts, and return output enclosures that contain the exact real
+semantics of every supported execution path for every input in a user-supplied
+interval box.  The system is not based on naive line-by-line interval arithmetic
+alone.  It combines explicit polynomials in the original uncertain inputs,
+interval remainders, shared auxiliary error generators, semantic certification of
+linear systems, path-aware execution, monotonicity and Bernstein range analysis,
+outward-rounded binary64 proof kernels, and prepared repeated-query certificate
+reuse.
+
+This document is a mathematical specification of the current design through
+AutoIA version 0.21.0.dev1.  Every symbol used below is defined explicitly.  The
+document separates \emph{proposal calculations}, which may use ordinary floating
+point and may be inaccurate, from \emph{proof calculations}, whose only purpose is
+to establish inclusion.  It also states the major current limitations and the
+precise sense in which prepared-session restriction can answer a new interior
+input box without re-executing the engineering model.
+\end{abstract}
+
+\tableofcontents
+\newpage
+
+%===============================================================================
+\section{Problem statement and certification target}
+%===============================================================================
+
+Let
+\[
+  \mathcal{P}:\R^m\rightarrow\R^r
+\]
+denote the mathematical semantics of a supported deterministic engineering
+program.  The symbol \(m\) denotes the number of uncertain scalar input
+parameters and \(r\) denotes the number of scalar outputs.  The input vector is
+\[
+  \pv=(p_1,\ldots,p_m)^T\in\R^m,
+\]
+and the output vector is
+\[
+  \yv=(y_1,\ldots,y_r)^T=\mathcal{P}(\pv)\in\R^r.
+\]
+
+The user supplies an interval for every uncertain input,
+\[
+  p_i\in I_i=[\underline p_i,\overline p_i],
+  \qquad i=1,\ldots,m,
+\]
+where \(\underline p_i\le \overline p_i\) are finite binary64 numbers interpreted
+as exact real interval endpoints.  The complete input box is the Cartesian
+product
+\[
+  \Pin=I_1\times\cdots\times I_m\subset\R^m.
+\]
+
+The exact reachable output set is
+\[
+  \Yset^\star
+  =\left\{\mathcal{P}(\pv):\pv\in\Pin\right\}.
+\]
+AutoIA does not promise to compute the exact interval hull of this set.  The
+primary contract is inclusion.  For every scalar output \(y_j\), AutoIA returns
+an interval
+\[
+  Y_j=[\underline y_j,\overline y_j]
+\]
+such that
+\[
+  \boxed{
+  y_j(\pv)\in Y_j
+  \quad\text{for every }\pv\in\Pin.
+  }
+\]
+For a piecewise/path-aware result, the system may instead return a finite union
+of certified branch enclosures.  The reported global lower and upper bounds are
+then the interval hull of that finite union.
+
+\subsection{What is meant by program semantics}
+
+For generic supported scalar arithmetic, stored binary64 constants in the user
+program are interpreted as exact real constants equal to their stored values.
+Recognized mathematical primitives are interpreted according to their documented
+real mathematical semantics.  Examples include exact real \(\exp\), \(\log\),
+\(\sin\), \(\cos\), \(\operatorname{erf}\), normal PDF/CDF, and the exact solution
+of a recognized linear system \(A x=b\).  The semantic linear-solve primitive
+therefore certifies the mathematical solution of the represented matrix family,
+not the floating-point rounding behavior of NumPy's implementation of
+\texttt{linalg.solve}.
+
+If the user manually codes an iterative or approximate algorithm that is not a
+recognized semantic primitive, the default goal is to certify the supported
+program semantics as written.  AutoIA does not silently replace an arbitrary
+legacy algorithm by a different mathematical problem merely because the latter
+looks like the likely engineering intent.
+
+%===============================================================================
+\section{Notation used throughout the document}
+%===============================================================================
+
+This section defines the notation that appears later.
+
+\begin{longtable}{p{0.20\textwidth}p{0.73\textwidth}}
+\toprule
+Symbol & Definition \\
+\midrule
+\endhead
+\(m\) & Number of uncertain scalar physical inputs. \\
+\(r\) & Number of scalar outputs. \\
+\(\pv\) & Physical input vector \((p_1,\ldots,p_m)^T\). \\
+\(\Pin\) & User-supplied Cartesian input box. \\
+\(p_{c,i}\) & Stored binary64 center chosen for input interval \(I_i\). \\
+\(q_i\) & Centered physical coordinate \(q_i=p_i-p_{c,i}\). \\
+\(h_i\) & Rigorous nonnegative half-width satisfying \(q_i\in[-h_i,h_i]\). \\
+\(\qv\) & Centered physical vector \((q_1,\ldots,q_m)^T\). \\
+\(\Qdom\) & Symmetric centered box \(\prod_{i=1}^m[-h_i,h_i]\). \\
+\(\alpha\) & Multi-index \((\alpha_1,\ldots,\alpha_m)\) with nonnegative integer components. \\
+\(|\alpha|\) & Total degree \(\alpha_1+\cdots+\alpha_m\). \\
+\(\qv^\alpha\) & Monomial \(\prod_{i=1}^m q_i^{\alpha_i}\). \\
+\(e_i\) & Unit multi-index whose \(i\)-th component is one and all others are zero. \\
+\(P(\qv)\) & Stored point-coefficient polynomial in the original centered physical inputs. \\
+\(R\) & Interval remainder, usually written \([\underline R,\overline R]\). \\
+\(s\) & Number of active auxiliary generator variables. \\
+\(\epsv\) & Auxiliary vector \((\eps_1,\ldots,\eps_s)^T\) with each \(\eps_j\in[-1,1]\). \\
+\(G\) & Generator coefficient matrix.  For a scalar, this reduces to a row/vector of coefficients. \\
+\(\Gamma_E\) & Concretization/interpretation of a validated representation \(E\). \\
+\(A(\qv)\) & Parameter-dependent matrix in a semantic linear system. \\
+\(b(\qv)\) & Parameter-dependent right-hand side in a semantic linear system. \\
+\(X(\qv)\) & Stored polynomial predictor for a linear-system solution. \\
+\(C\) & Ordinary floating-point point preconditioner used in a linear-system certificate. \\
+\(B\) & Nonnegative matrix satisfying a rigorous componentwise defect bound. \\
+\(c\) & Nonnegative vector satisfying a rigorous preconditioned residual bound. \\
+\(\rho\) & Rigorous upper bound on \(\|B\|_\infty\). \\
+\(\|B\|_\infty\) & Maximum absolute row-sum norm \(\max_i\sum_j |B_{ij}|\); since \(B\ge0\), this is \(\max_i\sum_jB_{ij}\). \\
+\(\Hull(S)\) & Smallest interval containing a scalar set \(S\), or componentwise interval hull for a vector set. \\
+\(\down(x)\) & A binary64 lower endpoint known to be no greater than the exact real quantity \(x\). \\
+\(\up(x)\) & A binary64 upper endpoint known to be no less than the exact real quantity \(x\). \\
+\bottomrule
+\end{longtable}
+
+Componentwise vector/matrix inequalities such as
+\[
+  |v|\le c
+\]
+mean \(|v_i|\le c_i\) for every component \(i\).  Similarly,
+\[
+  |M|\le B
+\]
+means \(|M_{ij}|\le B_{ij}\) for every entry.
+
+%===============================================================================
+\section{Rigorous centering of the input box}
+%===============================================================================
+
+Polynomial representations use centered coordinates.  For each user interval
+\[
+  I_i=[\underline p_i,\overline p_i],
+\]
+AutoIA chooses a finite binary64 proposal center \(p_{c,i}\).  Conceptually this
+is near the arithmetic midpoint, but the proof does not require the chosen center
+to be the exact midpoint.  The trusted backend then rigorously encloses
+\[
+  I_i-p_{c,i}
+\]
+using outward-rounded interval subtraction.  If the resulting interval is
+\([\ell_i,u_i]\), AutoIA defines
+\[
+  h_i=\max(|\ell_i|,|u_i|).
+\]
+Therefore
+\[
+  I_i\subseteq[p_{c,i}-h_i,p_{c,i}+h_i],
+\]
+and hence every physical input in \(I_i\) admits the centered coordinate
+\[
+  q_i=p_i-p_{c,i}\in[-h_i,h_i].
+\]
+The complete centered domain is
+\[
+  \Qdom=\prod_{i=1}^m[-h_i,h_i].
+\]
+
+The symmetric centered domain can be slightly larger than the original user
+interval because outward rounding may enlarge a boundary by one or more ulps.
+This enlargement is sound but matters near function-domain boundaries.  For
+example, a user interval whose exact lower endpoint is zero may produce a
+centered polynomial domain whose rigorous reconstructed lower endpoint is a tiny
+negative number.  AutoIA must not silently clip that negative number when
+certifying \(\sqrt{x}\) or \(\log(x)\); the current implementation fails closed
+in such a case unless a representation/path/domain refinement proves the required
+real domain.
+
+%===============================================================================
+\section{The representation-independent enclosure invariant}
+%===============================================================================
+
+Every validated scalar value is associated with a representation object \(E\)
+and a concretization map
+\[
+  \Gamma_E(\qv)\subseteq\R.
+\]
+The fundamental invariant is
+\[
+  \boxed{
+  z(\qv)\in\Gamma_E(\qv)
+  \quad\text{for all }\qv\in\Qdom,
+  }
+\]
+where \(z\) is the exact real semantic quantity represented by \(E\).
+
+Suppose an exact mathematical operation is denoted
+\[
+  z=\operatorname{op}(z_1,\ldots,z_k).
+\]
+A validated implementation \(\operatorname{op}^{\#}\) is sound when
+\[
+  \boxed{
+  \Gamma_{\operatorname{op}^{\#}(E_1,\ldots,E_k)}(\qv)
+  \supseteq
+  \operatorname{op}\bigl(
+      \Gamma_{E_1}(\qv),\ldots,\Gamma_{E_k}(\qv)
+  \bigr)
+  }
+\]
+for every \(\qv\in\Qdom\), with the right-hand side interpreted as the set of
+all values of the exact operation on arguments chosen from the input sets.
+
+Representation conversion is similarly required to be inclusion-preserving.  If
+\(E_A\) is converted to \(E_B\), then
+\[
+  \Gamma_{E_A}(\qv)\subseteq\Gamma_{E_B}(\qv)
+\]
+for every \(\qv\).  Promotion priorities in the software influence strategy only;
+they are not themselves part of the proof.
+
+%===============================================================================
+\section{The interval representation}
+%===============================================================================
+
+The simplest scalar representation is a single interval
+\[
+  E=I=[\underline z,\overline z].
+\]
+Its concretization is independent of \(\qv\):
+\[
+  \Gamma_E(\qv)=I.
+\]
+This representation forgets explicit dependence on the original physical inputs,
+but it is robust and useful as a fallback or for calculations where interval
+semantics are already natural.
+
+The natural interval extension of an exact operation is used when supported.  For
+example, if \(X=[\underline x,\overline x]\) and
+\(Y=[\underline y,\overline y]\), then interval addition returns an outward
+rounded enclosure of
+\[
+  [\underline x+\underline y,\overline x+\overline y].
+\]
+Interval multiplication encloses all four endpoint products.  Division requires
+a denominator interval separated from zero.
+
+%===============================================================================
+\section{Point-coefficient polynomial plus interval remainder}
+%===============================================================================
+
+The principal dependency-preserving representation is
+\[
+  \boxed{
+  z(\qv)\in P(\qv)+R,
+  }
+\]
+where
+\[
+  P(\qv)=\sum_{\alpha\in\mathcal{A}} c_\alpha\qv^\alpha
+\]
+is a sparse polynomial with stored binary64 point coefficients \(c_\alpha\),
+\(\mathcal{A}\) is a finite set of multi-indices, and
+\[
+  R=[\underline R,\overline R]
+\]
+is an interval remainder.  The concretization is
+\[
+  \Gamma_E(\qv)=P(\qv)+R
+  =\{P(\qv)+r:r\in R\}.
+\]
+
+The stored coefficient \(c_\alpha\) is interpreted as an exact real number equal
+to its binary64 value.  When a coefficient is produced by floating-point proposal
+arithmetic, AutoIA separately computes a rigorous interval containing the exact
+coefficient that the mathematical operation would produce, subtracts the stored
+point coefficient, and ranges that coefficient error over the input domain into
+\(R\).  This separation allows fast ordinary floating-point proposals while
+keeping the final enclosure rigorous.
+
+\subsection{Multi-index monomial range on a symmetric box}
+
+For
+\[
+  \alpha=(\alpha_1,\ldots,\alpha_m),
+\]
+define
+\[
+  H_\alpha=\prod_{i=1}^m h_i^{\alpha_i}.
+\]
+The trusted implementation computes an upward-rounded upper bound for this
+nonnegative product.  On the symmetric box \(\Qdom\), the monomial range is
+\[
+  \qv^\alpha\in
+  \begin{cases}
+    [0,H_\alpha], & \text{if every }\alpha_i\text{ is even},\\
+    [-H_\alpha,H_\alpha], & \text{otherwise}.
+  \end{cases}
+\]
+This parity-aware rule is sharper than blindly using \([-H_\alpha,H_\alpha]\)
+for every monomial.
+
+%===============================================================================
+\section{Shared-generator polynomial representation}
+%===============================================================================
+
+The polynomial-plus-remainder representation loses correlation when the same
+unstructured error is reused.  AutoIA therefore also supports
+\[
+  \boxed{
+  z(\qv,\epsv)
+  \in
+  P(\qv)+\sum_{j=1}^s g_j\eps_j+R,
+  \qquad \eps_j\in[-1,1].
+  }
+\]
+For a vector of \(r\) outputs this is
+\[
+  \boxed{
+  \mathbf{z}(\qv,\epsv)
+  \in
+  \mathbf{P}(\qv)+G\epsv+R,
+  }
+\]
+where \(G\in\R^{r\times s}\) and \(R\) denotes a componentwise interval box.
+
+The variables \(\eps_j\) are \emph{auxiliary} uncertainty variables.  They do not
+represent additional physical uncertain inputs.  Their purpose is to preserve
+provenance of approximation/certification error.  Two coefficients bearing the
+same generator identifier refer to the same \(\eps_j\); distinct identifiers are
+treated as independent coordinates in \([-1,1]^s\).
+
+This distinction prevents an unsound shortcut.  If two unrelated calculations
+happen to produce the same numerical error radius, AutoIA does not infer that
+the errors are identical.  Shared provenance is created only by copying/reusing
+a value or by a semantic operation that rigorously carries the same generator
+through its output predictor.
+
+\subsection{Why fan-out cancellation improves}
+
+Suppose
+\[
+  y=P(\qv)+g\eps_1.
+\]
+If the same represented value is used twice, then
+\[
+  y-y
+  =P-P+g\eps_1-g\eps_1
+  =0.
+\]
+A pure interval remainder would instead behave like two independent copies of
+the same interval and could fail to cancel.
+
+\subsection{Closure under multiplication}
+
+The representation is affine in \(\epsv\), so it is not algebraically closed
+under multiplication.  If
+\[
+  x=P_x+G_x\epsv+R_x,
+  \qquad
+  y=P_y+G_y\epsv+R_y,
+\]
+then products such as
+\[
+  q_i\eps_j
+  \quad\text{and}\quad
+  \eps_i\eps_j
+\]
+appear.  The current representation keeps the constant-in-\(\qv\), first-order
+in-\(\epsv\) contribution explicitly and rigorously ranges terms outside the
+representation family into fresh bounded error.  Soundness is therefore retained
+without pretending that \(P(\qv)+G\epsv+R\) is closed under arbitrary nonlinear
+operations.
+
+%===============================================================================
+\section{Rigorous polynomial algebra}
+%===============================================================================
+
+\subsection{Addition and subtraction}
+
+Let
+\[
+  x\in P_x+R_x,
+  \qquad
+  y\in P_y+R_y.
+\]
+The exact algebraic sum is
+\[
+  x+y\in(P_x+P_y)+(R_x+R_y).
+\]
+AutoIA computes point coefficient proposals for \(P_x+P_y\), rigorously encloses
+coefficient-rounding errors, and adds their ranged effect to the remainder.
+Subtraction is addition of the negated representation.
+
+\subsection{Truncated multiplication}
+
+Let the retained maximum polynomial order be \(K\).  The exact polynomial
+product is
+\[
+  P_xP_y
+  =\sum_\gamma C_\gamma\qv^\gamma,
+  \qquad
+  C_\gamma=\sum_{\alpha+\beta=\gamma}c_\alpha d_\beta.
+\]
+For every \(\gamma\) satisfying \(|\gamma|\le K\), AutoIA stores a point proposal
+\(\widehat C_\gamma\).  It rigorously encloses the exact coefficient
+\(C_\gamma\) and returns the difference
+\[
+  C_\gamma-\widehat C_\gamma
+\]
+as a coefficient-error interval.  That error is multiplied by a rigorous
+monomial range and accumulated into the remainder.
+
+For discarded terms with \(|\gamma|>K\), the full exact coefficient interval is
+ranged over \(\Qdom\) and added to the remainder.  The user-selected order \(K\)
+therefore changes sharpness and cost but not the inclusion contract.
+
+The complete product also contains interactions with existing remainders.  These
+are enclosed by ordinary interval multiplication using rigorous ranges of the
+retained polynomial parts.
+
+%===============================================================================
+\section{Powers, reciprocal, and division}
+%===============================================================================
+
+\subsection{Integer powers}
+
+For \(n\in\Z\), positive powers are constructed by validated multiplication.
+For \(n<0\),
+\[
+  x^n=\frac{1}{x^{-n}},
+\]
+so AutoIA must prove that zero is excluded from the denominator range.
+Negative bases are valid for integer exponents.
+
+\subsection{Non-integer constant real powers}
+
+For a finite constant binary64 exponent \(p\in\R\setminus\Z\), the current real
+branch requires the certified base range to be strictly positive.  AutoIA may
+decompose
+\[
+  p=n+r,
+\]
+where \(n\in\Z\) and \(|r|\le1/2\), then use integer powers together with
+\(\sqrt{\cdot}\) for half powers or the identity
+\[
+  x^r=\exp(r\log x)
+\]
+for the remaining positive-real case.  An uncertain exponent is outside the
+current supported contract.
+
+\subsection{Reciprocal certificate}
+
+Suppose a represented denominator \(y\) has a rigorous range
+\[
+  Y=[\underline Y,\overline Y]
+\]
+with
+\[
+  0\notin Y.
+\]
+Let \(Q\) be any stored polynomial proposal for \(1/y\).  The exact identity
+\[
+  \frac{1}{y}-Q
+  =\frac{1-yQ}{y}
+\]
+allows AutoIA to bound the residual \(1-yQ\), divide by the denominator interval
+\(Y\), and obtain a certified reciprocal.  The quality of \(Q\) affects only the
+remainder width.
+
+%===============================================================================
+\section{Trusted binary64 interval kernel and outward rounding}
+%===============================================================================
+
+Machine rigor requires every proof-critical floating-point operation to enclose
+its exact real counterpart.  AutoIA therefore distinguishes two classes of
+calculation.
+
+\begin{enumerate}[leftmargin=*]
+\item \textbf{Proposal calculations.}  These may use ordinary round-to-nearest
+binary64, NumPy linear algebra, heuristic scores, or approximate inverses.
+Their outputs are never trusted merely because they were computed.
+\item \textbf{Proof calculations.}  These establish interval inclusion and are
+performed by the audited trusted backend or by operations reducible to trusted
+interval primitives.
+\end{enumerate}
+
+For a scalar operation \(z=x\circ y\), the trusted backend returns binary64
+endpoints
+\[
+  [\underline z,\overline z]
+\]
+known to contain the exact real value.  On the reference backend this is done by
+round-to-nearest arithmetic followed by \texttt{nextafter} toward
+\(-\infty\) for the lower endpoint and \(+\infty\) for the upper endpoint.
+
+The backend construction audits the binary64 environment.  The audit checks,
+among other things, the binary64 format, NumPy \texttt{float64} size,
+round-to-nearest behavior, adjacent \texttt{nextafter} values, gradual
+underflow/subnormals, and required vectorized arithmetic behavior.  If the
+environment does not satisfy the assumptions, AutoIA fails closed.
+
+\subsection{Why a single outward adjustment after a long reduction is insufficient}
+
+A long dot product
+\[
+  s=\sum_{i=1}^n a_i b_i
+\]
+contains rounding error in every multiplication and every addition.  Merely
+computing an ordinary BLAS result and moving it outward by one ulp does not in
+general enclose the exact real dot product.
+
+The Step-9/9b trusted fast path instead encloses every product and combines those
+product intervals through a pairwise interval-addition tree.  If each leaf
+contains its exact product and each internal node contains the exact sum of its
+two child sets, induction proves that the root interval contains the exact dot
+product.  Vectorization changes execution speed, not the mathematical proof.
+
+The same idea is used for point-by-interval and interval-by-interval reductions,
+and many independent dot-product trees may be batched simultaneously across
+matrix rows/columns.
+
+%===============================================================================
+\section{Polynomial range analysis}
+%===============================================================================
+
+A validated symbolic representation is useful only if it can be converted to a
+scalar interval bound.  AutoIA uses several sound range engines.
+
+\subsection{Termwise range}
+
+For
+\[
+  P(\qv)=\sum_\alpha c_\alpha\qv^\alpha,
+\]
+each monomial is enclosed separately and the resulting intervals are summed.
+This method is inexpensive and robust, but it may lose cancellation between
+terms.
+
+\subsection{Derivative-based monotonicity}
+
+For coordinate \(q_i\), AutoIA constructs the polynomial derivative
+\[
+  \frac{\partial P}{\partial q_i}
+  =\sum_{\alpha:\alpha_i>0}
+  \alpha_i c_\alpha\qv^{\alpha-e_i}.
+\]
+If a rigorous range proves
+\[
+  \frac{\partial P}{\partial q_i}\ge0
+\]
+throughout the box, then \(P\) is nondecreasing in \(q_i\); extrema occur at the
+appropriate endpoint of that coordinate.  If the derivative is rigorously
+nonpositive, the opposite endpoint is used.  Monotone directions can therefore
+be fixed before ranging the unresolved directions.
+
+\subsection{Bernstein enclosure}
+
+After mapping the active box to a unit box, the polynomial can be expressed in a
+multivariate Bernstein basis.  The range of a polynomial over the unit box is
+contained in the interval hull of its Bernstein coefficients.  AutoIA computes
+an outward-rounded version of this transformation.  Because the number of
+Bernstein coefficients grows as a product of per-variable degrees, the method is
+used selectively.
+
+\subsection{Monotonicity-reduced Bernstein}
+
+If some coordinates are already proved monotone, those coordinates are fixed at
+appropriate endpoints and Bernstein conversion is applied only to unresolved
+directions.  This can greatly reduce coefficient count.
+
+\subsection{Portfolio principle}
+
+If two independent rigorous methods produce intervals \(I_1\) and \(I_2\) that
+both contain the same quantity, their intersection also contains that quantity,
+provided the intersection is nonempty.  AutoIA therefore uses range-method
+portfolios to improve sharpness without making correctness depend on which
+method happens to be tighter.
+
+%===============================================================================
+\section{Validated elementary functions by Taylor composition}
+%===============================================================================
+
+For a scalar represented argument \(x\), AutoIA first obtains a rigorous argument
+interval
+\[
+  X=[\underline x,\overline x].
+\]
+Choose a stored binary64 expansion center \(c\in X\) and write
+\[
+  \delta=x-c.
+\]
+For a smooth function \(f\), a degree-\(K\) Taylor representation is
+\[
+  f(x)
+  =\sum_{n=0}^{K}a_n\delta^n+R_{K+1},
+  \qquad
+  a_n=\frac{f^{(n)}(c)}{n!}.
+\]
+The coefficient \(a_n\) is itself represented by a rigorous interval.  AutoIA
+chooses a point proposal \(\widehat a_n\), stores it in the polynomial, and
+propagates the difference between the rigorous coefficient interval and
+\(\widehat a_n\) as certified error.  A rigorous analytic bound on the omitted
+Taylor tail \(R_{K+1}\) is then added.
+
+This generic composition mechanism is used for \(\exp\), \(\log\),
+\(\sqrt{\cdot}\), \(\sin\), \(\cos\), \(\operatorname{erf}\), the standard normal
+PDF, and the standard normal CDF, with function-specific coefficient recurrences
+and tail bounds.
+
+\subsection{Exponential}
+
+For sufficiently small \(|r|\),
+\[
+  e^r=\sum_{k=0}^{N}\frac{r^k}{k!}+R_N.
+\]
+If \(|r|\le a<1\), one convenient rigorous tail bound is
+\[
+  |R_N|
+  \le
+  \frac{a^{N+1}}{(N+1)!(1-a)}.
+\]
+The trusted scalar kernel repeatedly halves a rigorous argument interval until it
+is small enough for the series, then reconstructs the result by trusted squaring.
+
+\subsection{Logarithm}
+
+For \(x>0\), binary exponent extraction produces
+\[
+  x=2^k m,
+\]
+with a scaled mantissa \(m\).  Then
+\[
+  \log x=k\log2+\log m.
+\]
+Using
+\[
+  z=\frac{m-1}{m+1},
+\]
+we have
+\[
+  \log m=2\operatorname{atanh}(z),
+\]
+which is evaluated by a rigorously bounded odd series.  The constant \(\log2\)
+is itself generated rigorously rather than trusted from a platform library.
+
+\subsection{Sine and cosine}
+
+A rigorous interval for \(\pi\) is generated from Machin's formula.  An ordinary
+floating-point integer reduction index may be proposed, but the proof forms the
+reduced argument with the rigorous \(\pi\) interval.  Taylor sine/cosine bounds
+are used when the reduced interval is small enough; otherwise a safe range such
+as \([-1,1]\) is available.
+
+\subsection{Error function and normal distribution functions}
+
+The error function is
+\[
+  \operatorname{erf}(x)
+  =\frac{2}{\sqrt\pi}\int_0^x e^{-t^2}\,dt.
+\]
+Moderate positive arguments use a bounded alternating Maclaurin series.  Larger
+arguments use the complementary error function and an integration-by-parts
+asymptotic bracket.  Odd symmetry handles negative arguments.
+
+The standard normal density and CDF are
+\[
+  \phi(x)=\frac{1}{\sqrt{2\pi}}e^{-x^2/2},
+\]
+\[
+  \Phi(x)=\frac12\left(1+\operatorname{erf}\left(\frac{x}{\sqrt2}\right)\right).
+\]
+Their polynomial Taylor coefficients are generated using differential recurrences,
+including
+\[
+  \phi'(x)+x\phi(x)=0
+\]
+and
+\[
+  \Phi'(x)=\phi(x).
+\]
+A normal distribution with constant mean \(\mu\) and standard deviation
+\(\sigma>0\) is handled using
+\[
+  z=\frac{x-\mu}{\sigma},
+  \qquad
+  f_X(x)=\frac{\phi(z)}{\sigma},
+  \qquad
+  F_X(x)=\Phi(z).
+\]
+
+%===============================================================================
+\section{Semantic certification of parameter-dependent linear systems}
+%===============================================================================
+
+Consider a represented family of linear systems
+\[
+  A(\qv)x(\qv)=b(\qv),
+\]
+where \(A(\qv)\in\R^{n\times n}\), \(x(\qv)\in\R^n\), and
+\(b(\qv)\in\R^n\).  The matrix and right-hand side may have retained polynomial
+coefficients of arbitrary supported order plus rigorous remainders.
+
+\subsection{General polynomial solution predictor}
+
+Write
+\[
+  A(\qv)\approx\sum_\beta A_\beta\qv^\beta,
+  \qquad
+  b(\qv)\approx\sum_\beta b_\beta\qv^\beta,
+\]
+and propose
+\[
+  X(\qv)=\sum_{|\alpha|\le K}x_\alpha\qv^\alpha.
+\]
+Formal coefficient matching gives the recurrence
+\[
+  \boxed{
+  A_0x_\alpha
+  =
+  b_\alpha
+  -
+  \sum_{\substack{\beta\ne0\\\beta\le\alpha}}
+      A_\beta x_{\alpha-\beta}.
+  }
+\]
+Here \(\beta\le\alpha\) means \(\beta_i\le\alpha_i\) for every coordinate.
+The recurrence is only a predictor generator.  AutoIA may use an ordinary
+floating-point solve, a different reference matrix, a family-hull midpoint, or
+another finite proposal.
+
+\subsection{Residual identity for an arbitrary predictor}
+
+Let \(X\) be whatever predictor is actually stored.  Define the true solution
+error
+\[
+  e=x-X.
+\]
+Define the residual
+\[
+  r=b-AX.
+\]
+Because \(Ax=b\),
+\[
+  A(X+e)=b,
+\]
+so
+\[
+  \boxed{Ae=r.}
+\]
+This identity is exact and does not depend on how \(X\) was obtained.
+
+Choose any finite point matrix \(C\) as a preconditioner.  Then
+\[
+  CAe=Cr.
+\]
+Add and subtract \(e\):
+\[
+  e-(I-CA)e=Cr,
+\]
+and hence
+\[
+  \boxed{
+  e=Cr+(I-CA)e.
+  }
+\]
+
+Suppose trusted calculations establish a nonnegative vector \(c\) and
+nonnegative matrix \(B\) satisfying, for every admissible input,
+\[
+  |Cr|\le c,
+\]
+\[
+  |I-CA|\le B.
+\]
+Taking componentwise absolute values gives
+\[
+  |e|\le c+B|e|.
+\]
+
+\subsection{Contraction theorem}
+
+Define
+\[
+  \rho=\|B\|_\infty=\max_i\sum_jB_{ij}.
+\]
+If a rigorous upper bound proves
+\[
+  \boxed{\rho<1,}
+\]
+then the family is nonsingular throughout the represented domain and
+\[
+  \boxed{
+  |e|\le(I-B)^{-1}c.
+  }
+\]
+A simpler scalar consequence is obtained by defining
+\[
+  \eta=\|c\|_\infty,
+  \qquad
+  \delta=1-\rho>0.
+\]
+Then
+\[
+  \|e\|_\infty\le\frac{\eta}{\delta}.
+\]
+The implementation computes an outward-rounded upper bound for this ratio and
+may subsequently refine the componentwise correction by the monotone iteration
+\[
+  d^{(k+1)}=\min\left(d^{(k)},\;\up(c+Bd^{(k)})\right),
+\]
+starting from a safe scalar vector bound.
+
+\subsection{Preconditioner portfolio}
+
+The center matrix inverse is a useful proposal but can be a poor contraction
+preconditioner.  AutoIA also constructs a rigorous interval hull of the matrix
+family, chooses a finite representative such as its componentwise midpoint, and
+proposes the inverse of that representative.  Every candidate is checked against
+the complete matrix family.  Therefore a midpoint that is not physically
+realizable still yields a sound certificate if the final defect bound passes.
+
+%===============================================================================
+\section{Generator-aware semantic linear solve}
+%===============================================================================
+
+Suppose the solve inputs contain shared auxiliary generators:
+\[
+  A(\qv,\epsv)
+  \in
+  \widehat A(\qv)+\sum_{j=1}^s A_j\eps_j+R_A,
+\]
+\[
+  b(\qv,\epsv)
+  \in
+  \widehat b(\qv)+\sum_{j=1}^s b_j\eps_j+R_b.
+\]
+AutoIA proposes a solution of the form
+\[
+  \boxed{
+  X(\qv,\epsv)
+  =P(\qv)+\sum_{j=1}^s u_j\eps_j.
+  }
+\]
+For generator \(\eps_j\), a useful sensitivity proposal is obtained from a
+reference matrix \(A_{\mathrm{ref}}\) by
+\[
+  A_{\mathrm{ref}}u_j
+  =b_j-A_jx_0,
+\]
+where \(x_0=P(0)\).  Again, this is only a proposal.
+
+The proof then evaluates the actual residual
+\[
+  r(\qv,\epsv)
+  =b(\qv,\epsv)-A(\qv,\epsv)X(\qv,\epsv)
+\]
+over the joint domain
+\[
+  \qv\in\Qdom,
+  \qquad
+  \epsv\in[-1,1]^s,
+\]
+and uses the same fixed-point theorem.  Incoming generator identifiers are
+preserved in the explicit predictor when justified.  The remaining componentwise
+correction proven by the contraction theorem is assigned fresh independent
+auxiliary generators because the theorem proves only a box for the residual
+error, not a stronger coupled geometry.
+
+%===============================================================================
+\section{Path-aware execution and uncertain control flow}
+%===============================================================================
+
+Consider a scalar predicate such as
+\[
+  \texttt{lhs < rhs}.
+\]
+AutoIA forms the validated difference
+\[
+  d=\texttt{lhs}-\texttt{rhs}
+\]
+and computes a rigorous range
+\[
+  d\in[\underline d,\overline d].
+\]
+For the strict less-than relation:
+\begin{itemize}[leftmargin=*]
+\item if \(\overline d<0\), the predicate is proved true throughout the current
+box;
+\item if \(\underline d\ge0\), it is proved false throughout the current box;
+\item otherwise the predicate is unresolved.
+\end{itemize}
+Analogous exact-real rules are used for \(\le,>,\ge,==,!=\) and scalar truth
+checking.
+
+If the predicate is unresolved, AutoIA may split the physical input box and
+re-execute.  For an exact affine one-variable predicate
+\[
+  d(p_i)=a+bp_i,
+  \qquad b\ne0,
+\]
+the exact root
+\[
+  p_i^\star=-a/b
+\]
+can be used as a direct partition point when it is rigorously recognized.
+
+For a general nonlinear or multivariate decision surface, finitely many Cartesian
+boxes may not align with the exact path boundary.  If subdivision cannot resolve
+the predicate under the allowed budget, AutoIA conservatively enumerates both
+feasible Boolean outcomes and certifies the continuation of each path separately.
+If the two branch enclosures are \(Y_T\) and \(Y_F\), then
+\[
+  \mathcal{P}(\Pin)\subseteq Y_T\cup Y_F.
+\]
+The branch formula may be evaluated on a superset of its true feasible domain;
+this can make the result wider or cause a boundary singularity to fail
+certification, but it cannot omit a true output.
+
+Path-local continuation is essential.  AutoIA does not immediately hull two
+branch values and then continue the rest of the program.  Instead every feasible
+path carries its own validated values through downstream arithmetic, elementary
+functions, and semantic solves.  The union is formed only at the final piecewise
+result.
+
+%===============================================================================
+\section{Adaptive subdivision controller}
+%===============================================================================
+
+Subdivision is a sharpness/resource strategy, not a correctness prerequisite.
+Every retained child box is independently certified.  If a controller chooses a
+poor direction, the result may be slower or wider but does not become unsound.
+
+The practical split score introduced in version 0.19.0.dev1 uses the already
+certified parent polynomial.  For candidate coordinate \(q_d\), a half-box child
+has a shifted center
+\[
+  s_d=\pm h_d/2
+\]
+and new coordinate \(r_d\) satisfying
+\[
+  q_d=r_d+s_d,
+  \qquad
+  r_d\in[-h_d/2,h_d/2].
+\]
+The binomial identity
+\[
+  q_d^{\alpha_d}
+  =\sum_{b=0}^{\alpha_d}
+    {\alpha_d\choose b}s_d^{\alpha_d-b}r_d^b
+\]
+permits a cheap predicted re-centering without executing the engineering model.
+The score estimates derivative-sign resolution, reduced-Bernstein burden, and
+output-width gain.  Only the selected child pair is actually certified.  The
+controller then checks realized structural/width improvement before accepting
+the split.
+
+The old expensive one-step lookahead remains available as a research oracle.
+Because controller decisions are outside the trusted proof kernel, agreement with
+that oracle is an efficiency/sharpness validation issue rather than a soundness
+condition.
+
+%===============================================================================
+\section{Prepared sessions and repeated-query certification}
+%===============================================================================
+
+Version 0.21.0.dev1 separates static program preparation from repeated box
+certification.  Let one fixed engineering program \(\mathcal{P}\) and one fixed
+AutoIA configuration be used for a sequence of boxes
+\[
+  \Pin^{(1)},\Pin^{(2)},\ldots.
+\]
+A prepared session reuses the local semantic-dispatch clone and one audited
+trusted backend.  More importantly, it stores previously certified boxes and
+results in a bounded certificate cache.
+
+\subsection{Exact repeated-box reuse}
+
+If a new query box has exactly the same stored binary64 endpoints as a cached
+box, the previous certificate already proves the same statement.  No engineering
+model execution is required.
+
+\subsection{Restriction of a parent certificate to an interior subbox}
+
+Suppose a parent box \(D\) has already been certified and a new query box \(Q\)
+satisfies
+\[
+  Q\subseteq D.
+\]
+Set-theoretically, every certificate valid on \(D\) is automatically valid on
+\(Q\).  For a polynomial certificate, AutoIA can do better than returning the
+same parent output interval: it re-centers and re-ranges the stored polynomial on
+\(Q\).
+
+Let the old centered coordinate be
+\[
+  \qv=\pv-\mathbf{c}_{\mathrm{old}},
+\]
+and the new centered coordinate be
+\[
+  \mathbf{r}=\pv-\mathbf{c}_{\mathrm{new}}.
+\]
+Then exactly
+\[
+  \qv=\mathbf{r}+\mathbf{s},
+\]
+where
+\[
+  \mathbf{s}=\mathbf{c}_{\mathrm{new}}-\mathbf{c}_{\mathrm{old}}.
+\]
+For a monomial
+\[
+  \qv^\alpha=\prod_{i=1}^m(r_i+s_i)^{\alpha_i}.
+\]
+Using the multivariate binomial expansion,
+\[
+  \qv^\alpha
+  =
+  \sum_{\beta\le\alpha}
+  \left[
+  \prod_{i=1}^m
+  \binom{\alpha_i}{\beta_i}
+  s_i^{\alpha_i-\beta_i}
+  \right]
+  \mathbf{r}^\beta.
+\]
+Therefore if
+\[
+  P(\qv)=\sum_\alpha c_\alpha\qv^\alpha,
+\]
+the exact re-centered coefficient of \(\mathbf{r}^\beta\) is
+\[
+  c'_\beta
+  =
+  \sum_{\alpha\ge\beta}
+  c_\alpha
+  \prod_{i=1}^m
+  \binom{\alpha_i}{\beta_i}
+  s_i^{\alpha_i-\beta_i}.
+\]
+
+The exact shift \(s_i\) is not assumed to equal the ordinary floating-point
+subtraction of the two stored centers.  The trusted backend forms an interval
+\(S_i\) containing the exact real difference.  Every transformed coefficient is
+computed as a rigorous interval using \(S_i\), while an ordinary binary64 point
+coefficient is stored as a proposal.  The difference between the exact coefficient
+interval and the stored proposal is rigorously ranged over the new centered box
+and accumulated into an extra remainder.
+
+Hence the re-centered value remains a valid certificate on the new domain.
+Shared-generator coefficients are copied unchanged because the coordinate shift
+acts on the physical polynomial \(P\), not on the auxiliary variables \(\epsv\).
+
+\subsection{Containment check for the actual centered query domain}
+
+The user query \(Q\) is not quite the domain used by the polynomial executor.
+The executor constructs an outward symmetric centered envelope around each new
+binary64 center.  Let that actual represented domain be \(\widetilde Q\).
+Certificate restriction is used only when AutoIA proves
+\[
+  \widetilde Q\subseteq D.
+\]
+This prevents the known one-ulp symmetric-centering enlargement from causing a
+parent certificate to be applied outside the domain on which it was proved.  If
+this containment check fails, AutoIA performs a fresh certification instead.
+
+\subsection{Many-box execution}
+
+For a collection of \(N\) boxes, prepared execution currently supports serial,
+thread-chunked, and process-chunked modes.  Process mode creates one prepared
+session and one independently audited trusted backend in every worker process.
+A streaming interface keeps only a bounded number of chunks in flight, so the
+user does not need to store all \(N\) boxes or all \(N\) full result objects in
+memory simultaneously.
+
+This is an execution architecture for large repeated-query workloads.  It is not
+yet a single dense numeric kernel with a leading \(N\)-box array dimension.
+
+%===============================================================================
+\section{Program-level soundness theorem}
+%===============================================================================
+
+We can summarize the architecture as a compositional theorem.
+
+\paragraph{Assumptions.}
+Assume:
+\begin{enumerate}[leftmargin=*]
+\item the trusted binary64 backend's audited machine assumptions hold;
+\item every proof-critical interval operation returns an enclosure of its exact
+real counterpart;
+\item every supported validated scalar/semantic operation satisfies its enclosure
+contract;
+\item every representation conversion is inclusion-preserving;
+\item every retained path/subdivision child is certified over a domain whose
+union covers the relevant user input domain;
+\item every semantic linear solve accepted by the system satisfies its rigorous
+contraction condition; and
+\item the program remains within the documented supported-language semantics.
+\end{enumerate}
+
+\paragraph{Conclusion.}
+For every user input \(\pv\in\Pin\), the exact real output of the supported
+program semantics belongs to the finite union of the validated output sets
+returned by AutoIA.  Consequently the reported global lower/upper arrays contain
+every exact scalar output.
+
+\paragraph{Proof sketch.}
+The proof is by induction through execution.  Initial uncertain inputs are
+represented by enclosures containing every physical value in the input box.
+Every supported operation maps valid input enclosures to an output enclosure
+containing the exact operation on all admissible inputs.  Semantic solves are
+validated independently by their residual/contraction theorem.  If execution
+branches, the path engine retains every feasible outcome or subdivides the
+physical domain into certified children whose union covers the original domain.
+Thus the invariant holds on every active path.  Final range methods enclose each
+representation's concretization, and the finite union/hull of path results
+contains the exact output set.
+
+Prepared-session restriction does not alter the theorem: a parent certificate is
+reused only on a subdomain proved to lie inside the parent's certified domain,
+and the coordinate transform itself is rigorously enclosed.
+
+%===============================================================================
+\section{What ordinary floating-point calculations are allowed to do}
+%===============================================================================
+
+A recurring AutoIA design principle is that an approximation may be poor without
+making the final result unsound.  Ordinary floating point is therefore acceptable
+for:
+\begin{itemize}[leftmargin=*]
+\item polynomial coefficient proposals;
+\item nominal/reference linear solves;
+\item approximate inverses and preconditioners;
+\item midpoint representatives of interval matrix families;
+\item branch split scores and controller heuristics;
+\item candidate Taylor centers;
+\item integer argument-reduction proposals for trigonometric functions;
+\item cache-choice heuristics such as choosing the smallest containing parent
+certificate.
+\end{itemize}
+
+Such calculations may affect sharpness, performance, or whether a proof attempt
+succeeds.  They must not be used as the final reason an inclusion is accepted.
+The proof always returns to rigorous residual, interval, range, or domain checks.
+
+%===============================================================================
+\section{Important limitations and non-guarantees in version 0.21.0.dev1}
+%===============================================================================
+
+The current system is a substantial research prototype, not a proof assistant for
+arbitrary Python.  Important limitations include the following.
+
+\begin{enumerate}[leftmargin=*]
+\item \textbf{Exact hulls are not promised.}  Returned intervals can be wider
+than the exact range.
+\item \textbf{Supported-language boundary.}  Arbitrary Python side effects,
+uncertain array indices, uncertain Boolean masks, general \texttt{np.where}, and
+general uncertainty-dependent loop termination are not part of the frozen
+contract.
+\item \textbf{Boundary-domain over-enclosure.}  Symmetric polynomial centering
+can enlarge an exact physical boundary slightly.  This can make a mathematically
+valid \(\sqrt{\cdot}\) or \(\log\) query fail closed near zero.
+\item \textbf{Shared-generator family is affine in auxiliary variables.}  Terms
+such as \(q_i\eps_j\) and \(\eps_i\eps_j\) are bounded back into fresh error rather
+than retained explicitly as a richer structure.
+\item \textbf{Generator compression is not yet implemented.}  The number of
+auxiliary IDs can grow in long calculations.
+\item \textbf{Piecewise certificate restriction is limited.}  Exact cache reuse
+works for pathwise results, but sharp geometric restriction of arbitrary cached
+piecewise branch domains is not yet a general many-box feature.
+\item \textbf{Large many-box execution is not yet a true vectorized polynomial
+batch kernel.}  Current process parallelism and certificate reuse are useful, but
+unrelated boxes are still separate certifications.
+\item \textbf{GPU proof execution is not implemented.}  The public prepared/batch
+architecture is designed to permit future CPU/GPU numeric-buffer backends.
+\item \textbf{External semantic primitives are limited.}  Linear solve is the
+major structured semantic operation.  General nonlinear roots, ODE/DAE solvers,
+eigensystems, optimizers, and arbitrary legacy algorithm recognition are future
+work.
+\end{enumerate}
+
+%===============================================================================
+\section{A compact end-to-end mathematical example}
+%===============================================================================
+
+Consider a two-parameter model
+\[
+  p_1\in[0.9,1.1],
+  \qquad
+  p_2\in[-0.1,0.1],
+\]
+with
+\[
+  A(\pv)=
+  \begin{bmatrix}
+  2+p_1^2 & 0.2\\
+  -0.1p_2 & 1.5+0.05p_1
+  \end{bmatrix},
+\]
+\[
+  b(\pv)=
+  \begin{bmatrix}
+  1+0.1p_2\\
+  0.5+0.05p_1^2
+  \end{bmatrix},
+\]
+and let \(u(\pv)\) solve
+\[
+  A(\pv)u(\pv)=b(\pv).
+\]
+Suppose the program returns
+\[
+  y_1=u_1,
+  \qquad
+  y_2=e^{u_2},
+  \qquad
+  y_3=u_1-u_1.
+\]
+
+AutoIA first constructs rigorous centered coordinates for \(p_1,p_2\).  Polynomial
+arithmetic retains the quadratic occurrences of \(p_1\) up to the chosen order.
+The semantic solve constructs a polynomial (and, in generator mode, auxiliary
+sensitivity) predictor, then proves a contraction bound on the complete matrix
+family.  The exponential is composed by the validated Taylor machinery.  Shared
+generator provenance can preserve exact downstream cancellation in \(y_3\), so
+\(y_3\) can certify as zero even when intermediate approximations carry error.
+
+If a prepared session first certifies the master box and later receives a smaller
+interior box, the stored output polynomial certificates may be re-centered using
+the exact binomial coordinate transform with rigorous coefficient-error capture.
+The model and the semantic solve need not run again if the new centered domain is
+proved to lie inside the parent domain.
+
+%===============================================================================
+\section{Summary of the current mathematical architecture}
+%===============================================================================
+
+The current architecture can be summarized by the chain
+\[
+\boxed{
+\begin{array}{c}
+\text{user interval box}\\
+\downarrow\\
+\text{rigorous centered physical coordinates }\qv\\
+\downarrow\\
+P(\qv)+R\quad\text{or}\quad P(\qv)+G\epsv+R\\
+\downarrow\\
+\text{validated generic operations + semantic primitives}\\
+\downarrow\\
+\text{path-aware piecewise execution when required}\\
+\downarrow\\
+\text{termwise / monotonicity / Bernstein range certification}\\
+\downarrow\\
+\text{rigorous binary64 output intervals}
+\end{array}}
+\]
+with a prepared-session layer that can reuse the static dispatch architecture and,
+more importantly, restrict already-proved certificates to eligible interior
+query boxes.
+
+The central theoretical thesis is that sharp automatic interval analysis for
+engineering code is best treated as a structured validated-execution problem:
+retain original-input dependence explicitly, introduce auxiliary variables only
+when their provenance is proved, treat important numerical operations according
+to their mathematical semantics, and confine correctness-critical floating-point
+work to a small audited enclosure kernel.  Performance strategies are then free
+to be aggressive because any proposed approximation must still pass an independent
+rigorous certificate before it is accepted.
+
+\end{document}

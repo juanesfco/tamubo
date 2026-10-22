@@ -1,0 +1,833 @@
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,mathtools}
+\usepackage{booktabs,longtable,array}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{tikz}
+\usepackage{hyperref}
+\usepackage{microtype}
+\usetikzlibrary{arrows.meta,positioning,fit,shapes.geometric,calc}
+\hypersetup{colorlinks=true,linkcolor=black,urlcolor=blue}
+\lstset{basicstyle=\ttfamily\small,frame=single,columns=fullflexible,keepspaces=true,showstringspaces=false,breaklines=true}
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\Qdom}{\mathcal{Q}}
+\newcommand{\epsv}{\boldsymbol{\varepsilon}}
+\newcommand{\qv}{\mathbf{q}}
+\newcommand{\pv}{\mathbf{p}}
+\newcommand{\codepath}[1]{\nolinkurl{#1}}
+\title{\textbf{AutoIA: From Mathematical Theory to Source Code}\\
+Implementation Map Through Version 0.21.0.dev1}
+\author{}
+\date{August 2026}
+\begin{document}
+\maketitle
+
+\begin{abstract}
+This document connects the mathematical specification of AutoIA to the concrete
+Python implementation in version 0.21.0.dev1.  It is intended for a researcher or
+developer who understands the enclosure theory and wants to know exactly where
+that theory is realized in the source tree.  The organizing principle is not a
+line-by-line code listing.  Instead, each mathematical invariant, theorem, or
+algorithm is mapped to the production module that proposes it, the module that
+certifies it, the representation object that carries it, and the regression or
+audit tests that protect it.
+
+A recurring distinction is made between \emph{proposal code} and \emph{proof
+code}.  Proposal code is allowed to use ordinary NumPy floating-point operations
+because a later proof validates the stored proposal.  Proof code is either in the
+trusted binary64 layer or is a composition of trusted interval operations.  This
+document highlights that boundary explicitly so future changes do not accidentally
+move an unverified calculation into the trusted path.
+\end{abstract}
+
+\tableofcontents
+\newpage
+
+%===============================================================================
+\section{Repository architecture at version 0.21.0.dev1}
+%===============================================================================
+
+The production package is organized into layers with deliberately restricted
+responsibilities.  The principal directories are:
+
+\begin{longtable}{p{0.29\textwidth}p{0.64\textwidth}}
+\toprule
+Production location & Responsibility \\
+\midrule
+\endhead
+\codepath{autoia/api.py} & Stable public one-box/subdivision API, input validation, typed exception translation, and user-model guarding. \\
+\codepath{autoia/session.py} & Prepared repeated-query sessions, certificate cache, rigorous certificate restriction, serial/thread/process many-box execution, and streaming APIs. \\
+\codepath{autoia/trusted/} & Proof-critical outward-rounded binary64 interval arithmetic, runtime environment audit, rigorous reductions, and trusted scalar elementary-function kernels. \\
+\codepath{autoia/polynomial/} & Representation-independent sparse polynomial algebra, monomial/range logic, Bernstein transforms, and rigorous coordinate recentering. \\
+\codepath{autoia/enclosures/} & Scalar validated representations and representation-level arithmetic: interval, polynomial, shared-generator, piecewise, power, elementary lifting, and runtime contexts. \\
+\codepath{autoia/semantic/} & Local NumPy/SciPy dispatch and semantic linear-solve certificates. \\
+\codepath{autoia/controller/} & Core execution orchestration, final range policy, subdivision, split scoring, path-aware branching, and diagnostics. \\
+\codepath{autoia/elementary/} & Generic Taylor coefficient/remainder machinery above the trusted scalar kernels. \\
+\codepath{autoia/special.py} & Public error-function and normal PDF/CDF convenience functions. \\
+\codepath{autoia/results.py} & Public result aliases/facade. \\
+\codepath{autoia/policies.py} & Public range/subdivision/branch policy classes with typed validation. \\
+\codepath{autoia/exceptions.py} & Frozen public exception taxonomy. \\
+\bottomrule
+\end{longtable}
+
+The low-level dependency direction is intentionally one-way.  In particular,
+\codepath{autoia/trusted/} must not import controller, semantic, enclosure, or API
+layers.  Boundary tests enforce this architectural rule.
+
+%===============================================================================
+\section{One-box call path from public API to proof result}
+%===============================================================================
+
+A normal user call is
+\begin{lstlisting}[language=Python]
+result = autoia(model, parameter_intervals,
+                order=4,
+                representation="polynomial")
+\end{lstlisting}
+The production flow is:
+
+\begin{enumerate}[leftmargin=*]
+\item \codepath{autoia/api.py}: \texttt{autoia(...)} validates public inputs and
+creates/validates the backend and policies.
+\item \codepath{autoia/api.py}: \texttt{\_guard\_model(...)} wraps the user model
+so user exceptions and AutoIA proof failures are classified separately.
+\item \codepath{autoia/controller/execution.py}: the controller constructs
+rigorous centered input domains and initial representation objects.
+\item \codepath{autoia/semantic/dispatch.py}: the user's function executes in a
+private shadow namespace whose NumPy/math/SciPy references can route supported
+operations to validated semantics without mutating global modules.
+\item Scalar operations are performed by \texttt{ValidatedValue} and its concrete
+representation classes under \codepath{autoia/enclosures/}.
+\item Recognized \texttt{np.linalg.solve} calls are handled by
+\codepath{autoia/semantic/linear_solve.py}.
+\item If a Python scalar predicate cannot be decided, path handling under
+\codepath{autoia/controller/branching.py} re-executes feasible paths.
+\item Final representation ranges are chosen by
+\codepath{autoia/controller/ranging.py} and the polynomial range engines under
+\codepath{autoia/polynomial/ranging.py}.
+\item \codepath{autoia/controller/execution.py} constructs an
+\texttt{AutoIAResult}; path-aware execution constructs an
+\texttt{AutoIAPathwiseResult}.
+\end{enumerate}
+
+The important engineering point is that the user program is still executed as
+ordinary Python.  AutoIA changes the objects and selected library references seen
+by that program, rather than translating the complete function into a separate
+symbolic language.
+
+%===============================================================================
+\section{Public input intervals and rigorous centering}
+%===============================================================================
+
+The mathematical input contract is
+\[
+  p_i\in[\underline p_i,\overline p_i].
+\]
+The public interval class is exposed from \codepath{autoia/intervals.py}, which
+facades the trusted interval representation.
+
+The centered-domain algorithm
+\[
+  q_i=p_i-p_{c,i}\in[-h_i,h_i]
+\]
+is implemented by
+\begin{center}
+\codepath{autoia/controller/execution.py}: \texttt{rigorous\_center\_and\_halfwidth}.
+\end{center}
+The center is an ordinary finite binary64 proposal.  The difference between the
+user interval and this center is computed through the trusted backend, and
+\(h_i\) is chosen from the resulting rigorous interval.  This is where the known
+symmetric-domain boundary enlargement enters the current design.
+
+Initial uncertain parameter objects are constructed in
+\texttt{autoia\_single(...)} in the same module.  Depending on the requested
+representation, it calls:
+\begin{itemize}[leftmargin=*]
+\item \texttt{PolynomialEnclosure.parameter(...)};
+\item \texttt{SharedGeneratorPolynomialEnclosure.parameter(...)}; or
+\item \texttt{IntervalEnclosure(...)}.
+\end{itemize}
+
+%===============================================================================
+\section{Representation-independent value dispatch}
+%===============================================================================
+
+The abstract mathematical invariant
+\[
+  z(\qv)\in\Gamma_E(\qv)
+\]
+is represented in code by a \texttt{ValidatedValue} wrapper and a concrete
+representation object.
+
+The representation-independent wrapper is in
+\begin{center}
+\codepath{autoia/enclosures/value.py}.
+\end{center}
+It provides arithmetic operator hooks and delegates to a promoted concrete
+representation.  The promotion priority is strategy, not proof.  Soundness comes
+from each target representation's \texttt{convert\_from(...)} implementation.
+
+The currently important concrete scalar families are:
+
+\begin{longtable}{p{0.30\textwidth}p{0.30\textwidth}p{0.32\textwidth}}
+\toprule
+Mathematical family & Python class & Production file \\
+\midrule
+\endhead
+\(P(\qv)+R\) & \texttt{ParameterizedEnclosure} / \texttt{PolynomialEnclosure} & \codepath{autoia/enclosures/polynomial.py} \\
+Single interval \(I\) & \texttt{IntervalEnclosure} & \codepath{autoia/enclosures/interval.py} \\
+\(P(\qv)+G\epsv+R\) & \texttt{SharedGeneratorPolynomialEnclosure} & \codepath{autoia/enclosures/generator.py} \\
+Finite path union & \texttt{PiecewiseEnclosure} & \codepath{autoia/enclosures/piecewise.py} \\
+\bottomrule
+\end{longtable}
+
+The generator representation advertises a higher promotion priority than the
+plain polynomial representation so shared provenance is retained when sound
+conversion is available.
+
+%===============================================================================
+\section{Polynomial algebra: equations to functions}
+%===============================================================================
+
+Sparse point-coefficient polynomial algebra lives in
+\codepath{autoia/polynomial/algebra.py}.
+
+\subsection{Multi-indices}
+
+The mathematical objects
+\[
+  \alpha=(\alpha_1,\ldots,\alpha_m),
+  \qquad
+  |\alpha|=\sum_i\alpha_i
+\]
+are Python tuples of integers.  Important helper functions include:
+\begin{itemize}[leftmargin=*]
+\item \texttt{zero\_alpha(m)};
+\item \texttt{basis\_alpha(m,i)};
+\item \texttt{total\_degree(alpha)};
+\item \texttt{multi\_indices\_exact\_degree(m,degree)}.
+\end{itemize}
+The exact-degree multi-index collections are cached because they are purely
+combinatorial and independent of numerical values.
+
+\subsection{Monomial magnitude}
+
+The proof quantity
+\[
+  H_\alpha\ge\max_{\qv\in\Qdom}|\qv^\alpha|
+\]
+is computed by \texttt{monomial\_magnitude\_upper}.  Its parity-aware interval
+version is \texttt{monomial\_range\_symmetric}.  Backend-local caching avoids
+recomputing the same proof bound for repeated \((\alpha,h)\) combinations.
+
+\subsection{Addition}
+
+The rigorous point-coefficient addition rule is implemented by
+\texttt{rigorous\_poly\_add\_point}.  The function returns both the stored point
+polynomial proposal and an interval enclosing coefficient-rounding error after
+that error has been propagated through monomial ranges.
+
+\subsection{Truncated multiplication}
+
+The mathematical coefficient convolution
+\[
+  C_\gamma=\sum_{\alpha+\beta=\gamma}c_\alpha d_\beta
+\]
+with a retained degree cutoff is implemented by
+\texttt{rigorous\_poly\_mul\_truncated}.  Sparse convolution structure is cached
+by \texttt{\_polynomial\_product\_plan}.  The numerical coefficients themselves
+are not cached.  Every kept coefficient is stored as a point proposal with
+rigorous coefficient error, and discarded high-degree contributions are ranged
+into an interval remainder.
+
+\subsection{Reciprocal proposal}
+
+\texttt{build\_reciprocal\_predictor\_point} constructs a point polynomial
+proposal for a reciprocal.  The representation-level reciprocal certificate is
+implemented above this helper in \codepath{autoia/enclosures/polynomial.py}; it
+uses the residual identity rather than trusting the proposal.
+
+%===============================================================================
+\section{Polynomial range methods in code}
+%===============================================================================
+
+All principal polynomial range engines are in
+\codepath{autoia/polynomial/ranging.py}.
+
+\begin{longtable}{p{0.37\textwidth}p{0.55\textwidth}}
+\toprule
+Function & Mathematical role \\
+\midrule
+\endhead
+\texttt{range\_termwise\_scalar} & Sum rigorous monomial intervals. \\
+\texttt{derivative\_range\_termwise} & Rigorous range of \(\partial P/\partial q_i\). \\
+\texttt{range\_monotonicity\_scalar} & Detect sign-definite derivatives and fix monotone coordinates at extrema. \\
+\texttt{power\_coeff\_unit\_box\_interval} & Convert power coefficients toward the full Bernstein representation on a unit box. \\
+\texttt{range\_bernstein\_scalar} & Rigorous Bernstein coefficient hull. \\
+\texttt{power\_coeff\_reduced\_unit\_box\_interval} & Bernstein conversion after monotone coordinates have been fixed. \\
+\texttt{range\_monotonicity\_reduced\_bernstein\_scalar} & Combined structural range method used by the adaptive policy. \\
+\texttt{range\_polynomial} & Public/internal range-method selector and portfolio. \\
+\bottomrule
+\end{longtable}
+
+Final output policy is selected by \codepath{autoia/controller/ranging.py}.  The
+controller layer decides which sound range result to request; the polynomial
+module performs the actual mathematical enclosure.
+
+%===============================================================================
+\section{Trusted binary64 layer: the proof boundary}
+%===============================================================================
+
+The trusted layer is the most important place to maintain architectural discipline.
+Its production files are:
+
+\begin{itemize}[leftmargin=*]
+\item \codepath{autoia/trusted/environment.py}: runtime floating-point audit;
+\item \codepath{autoia/trusted/binary64.py}: scalar outward-rounded arithmetic;
+\item \codepath{autoia/trusted/interval.py}: trusted interval type and elementary interval operations;
+\item \codepath{autoia/trusted/reductions.py}: rigorous vector/matrix reductions;
+\item \codepath{autoia/trusted/elementary.py}: trusted scalar elementary and special functions.
+\end{itemize}
+
+The public backend facade is exposed as \texttt{RigorousBinary64Backend} from
+\codepath{autoia/backends.py}.  The underlying implementation is imported from
+the trusted package.
+
+\subsection{Long dot products}
+
+The rigorous dot-product contract
+\[
+  \sum_i a_i b_i\in I
+\]
+is implemented by \texttt{rigorous\_dot\_point}.  It selects either the
+historical scalar reference implementation or the vectorized outward pairwise
+implementation according to the backend's \texttt{reduction\_method} and term
+threshold.
+
+Step 9b extends the same proof pattern to
+\begin{itemize}[leftmargin=*]
+\item \texttt{rigorous\_dot\_point\_interval};
+\item \texttt{rigorous\_dot\_interval};
+\item point/interval matrix-vector products;
+\item point/interval matrix-matrix products;
+\item nonnegative upper-bound reductions.
+\end{itemize}
+The batched matrix kernels are intentionally written as collections of explicit
+outward product intervals and pairwise interval sums.  They are not wrappers
+around an unverified BLAS reduction.
+
+%===============================================================================
+\section{Elementary functions: trusted scalar kernel plus generic Taylor lifting}
+%===============================================================================
+
+The implementation is split deliberately.
+
+\paragraph{Trusted scalar layer.}
+\codepath{autoia/trusted/elementary.py} implements rigorous scalar/interval
+kernels for \(\sqrt{\cdot}\), \(\exp\), \(\log\), \(\sin\), \(\cos\),
+\(\operatorname{erf}\), normal PDF/CDF, and constant powers.  Important helpers
+include \texttt{pi\_interval}, \texttt{ln2\_interval}, and the point/interval
+variants of every supported function.
+
+\paragraph{Generic polynomial lifting.}
+\codepath{autoia/elementary/taylor.py} builds Taylor coefficient intervals and
+remainder radii.  \texttt{taylor\_coefficients} and
+\texttt{taylor\_remainder\_radius} contain the mathematical function-specific
+recurrences and tail bounds; \texttt{build\_taylor\_data} packages them for the
+enclosure layer.
+
+\paragraph{Representation dispatch.}
+\codepath{autoia/enclosures/elementary.py} applies the Taylor data to polynomial,
+interval, and generator-valued arguments.  This division keeps transcendental
+proof facts out of user dispatch code.
+
+%===============================================================================
+\section{Power semantics in code}
+%===============================================================================
+
+Constant exponent handling is centralized in
+\codepath{autoia/enclosures/power.py} and trusted support in
+\codepath{autoia/trusted/elementary.py}.  Validated arithmetic routes
+\texttt{x ** p}, \texttt{pow(x,p)}, and supported NumPy/math power calls to this
+layer.  The trusted functions \texttt{real\_power\_point\_interval} and
+\texttt{real\_power\_interval} enforce the real-domain restrictions described in
+the mathematical specification.
+
+%===============================================================================
+\section{Local NumPy/math/SciPy semantic dispatch}
+%===============================================================================
+
+Global monkeypatching is deliberately avoided.  The key code is
+\codepath{autoia/semantic/dispatch.py}.
+
+\subsection{Prepared shadow function}
+
+\texttt{prepare\_model\_for\_dispatch} and
+\texttt{prepare\_dispatch\_model} clone the user function with a private shadow
+global namespace.  Same-module helper functions can also be cloned into that
+namespace.  NumPy and \texttt{math} names are replaced by proxies that route only
+supported validated calls; the real modules remain unchanged.
+
+The class \texttt{PreparedDispatchModel} is the static object reused by
+\texttt{PreparedAutoIA} in Step 9c.
+
+\subsection{NumPy proxy}
+
+\texttt{\_NumpyProxy} and \texttt{\_LinalgProxy} provide local dispatch for
+array constructors, elementary operations, norms, and \texttt{linalg.solve}.
+Object-array construction is used so ordinary NumPy indexing/broadcasting invokes
+validated scalar arithmetic.
+
+\subsection{SciPy compatibility}
+
+\codepath{autoia/semantic/scipy_dispatch.py} recognizes supported public SciPy
+surfaces such as \texttt{scipy.special.erf}, \texttt{ndtr}, legacy
+\texttt{scipy.stats.norm}, frozen normal distributions, and the newer
+\texttt{scipy.stats.Normal} API when present.  SciPy syntax is a front-end only;
+the proof routes to AutoIA's own rigorous normal/error-function kernels.
+
+%===============================================================================
+\section{Semantic linear solve: theory-to-code map}
+%===============================================================================
+
+The main implementation is
+\codepath{autoia/semantic/linear_solve.py}.  It contains both proposal builders
+and certificate routines.  This file is intentionally larger than most modules
+because it holds several no-regression solve paths.
+
+\subsection{General polynomial predictor}
+
+The recurrence
+\[
+  A_0x_\alpha=b_\alpha-
+  \sum_{\substack{\beta\ne0\\\beta\le\alpha}}
+  A_\beta x_{\alpha-\beta}
+\]
+is implemented by
+\texttt{build\_solution\_polynomials\_general}.  Coefficients of the same total
+degree are solved together as a multiple-right-hand-side NumPy solve so one
+reference factorization can serve a whole degree.  This is proposal-only
+performance work from Step 9.
+
+\subsection{Residual coefficient construction}
+
+\texttt{residual\_coefficient\_intervals\_general} constructs rigorous interval
+coefficients for
+\[
+  r=b-AX.
+\]
+\texttt{range\_interval\_coefficient\_poly} and related functions rigorously
+range the resulting interval-coefficient polynomials.
+
+\subsection{Preconditioner portfolio}
+
+\texttt{polynomial\_preconditioner\_portfolio} generates center and matrix-family
+representatives.  The output candidates are ordinary point matrices.  Candidate
+quality is not trusted.
+
+\subsection{Defect and contraction proof}
+
+\texttt{preconditioned\_defect\_bounds\_general} establishes a rigorous matrix
+bound for
+\[
+  |I-CA|.
+\]
+\texttt{evaluate\_general\_polynomial\_candidate} combines residual and defect
+bounds, checks \(\rho<1\), constructs the scalar/componentwise correction, and
+returns the certified candidate.
+
+The older affine path remains separately implemented for historical bit-for-bit
+regression.  \texttt{polynomial\_semantic\_solve\_general} selects the general
+path only when required.
+
+\subsection{Generator-aware solve}
+
+The Step-7b path begins around
+\texttt{generator\_semantic\_solve}.  Important functions include:
+\begin{itemize}[leftmargin=*]
+\item \texttt{\_generator\_sensitivity\_proposal};
+\item \texttt{\_generator\_predictor\_vector};
+\item \texttt{\_generator\_residual\_vector};
+\item \texttt{\_generator\_defect\_bounds};
+\item \texttt{\_evaluate\_generator\_solve\_candidate}.
+\end{itemize}
+These functions retain incoming generator identifiers in the explicit solution
+predictor and prove the remaining error by the same contraction theorem over the
+joint physical/generator domain.
+
+\subsection{Dynamic solve context}
+
+\texttt{SolveContext} and \texttt{GenericSolveContext} provide the run-local
+semantic solve dispatcher.  The local dispatch mechanism passes the current
+context explicitly/context-locally rather than replacing global
+\texttt{np.linalg.solve}.
+
+%===============================================================================
+\section{Path-aware control flow in code}
+%===============================================================================
+
+Path logic lives principally in \codepath{autoia/controller/branching.py} and
+supporting predicate objects in \codepath{autoia/enclosures/branching.py}.
+
+The internal \texttt{\_PathState} tracks the current physical box, forced
+Boolean outcomes already chosen during path enumeration, split depth, and trace
+information.  \texttt{autoia\_pathwise} is the path-aware execution controller.
+
+For exact affine one-variable predicates, \texttt{\_exact\_single\_variable\_root}
+tries to recover a direct physical cut location.  Otherwise
+\texttt{\_predicate\_split\_direction} proposes a geometric split direction.
+\texttt{\_make\_piecewise\_result} assembles completed feasible paths into the
+public piecewise result.
+
+Internal branch-control signals derive from \texttt{BaseException} rather than
+ordinary \texttt{Exception}; this prevents a user's broad
+\texttt{except Exception:} from swallowing AutoIA's internal request to re-run a
+path under a forced predicate outcome.
+
+%===============================================================================
+\section{Adaptive subdivision and cheap split scoring}
+%===============================================================================
+
+Prescribed and adaptive subdivision are implemented by
+\codepath{autoia/controller/subdivision.py}.  The practical cheap score is
+separated into \codepath{autoia/controller/split_scoring.py}.
+
+The score's polynomial re-centering is intentionally a cheap floating prediction,
+not a proof.  Functions such as \texttt{translate\_polynomial\_one\_direction},
+\texttt{derivative\_range\_termwise\_float}, and
+\texttt{score\_split\_direction} estimate the structural effect of a hypothetical
+half split.  \texttt{cheap\_score\_key} implements the lexicographic ordering.
+
+After a direction is selected, \codepath{autoia/controller/subdivision.py}
+actually certifies the chosen two children and measures realized gain before
+accepting the split.  The historical reference mode remains available through
+\texttt{split\_method="lookahead"}.
+
+%===============================================================================
+\section{Prepared sessions and certificate restriction in code}
+%===============================================================================
+
+Step 9c is implemented primarily in \codepath{autoia/session.py} and
+\codepath{autoia/polynomial/recenter.py}.
+
+\subsection{Public preparation object}
+
+\texttt{prepare(model,...)} returns \texttt{PreparedAutoIA}.  Its constructor:
+\begin{enumerate}[leftmargin=*]
+\item validates the fixed model/configuration;
+\item creates or accepts one \texttt{RigorousBinary64Backend};
+\item creates one \texttt{CertificateCache};
+\item wraps the user model through \texttt{\_guard\_model}; and
+\item calls \texttt{prepare\_dispatch\_model} exactly once.
+\end{enumerate}
+The session then exposes \texttt{certify}, \texttt{certify\_many},
+\texttt{certify\_many\_bounds}, \texttt{iter\_certify\_many}, and
+\texttt{iter\_bounds\_many}.
+
+\subsection{Exact cache}
+
+\texttt{CertificateCache} is a bounded LRU cache keyed by exact stored endpoint
+tuples.  \texttt{get\_exact} is an O(1) dictionary lookup.  An exact cache hit
+returns a shallow result wrapper so per-request \texttt{cache\_info} metadata
+does not mutate a result object previously returned to the user.
+
+\subsection{Containment cache}
+
+\texttt{get\_smallest\_container} scans the bounded cache for parent boxes that
+contain the query and chooses the smallest by log-volume.  This choice is a
+heuristic among already sound candidate parents; no proof depends on it.
+
+\subsection{Restriction function}
+
+\texttt{\_restrict\_cached\_result} performs the rigorous subbox restriction.
+For every new input interval it calls
+\texttt{rigorous\_center\_and\_halfwidth}.  For polynomial/generator
+representations it constructs the actual outward symmetric physical envelope and
+requires that envelope to lie inside the cached parent box.
+
+The exact real center shift is enclosed by trusted subtraction:
+\begin{lstlisting}[language=Python]
+backend.sub(point_interval(c_new), point_interval(c_old))
+\end{lstlisting}
+The resulting intervals are passed to
+\texttt{rigorous\_recenter\_point\_polynomial} in
+\codepath{autoia/polynomial/recenter.py}.
+
+That function implements the multivariate binomial coordinate transform.  For
+every exact transformed coefficient it simultaneously computes:
+\begin{itemize}[leftmargin=*]
+\item a rigorous interval using trusted operations and rigorous shift intervals;
+\item an ordinary binary64 point proposal using the stored shift proposal.
+\end{itemize}
+The difference is multiplied by a rigorous monomial range over the new half-width
+vector and accumulated in \texttt{extra\_remainder}.  The new representation is
+then final-ranged using the normal adaptive range policy.
+
+\subsection{Interval representation restriction}
+
+An interval-only cached result needs no polynomial coordinate transform.  The
+same interval enclosure remains valid on any physical subbox.  This can eliminate
+model execution but generally does not sharpen the output interval unless a fresh
+proof is performed.
+
+%===============================================================================
+\section{Many-box CPU execution in code}
+%===============================================================================
+
+\texttt{PreparedAutoIA.certify\_many} normalizes a finite collection of boxes and
+supports three execution modes.
+
+\paragraph{Serial.}
+The session calls \texttt{certify} in input order and shares one cache/backend.
+
+\paragraph{Thread.}
+\texttt{ThreadPoolExecutor} runs chunks against the same prepared session.  Locks
+protect session statistics/cache bookkeeping, while proof runtime state is
+context-local.  The current Python-object workload is not guaranteed to benefit
+from threads.
+
+\paragraph{Process.}
+\texttt{ProcessPoolExecutor} with the \texttt{spawn} context uses
+\texttt{\_process\_initializer}.  Each worker constructs one independent trusted
+backend and one \texttt{PreparedAutoIA} session, then reuses it for all assigned
+chunks.  The model must be pickleable, normally meaning it is a module-level
+function.
+
+\texttt{iter\_certify\_many} uses a bounded deque of pending futures so only a
+small number of chunks are in flight.  This is the API intended for very large
+streams.  \texttt{iter\_bounds\_many} discards full result objects after yielding
+copies of lower/upper arrays.
+
+%===============================================================================
+\section{Result objects and mathematical diagnostics}
+%===============================================================================
+
+The primary result dataclass is defined in
+\codepath{autoia/controller/execution.py} as \texttt{AutoIAResult}.  It stores:
+\begin{itemize}[leftmargin=*]
+\item flat \texttt{lower} and \texttt{upper} arrays;
+\item structured validated \texttt{objects};
+\item backend name and \texttt{machine\_rigorous} flag;
+\item semantic certificates;
+\item requested representation;
+\item range policy and final-range diagnostics;
+\item output shape.
+\end{itemize}
+Convenience properties reconstruct shaped outputs and expose generator IDs/matrix
+when present.
+
+Path-aware results are implemented in
+\codepath{autoia/controller/branching.py} and exposed through
+\codepath{autoia/results.py}.  They retain per-branch boxes, decisions, traces,
+and piecewise output enclosures in addition to global lower/upper hulls.
+
+Prepared-session results receive a lightweight \texttt{cache\_info} attribute
+identifying whether the query was a fresh certificate, an exact cache hit, or a
+restricted parent certificate.
+
+%===============================================================================
+\section{Typed failure semantics and where failures are translated}
+%===============================================================================
+
+Public exception classes are defined in \codepath{autoia/exceptions.py}.  The
+important categories are:
+\begin{itemize}[leftmargin=*]
+\item \texttt{InvalidInputError};
+\item \texttt{UnsupportedOperationError};
+\item \texttt{CertificationError};
+\item \texttt{ResourceLimitError};
+\item \texttt{NumericalLimitError};
+\item \texttt{ModelExecutionError};
+\item \texttt{InternalAutoIAError}.
+\end{itemize}
+
+\codepath{autoia/api.py}: \texttt{\_translate\_internal\_exception} maps lower
+level failures to this taxonomy.  The distinction between a failed proof and an
+unsupported operation is important: a contraction failure means the requested
+claim was not proved on that box, not that the model syntax is unsupported.
+
+%===============================================================================
+\section{Testing and audit map}
+%===============================================================================
+
+The production source is protected by several kinds of tests.
+
+\subsection{Historical bit-for-bit regression}
+
+The retired Version-0.11 reference implementation lives under
+\codepath{tests/support/oracle_v11.py}.  Tests such as
+\codepath{tests/test_reference_regression.py},
+\codepath{tests/test_semantic_solve_regression.py}, and trusted-kernel regression
+tests protect established arithmetic paths from accidental changes.
+
+\subsection{Exact-rational trusted-kernel tests}
+
+\codepath{tests/test_scalar_binary64_exact.py},
+\codepath{tests/test_reductions_exact.py}, and Step-9/9b performance tests compare
+proof-critical binary64 enclosures to exact rational calculations.
+
+\subsection{High-precision elementary tests}
+
+Trusted transcendental functions are checked against independent high-precision
+references in \codepath{tests/test_trusted_elementary.py}, power tests, and the
+Step-3 audit tools.
+
+\subsection{Representation and semantic tests}
+
+Polynomial, generator, solve, branching, SciPy compatibility, array semantics,
+and controller tests exercise each representation and semantic boundary.
+
+\subsection{Prepared-session tests}
+
+\codepath{tests/test_prepared_manybox.py} verifies:
+\begin{itemize}[leftmargin=*]
+\item one-shot versus prepared fresh equivalence;
+\item exact-cache model-execution avoidance;
+\item per-request cache metadata isolation;
+\item interior certificate restriction;
+\item fail-closed boundary reuse;
+\item generator-ID preservation through restriction;
+\item thread order preservation;
+\item compact bounds and streaming APIs;
+\item process-mode validation for non-pickleable functions.
+\end{itemize}
+The separate tool \codepath{tools/audit_manybox.py} measures repeated-query
+performance, checks sampled truth containment, and exercises process-mode outer
+parallelism.
+
+%===============================================================================
+\section{How to modify AutoIA without breaking the proof architecture}
+%===============================================================================
+
+This section gives implementation recipes tied directly to the mathematical
+contracts.
+
+\subsection{Adding a new scalar elementary function}
+
+A mathematically smooth scalar function should normally be added in four places:
+\begin{enumerate}[leftmargin=*]
+\item add a trusted scalar/interval kernel or a trusted domain/range primitive in
+\codepath{autoia/trusted/elementary.py};
+\item add Taylor coefficient/remainder formulas in
+\codepath{autoia/elementary/taylor.py};
+\item connect representation-level lifting in
+\codepath{autoia/enclosures/elementary.py};
+\item add local NumPy/math/SciPy dispatch only for actual public syntax that
+users are expected to write.
+\end{enumerate}
+The trusted layer must not call unverified platform transcendental functions as
+proof facts unless a separate rounding guarantee is established.
+
+\subsection{Adding a new semantic numerical primitive}
+
+For an operation such as a future nonlinear root solver or eigensystem:
+\begin{enumerate}[leftmargin=*]
+\item define the exact mathematical semantics being certified;
+\item permit arbitrary ordinary-floating proposal calculations;
+\item derive an independent residual/fixed-point/inclusion certificate;
+\item place the semantic proof under \codepath{autoia/semantic/};
+\item route recognized syntax through local dispatch without global monkeypatching;
+\item add generic fallback behavior or a typed unsupported failure when the proof
+cannot apply.
+\end{enumerate}
+The semantic primitive should not be accepted merely because an approximate
+library routine returned a plausible result.
+
+\subsection{Adding a new representation}
+
+A new representation must define a concretization and sound arithmetic/conversion
+rules.  It should implement the representation contract expected by
+\texttt{ValidatedValue}, including a stable \texttt{representation\_name}, range
+operation, arithmetic where supported, and inclusion-preserving
+\texttt{convert\_from}.  Promotion priority is chosen only after the conversions
+are proved sound.
+
+\subsection{Adding a new range method}
+
+Keep the proof implementation under \codepath{autoia/polynomial/} or an analogous
+low-level range module.  Controller policy may decide when to use it, but the
+method itself should return an interval independently known to contain the exact
+represented range.  A portfolio may then intersect it with other rigorous
+methods.
+
+\subsection{Changing the prepared-session cache}
+
+The public \texttt{PreparedAutoIA} API should not require a specific cache data
+structure.  The current bounded LRU scan can later be replaced by a spatial index.
+A new index may alter parent-selection cost and reuse frequency, but must never
+skip the explicit proof that the query's actual represented centered domain lies
+inside the parent's certified domain before polynomial restriction.
+
+\subsection{Adding a GPU backend}
+
+The current Python object representation should not simply be copied to a GPU.
+The preferred architecture is a numeric structure-of-arrays backend behind the
+already frozen prepare/certify-many public API.  GPU proposal kernels can be
+introduced first because their outputs can be revalidated by the existing CPU
+trusted proof layer.  A future proof-producing GPU backend would require its own
+audited directed-rounding primitives and independent exact-reference tests.
+
+%===============================================================================
+\section{Proposal-versus-proof checklist for code review}
+%===============================================================================
+
+Before accepting a modification, ask:
+\begin{enumerate}[leftmargin=*]
+\item What exact mathematical set or equation is being certified?
+\item Which computed quantities are only proposals?
+\item Where is the exact residual, interval extension, or domain condition checked?
+\item Does any proof-critical calculation use ordinary round-to-nearest arithmetic
+without an enclosing error calculation?
+\item If a representation loses structure, is the conversion explicitly
+inclusion-preserving?
+\item If correlation is shared, what proves that two terms refer to the same
+auxiliary variable?
+\item If a path is discarded, what proves it is infeasible?
+\item If a cached parent certificate is reused, what proves the new represented
+domain is contained in the parent domain?
+\item If performance batching changes arithmetic order, is every batched reduction
+still a composition of rigorous interval operations?
+\item Is there an exact/high-precision/regression test that would fail if the new
+proof boundary were accidentally weakened?
+\end{enumerate}
+
+%===============================================================================
+\section{Compact source-map summary}
+%===============================================================================
+
+\begin{longtable}{p{0.31\textwidth}p{0.61\textwidth}}
+\toprule
+Mathematical idea & Main implementation location \\
+\midrule
+\endhead
+Input centering \(p\mapsto q\) & \codepath{autoia/controller/execution.py} \\
+Outward scalar interval arithmetic & \codepath{autoia/trusted/binary64.py}, \codepath{autoia/trusted/interval.py} \\
+Rigorous dot/matrix reductions & \codepath{autoia/trusted/reductions.py} \\
+Polynomial algebra and truncation & \codepath{autoia/polynomial/algebra.py} \\
+Termwise/monotonicity/Bernstein range & \codepath{autoia/polynomial/ranging.py} \\
+Polynomial coordinate restriction/recentering & \codepath{autoia/polynomial/recenter.py} \\
+\(P+R\) representation & \codepath{autoia/enclosures/polynomial.py} \\
+\(P+G\varepsilon+R\) representation & \codepath{autoia/enclosures/generator.py} \\
+Piecewise representation & \codepath{autoia/enclosures/piecewise.py} \\
+Taylor lifting & \codepath{autoia/elementary/taylor.py}, \codepath{autoia/enclosures/elementary.py} \\
+Trusted transcendentals & \codepath{autoia/trusted/elementary.py} \\
+Semantic linear solve & \codepath{autoia/semantic/linear_solve.py} \\
+NumPy/math dispatch & \codepath{autoia/semantic/dispatch.py} \\
+SciPy normal/error-function syntax & \codepath{autoia/semantic/scipy_dispatch.py} \\
+Path-aware execution & \codepath{autoia/controller/branching.py} \\
+Adaptive split score & \codepath{autoia/controller/split_scoring.py} \\
+Subdivision orchestration & \codepath{autoia/controller/subdivision.py} \\
+Prepared/many-box execution & \codepath{autoia/session.py} \\
+Public error taxonomy & \codepath{autoia/exceptions.py}, translated in \codepath{autoia/api.py} \\
+\bottomrule
+\end{longtable}
+
+The main design principle behind this map is that the mathematical proof should
+remain visible in the source architecture.  Proposal code may evolve rapidly for
+performance, but every accepted certificate should still be traceable to a small
+number of explicitly audited enclosure operations and documented mathematical
+identities.
+
+\end{document}

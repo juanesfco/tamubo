@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "autoia"
+version = "1.0.4.dev13"
+description = "Automatic validated interval analysis for engineering code"
+requires-python = ">=3.10"
+dependencies = ["numpy>=1.24"]
+readme = "README.md"
+license = {text = "Research prototype - license not yet selected"}
+
+[project.optional-dependencies]
+process = ["cloudpickle>=2.2"]
+
+[tool.setuptools]
+packages = ["autoia", "autoia.trusted", "autoia.elementary", "autoia.polynomial", "autoia.enclosures", "autoia.semantic", "autoia.controller", "autoia.application", "autoia.integrations"]

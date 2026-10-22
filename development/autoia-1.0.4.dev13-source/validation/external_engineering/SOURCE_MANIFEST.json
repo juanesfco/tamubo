@@ -1,0 +1,54 @@
+{
+  "retrieved_date": "2026-08-29",
+  "sources": [
+    {
+      "commit": "e49c8b0",
+      "license": "MIT",
+      "modification_policy": "Long docstrings omitted; executable computational statements preserved.",
+      "project": "fluids",
+      "symbols": [
+        "Clift_Gauvin",
+        "Morsi_Alexander",
+        "Churchill_1977",
+        "Swamee_Jain_1976"
+      ],
+      "upstream_urls": [
+        "https://raw.githubusercontent.com/CalebBell/fluids/e49c8b0/fluids/drag.py",
+        "https://raw.githubusercontent.com/CalebBell/fluids/e49c8b0/fluids/friction.py"
+      ],
+      "vendored_file": "validation/external_engineering/external_sources/fluids_extract.py",
+      "vendored_sha256": "d16335869f8bce74a98daeb53de70009690ddf4cde1419b85f018ff6e49a8b78",
+      "version": "1.3.1"
+    },
+    {
+      "commit": "980e16062beb09d4533b5f83cad47e736f33461c",
+      "license": "MIT",
+      "modification_policy": "Long docstring/comments omitted; executable computational statements preserved.",
+      "project": "ht",
+      "symbols": [
+        "cylindrical_heat_transfer"
+      ],
+      "upstream_urls": [
+        "https://raw.githubusercontent.com/CalebBell/ht/980e16062beb09d4533b5f83cad47e736f33461c/ht/conduction.py"
+      ],
+      "vendored_file": "validation/external_engineering/external_sources/ht_extract.py",
+      "vendored_sha256": "31428b0afa5014aa9450e2b5ebeda1d4b2a71be886cc2310f4bcba82fa2c3876",
+      "version": "1.2.0"
+    },
+    {
+      "commit": null,
+      "license": "MIT",
+      "modification_policy": "Method computational statements preserved; minimal constructor scaffold supplies original object attributes.",
+      "project": "grheat",
+      "symbols": [
+        "Plane._instantaneous"
+      ],
+      "upstream_urls": [
+        "https://github.com/scottprahl/grheat/blob/main/grheat/plane_source.py"
+      ],
+      "vendored_file": "validation/external_engineering/external_sources/grheat_extract.py",
+      "vendored_sha256": "e5f4d24f0e3ec2f043abbb095441f99bd736fe5ad7e58cc78d5515b1f4e96180",
+      "version": "0.5.1 documented upstream"
+    }
+  ]
+}
